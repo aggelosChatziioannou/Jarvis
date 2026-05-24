@@ -1,0 +1,734 @@
+"""FastAPI server bridging the React UI to the Jarvis daemon.
+
+Runs on 127.0.0.1:38130 inside the daemon process. Provides:
+  • REST endpoints for config read/write, MCP toggling, memory, etc.
+  • WebSocket /ws/logs for live log streaming
+  • WebSocket /ws/state for voice-state changes
+
+The control_bus (port 38127) remains the lightweight command channel for
+STOP/MUTE/PING — this API layer is *additive*, not a replacement. The
+React UI uses this server for everything except the most latency-sensitive
+single-shot commands.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import time
+import threading
+from collections import deque
+from pathlib import Path
+from typing import Any, Deque, Dict, List, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import uvicorn
+
+from . import control_bus
+from .config import default_config_path, load_config, _save_json, _load_json
+from .debug import debug_log
+
+
+API_HOST = "127.0.0.1"
+API_PORT = 38130
+
+# Cap log buffer to avoid unbounded memory growth in long-running daemons.
+LOG_BUFFER_SIZE = 2000
+
+
+# ---------------------------------------------------------------------------
+# Shared in-memory state — populated by daemon code via the bridge functions
+# ---------------------------------------------------------------------------
+
+_log_buffer: Deque[Dict[str, Any]] = deque(maxlen=LOG_BUFFER_SIZE)
+_log_subscribers: List[asyncio.Queue] = []
+_log_subscribers_lock = threading.Lock()
+
+_voice_state: Dict[str, Any] = {
+    "state": "idle",       # idle | listening | thinking | speaking
+    "isMuted": False,
+    "uptime": 0.0,
+    "lastWake": None,
+    "commandsProcessed": 0,
+}
+_state_subscribers: List[asyncio.Queue] = []
+_state_subscribers_lock = threading.Lock()
+
+_started_at = time.time()
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def publish_log(level: str, message: str) -> None:
+    """Called by daemon code to append a log entry and broadcast it.
+
+    Safe to call from any thread.
+    """
+    entry = {
+        "id": f"{time.time():.6f}",
+        "timestamp": time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}",
+        "level": level,
+        "message": message,
+    }
+    _log_buffer.append(entry)
+    _broadcast_to_subscribers(_log_subscribers, _log_subscribers_lock, entry)
+
+
+def publish_state(**fields: Any) -> None:
+    """Update voice state and broadcast. Pass any subset of state fields."""
+    _voice_state.update(fields)
+    _broadcast_to_subscribers(_state_subscribers, _state_subscribers_lock, dict(_voice_state))
+
+
+def _broadcast_to_subscribers(
+    subs: List[asyncio.Queue],
+    lock: threading.Lock,
+    payload: Dict[str, Any],
+) -> None:
+    """Thread-safe broadcast — schedule put_nowait on the API event loop."""
+    if _main_loop is None:
+        return
+    with lock:
+        snapshot = list(subs)
+    for q in snapshot:
+        try:
+            _main_loop.call_soon_threadsafe(q.put_nowait, payload)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="Jarvis Control API", version="1.0.0")
+
+# CORS — the React dev server runs on 5173 by default; allow loopback origins.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:38130",
+        "http://127.0.0.1:38130",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+
+
+# ---------- Health & state ----------
+
+@app.get("/api/health")
+def health() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "uptime": time.time() - _started_at,
+        "buffer_size": len(_log_buffer),
+    }
+
+
+@app.get("/api/state")
+def get_state() -> Dict[str, Any]:
+    return {**_voice_state, "uptime": time.time() - _started_at}
+
+
+# ---------- Commands (proxy to control_bus) ----------
+
+class CommandResponse(BaseModel):
+    ok: bool
+    response: Optional[str] = None
+
+
+@app.post("/api/command/stop", response_model=CommandResponse)
+def cmd_stop() -> CommandResponse:
+    resp = control_bus.send_command("STOP")
+    return CommandResponse(ok=resp is not None, response=resp)
+
+
+@app.post("/api/command/mute", response_model=CommandResponse)
+def cmd_mute() -> CommandResponse:
+    resp = control_bus.send_command("MUTE")
+    return CommandResponse(ok=resp is not None, response=resp)
+
+
+@app.post("/api/command/unmute", response_model=CommandResponse)
+def cmd_unmute() -> CommandResponse:
+    resp = control_bus.send_command("UNMUTE")
+    return CommandResponse(ok=resp is not None, response=resp)
+
+
+# ---------- Config (read/write the JSON file directly) ----------
+
+@app.get("/api/config")
+def get_config() -> Dict[str, Any]:
+    return load_config()
+
+
+class ConfigPatch(BaseModel):
+    updates: Dict[str, Any]
+
+
+@app.patch("/api/config")
+def patch_config(patch: ConfigPatch) -> Dict[str, Any]:
+    cfg_path = Path(os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+    current = _load_json(cfg_path)
+    if not isinstance(current, dict):
+        current = {}
+    current.update(patch.updates)
+    if not _save_json(cfg_path, current):
+        raise HTTPException(500, "Failed to write config")
+    publish_log("info", f"Config updated: {list(patch.updates.keys())}")
+    return current
+
+
+# ---------- Logs ----------
+
+@app.get("/api/logs")
+def get_logs(limit: int = 500) -> List[Dict[str, Any]]:
+    items = list(_log_buffer)
+    if limit > 0:
+        items = items[-limit:]
+    return items
+
+
+@app.delete("/api/logs")
+def clear_logs() -> Dict[str, bool]:
+    _log_buffer.clear()
+    publish_log("info", "Log buffer cleared")
+    return {"ok": True}
+
+
+# ---------- MCP servers ----------
+
+MCP_CATALOG = [
+    {"id": "weather", "name": "Weather", "description": "OpenWeather forecasts", "version": "1.2.0"},
+    {"id": "spotify", "name": "Spotify", "description": "Music playback & search", "version": "2.0.1"},
+    {"id": "gmail", "name": "Gmail", "description": "Email reading & search", "version": "1.0.4"},
+    {"id": "calendar", "name": "Calendar", "description": "Google Calendar events", "version": "0.9.2"},
+    {"id": "notes", "name": "Notes", "description": "Note-taking & reminders", "version": "1.1.0"},
+    {"id": "browser", "name": "Browser", "description": "Web search & automation", "version": "1.3.0"},
+    {"id": "apps", "name": "Apps", "description": "Desktop app launcher", "version": "1.0.0"},
+]
+
+
+@app.get("/api/mcps")
+def get_mcps() -> List[Dict[str, Any]]:
+    cfg = load_config()
+    enabled_ids = {srv.get("id") for srv in cfg.get("mcp_servers", []) if isinstance(srv, dict)}
+    return [
+        {
+            **entry,
+            "enabled": entry["id"] in enabled_ids,
+            "status": "connected" if entry["id"] in enabled_ids else "disconnected",
+        }
+        for entry in MCP_CATALOG
+    ]
+
+
+class MCPToggle(BaseModel):
+    enabled: bool
+
+
+@app.patch("/api/mcps/{server_id}")
+def toggle_mcp(server_id: str, body: MCPToggle) -> Dict[str, Any]:
+    if not any(e["id"] == server_id for e in MCP_CATALOG):
+        raise HTTPException(404, f"Unknown MCP server: {server_id}")
+    cfg_path = Path(os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+    cfg = _load_json(cfg_path)
+    servers = cfg.get("mcp_servers", []) or []
+    servers = [s for s in servers if not (isinstance(s, dict) and s.get("id") == server_id)]
+    if body.enabled:
+        servers.append({"id": server_id})
+    cfg["mcp_servers"] = servers
+    _save_json(cfg_path, cfg)
+    publish_log("info", f"MCP {server_id} {'enabled' if body.enabled else 'disabled'}")
+    return {"id": server_id, "enabled": body.enabled}
+
+
+# ---------- Memory (dialogue summaries) ----------
+
+@app.get("/api/memory")
+def get_memory(q: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """Return recent conversation summaries from sqlite."""
+    try:
+        from .memory.db import Database
+        cfg = load_config()
+        db = Database(cfg.get("db_path"))
+        rows = db.get_recent_conversation_summaries(days=30)
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            d = dict(row)
+            snippet = (d.get("summary") or d.get("content") or "").strip()
+            ts = d.get("date_utc") or d.get("created_at") or ""
+            if q and q.lower() not in snippet.lower():
+                continue
+            items.append({
+                "id": str(d.get("id", "")),
+                "timestamp": str(ts),
+                "snippet": snippet[:280],
+            })
+        return items[:limit]
+    except Exception as e:
+        debug_log(f"api: memory list failed: {e}", "api")
+        return []
+
+
+@app.delete("/api/memory")
+def clear_memory() -> Dict[str, bool]:
+    """Best-effort clear — depends on the schema. Logged for now."""
+    publish_log("warning", "Memory clear requested via API (not fully wired)")
+    return {"ok": True}
+
+
+# ---------- Fast paths ----------
+
+@app.get("/api/fastpaths")
+def get_fastpaths() -> List[Dict[str, Any]]:
+    try:
+        from .listening import fast_paths as fp_mod
+        registry = getattr(fp_mod, "_PATTERNS", None) or getattr(fp_mod, "FAST_PATHS", None) or []
+        result: List[Dict[str, Any]] = []
+        for i, pat in enumerate(registry):
+            if isinstance(pat, dict):
+                result.append({
+                    "id": str(i),
+                    "pattern": str(pat.get("pattern", "")),
+                    "tool": str(pat.get("tool_name", "") or pat.get("tool", "")),
+                    "response": str(pat.get("response_override", "") or pat.get("response", "")),
+                })
+            else:
+                result.append({
+                    "id": str(i),
+                    "pattern": str(getattr(pat, "pattern", "")),
+                    "tool": str(getattr(pat, "tool_name", "")),
+                    "response": str(getattr(pat, "response_override", "")),
+                })
+        return result
+    except Exception as e:
+        debug_log(f"api: fastpaths list failed: {e}", "api")
+        return []
+
+
+# ---------- Easter eggs ----------
+
+@app.get("/api/eastereggs")
+def get_eastereggs() -> List[Dict[str, Any]]:
+    cfg = load_config()
+    eggs = cfg.get("easter_eggs") or [{
+        "id": "daddys_home",
+        "name": "Daddy's Home",
+        "triggers": ["daddy's home", "papa's home", "dad is home"],
+        "description": "Plays The Clash + cinematic JARVIS greeting with calendar/weather context",
+        "enabled": True,
+    }]
+    return eggs
+
+
+class EggToggle(BaseModel):
+    enabled: bool
+
+
+@app.patch("/api/eastereggs/{egg_id}")
+def toggle_egg(egg_id: str, body: EggToggle) -> Dict[str, Any]:
+    publish_log("info", f"Easter egg '{egg_id}' set to {body.enabled}")
+    return {"id": egg_id, "enabled": body.enabled}
+
+
+# ---------- LLM models ----------
+
+@app.get("/api/llm/models")
+def list_llm_models() -> List[Dict[str, Any]]:
+    try:
+        import requests
+        cfg = load_config()
+        url = cfg.get("ollama_base_url", "http://localhost:11434") + "/api/tags"
+        r = requests.get(url, timeout=2.0)
+        if r.status_code == 200:
+            data = r.json()
+            return [
+                {"name": m.get("name"), "size": m.get("size", 0), "modified": m.get("modified_at")}
+                for m in data.get("models", [])
+            ]
+    except Exception as e:
+        debug_log(f"api: ollama tags failed: {e}", "api")
+    return []
+
+
+# ---------- Audio devices ----------
+
+@app.get("/api/audio/devices")
+def list_audio_devices() -> Dict[str, Any]:
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        inputs = [{"index": i, "name": d["name"]} for i, d in enumerate(devices) if d.get("max_input_channels", 0) > 0]
+        outputs = [{"index": i, "name": d["name"]} for i, d in enumerate(devices) if d.get("max_output_channels", 0) > 0]
+        default_in, default_out = sd.default.device
+        return {
+            "inputs": inputs,
+            "outputs": outputs,
+            "current_in": int(default_in) if default_in is not None else None,
+            "current_out": int(default_out) if default_out is not None else None,
+        }
+    except Exception as e:
+        debug_log(f"api: audio devices failed: {e}", "api")
+        return {"inputs": [], "outputs": [], "current_in": None, "current_out": None}
+
+
+@app.post("/api/audio/test-tone")
+def test_tone() -> Dict[str, bool]:
+    try:
+        import numpy as np
+        import sounddevice as sd
+        sr = 22050
+        t = np.linspace(0, 0.4, int(sr * 0.4), endpoint=False)
+        tone = 0.25 * np.sin(2 * np.pi * 880 * t).astype("float32")
+        sd.play(tone, sr)
+        publish_log("info", "Test tone played (880 Hz, 0.4s)")
+        return {"ok": True}
+    except Exception as e:
+        publish_log("error", f"Test tone failed: {e}")
+        return {"ok": False}
+
+
+# ---------- TTS cache ----------
+
+@app.get("/api/tts/cache")
+def tts_cache_stats() -> Dict[str, Any]:
+    try:
+        from .output.tts_cache import get_cache
+        cache = get_cache()
+        return {
+            "hits": int(getattr(cache, "hit_count", 0)),
+            "misses": int(getattr(cache, "miss_count", 0)),
+            "size_bytes": int(getattr(cache, "total_bytes", lambda: 0)() if callable(getattr(cache, "total_bytes", None)) else getattr(cache, "total_bytes", 0)),
+            "count": int(getattr(cache, "entry_count", lambda: 0)() if callable(getattr(cache, "entry_count", None)) else getattr(cache, "entry_count", 0)),
+        }
+    except Exception:
+        return {"hits": 0, "misses": 0, "size_bytes": 0, "count": 0}
+
+
+@app.delete("/api/tts/cache")
+def tts_cache_clear() -> Dict[str, bool]:
+    try:
+        from .output.tts_cache import get_cache
+        cache = get_cache()
+        if hasattr(cache, "clear"):
+            cache.clear()
+        publish_log("info", "TTS cache cleared")
+        return {"ok": True}
+    except Exception as e:
+        publish_log("error", f"TTS cache clear failed: {e}")
+        return {"ok": False}
+
+
+# ---------- WebSocket: live logs ----------
+
+@app.websocket("/ws/logs")
+async def ws_logs(ws: WebSocket) -> None:
+    await ws.accept()
+    q: asyncio.Queue = asyncio.Queue(maxsize=200)
+    with _log_subscribers_lock:
+        _log_subscribers.append(q)
+    try:
+        for entry in list(_log_buffer)[-100:]:
+            await ws.send_json(entry)
+        while True:
+            entry = await q.get()
+            await ws.send_json(entry)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        with _log_subscribers_lock:
+            try:
+                _log_subscribers.remove(q)
+            except ValueError:
+                pass
+
+
+# ---------- WebSocket: voice state ----------
+
+@app.websocket("/ws/state")
+async def ws_state(ws: WebSocket) -> None:
+    await ws.accept()
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    with _state_subscribers_lock:
+        _state_subscribers.append(q)
+    try:
+        await ws.send_json({**_voice_state, "uptime": time.time() - _started_at})
+        while True:
+            payload = await q.get()
+            await ws.send_json(payload)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        with _state_subscribers_lock:
+            try:
+                _state_subscribers.remove(q)
+            except ValueError:
+                pass
+
+
+# ---------- Static UI (built React) — SPA-aware ----------
+
+def _mount_static_if_present() -> None:
+    """If a built React UI exists under <repo>/ui/dist, serve it.
+
+    React Router uses client-side routing (e.g. `/panel`), so any non-/api
+    path that isn't a real asset file must return index.html — otherwise
+    a direct hit on `/panel` 404s. We:
+      1. Mount /assets for hashed JS/CSS
+      2. Serve the favicon if it exists
+      3. Add a catch-all route returning index.html for everything else
+         (after the /api/* and /ws/* routes have had their chance)
+    """
+    candidates = [
+        Path(__file__).resolve().parents[2] / "ui" / "dist",
+        Path(__file__).resolve().parents[3] / "ui" / "dist",
+    ]
+    dist_dir: Optional[Path] = None
+    for c in candidates:
+        if c.exists() and (c / "index.html").exists():
+            dist_dir = c
+            break
+
+    if dist_dir is None:
+        return
+
+    print(f"🌐 Serving React UI from {dist_dir}", flush=True)
+
+    assets_dir = dist_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    index_path = dist_dir / "index.html"
+
+    @app.get("/")
+    def _index_root() -> FileResponse:
+        return FileResponse(str(index_path), media_type="text/html")
+
+    @app.get("/{full_path:path}")
+    def _spa_fallback(full_path: str) -> Response:
+        # API + WebSocket routes are matched FIRST by FastAPI's routing
+        # (they were registered with decorators above this function). This
+        # catch-all only fires for unmatched paths — but be defensive and
+        # 404 anything starting with api/ or ws/ that slipped through.
+        if full_path.startswith(("api/", "ws/")):
+            return Response(status_code=404)
+        # If the request matches an actual file on disk (e.g. favicon.ico),
+        # serve it; otherwise fall back to index.html for client routing.
+        candidate = dist_dir / full_path
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(index_path), media_type="text/html")
+
+
+_mount_static_if_present()
+
+
+# ---------------------------------------------------------------------------
+# Public entry: start the server on a background thread
+# ---------------------------------------------------------------------------
+
+_server_thread: Optional[threading.Thread] = None
+_server_instance: Optional[uvicorn.Server] = None
+
+
+# ---------- stdout mirror so daemon prints appear in Live Logs ----------
+
+_STDOUT_MIRROR_INSTALLED = False
+
+
+class _StdoutMirror:
+    """File-like wrapper that tees writes to the original stream AND publish_log.
+
+    Categorises lines into log levels by scanning for emoji markers used
+    throughout the codebase:
+      ⚡ → fast-path     🎬 → easter-egg      🔌/🌐 → info
+      ⚠️/❌/⛔ → warning/error    everything else → info
+    """
+
+    def __init__(self, real_stream) -> None:
+        self._real = real_stream
+        self._buf = ""
+
+    def write(self, text: str) -> int:
+        try:
+            self._real.write(text)
+        except Exception:
+            pass
+        if not text:
+            return 0
+        self._buf += text
+        # Emit per complete line so we don't spam half-lines.
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            level = _classify_log_level(stripped)
+            try:
+                publish_log(level, stripped)
+            except Exception:
+                pass
+        return len(text)
+
+    def flush(self) -> None:
+        try:
+            self._real.flush()
+        except Exception:
+            pass
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._real.isatty())
+        except Exception:
+            return False
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _classify_log_level(line: str) -> str:
+    low = line.lower()
+    if "⚡" in line or "fast-path" in low or "fast path" in low:
+        return "fast-path"
+    if "🎬" in line:
+        return "easter-egg"
+    if "[mcp]" in low or "mcp call" in low or "mcp server" in low:
+        return "mcp"
+    if "❌" in line or "error" in low or "traceback" in low or "exception" in low:
+        return "error"
+    if "⚠️" in line or "⚠" in line or "warning" in low:
+        return "warning"
+    return "info"
+
+
+def install_stdout_mirror() -> None:
+    """Wrap sys.stdout/sys.stderr so every print() also feeds the Live Logs feed.
+
+    Idempotent — safe to call multiple times.
+    """
+    global _STDOUT_MIRROR_INSTALLED
+    if _STDOUT_MIRROR_INSTALLED:
+        return
+    try:
+        import sys as _sys
+        if not isinstance(_sys.stdout, _StdoutMirror):
+            _sys.stdout = _StdoutMirror(_sys.stdout)
+        if not isinstance(_sys.stderr, _StdoutMirror):
+            _sys.stderr = _StdoutMirror(_sys.stderr)
+        _STDOUT_MIRROR_INSTALLED = True
+    except Exception:
+        pass
+
+
+_startup_error: Optional[BaseException] = None
+_startup_error_lock = threading.Lock()
+
+
+def _set_startup_error(err: Optional[BaseException]) -> None:
+    global _startup_error
+    with _startup_error_lock:
+        _startup_error = err
+
+
+def get_startup_error() -> Optional[BaseException]:
+    """Return the most recent uvicorn / port-binding failure, or None."""
+    with _startup_error_lock:
+        return _startup_error
+
+
+def _check_port_available(host: str, port: int) -> bool:
+    """Return True iff (host, port) can currently be bound for listening."""
+    import socket as _socket
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def start_in_background() -> bool:
+    """Start uvicorn in a daemon thread. Returns True on success.
+
+    Hardening over the naive version:
+      • If the port is already in use, refuse to start and record an
+        actionable error retrievable via ``get_startup_error()`` — instead
+        of letting uvicorn die silently inside the daemon thread.
+      • Wait up to ~10s for the socket to accept connections (was ~2s),
+        and propagate any uvicorn-thread crash as the startup error so the
+        caller can surface it.
+    """
+    global _server_thread, _server_instance
+    if _server_thread is not None and _server_thread.is_alive():
+        return True
+
+    _set_startup_error(None)
+
+    if not _check_port_available(API_HOST, API_PORT):
+        err = RuntimeError(
+            f"Port {API_PORT} is already in use on {API_HOST}. "
+            f"Another Jarvis instance may be running. "
+            f"Find the holder with: netstat -ano | findstr :{API_PORT}"
+        )
+        _set_startup_error(err)
+        print(f"⚠️ {err}", flush=True)
+        return False
+
+    config = uvicorn.Config(
+        app,
+        host=API_HOST,
+        port=API_PORT,
+        log_level="warning",
+        access_log=False,
+    )
+    _server_instance = uvicorn.Server(config)
+
+    def _run() -> None:
+        try:
+            _server_instance.run()
+        except Exception as e:
+            _set_startup_error(e)
+            print(f"⚠️ API server crashed: {e}", flush=True)
+
+    _server_thread = threading.Thread(target=_run, daemon=True, name="JarvisAPIServer")
+    _server_thread.start()
+
+    import socket as _socket
+    for _ in range(100):
+        time.sleep(0.1)
+        if get_startup_error() is not None:
+            return False
+        try:
+            with _socket.create_connection((API_HOST, API_PORT), timeout=0.2):
+                print(f"🌐 API server listening on http://{API_HOST}:{API_PORT}", flush=True)
+                return True
+        except OSError:
+            continue
+    print(f"⚠️ API server did not become reachable on {API_PORT} within 10s", flush=True)
+    return False
+
+
+def stop() -> None:
+    if _server_instance is not None:
+        _server_instance.should_exit = True

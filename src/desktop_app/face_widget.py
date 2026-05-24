@@ -34,7 +34,7 @@ import threading
 import time as _time
 from typing import Optional, List, Tuple
 from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QApplication
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
@@ -60,6 +60,27 @@ class JarvisState(Enum):
     SPEAKING = "speaking"      # Speaking response
     DICTATING = "dictating"    # Hold-to-dictate recording active
     DICTATION_PROCESSING = "dictation_processing"  # Transcribing & pasting captured dictation
+
+
+# Mapping JarvisState → React UI state vocabulary (idle/listening/thinking/speaking).
+# Used by JarvisStateManager.set_state() to broadcast to the React HUD via
+# api_server.publish_state().
+_JARVIS_STATE_TO_REACT = {
+    # ASLEEP omitted on purpose — there is no separate "asleep" state in the
+    # React card; it just renders idle.
+}
+try:
+    _JARVIS_STATE_TO_REACT = {
+        JarvisState.ASLEEP: "idle",
+        JarvisState.IDLE: "idle",
+        JarvisState.LISTENING: "listening",
+        JarvisState.THINKING: "thinking",
+        JarvisState.SPEAKING: "speaking",
+        JarvisState.DICTATING: "listening",
+        JarvisState.DICTATION_PROCESSING: "thinking",
+    }
+except Exception:
+    pass
 
 
 # Global Jarvis state - allows daemon to signal overall state to face widget
@@ -133,6 +154,17 @@ class JarvisStateManager(QObject):
             self.state_changed.emit(state.value)
         except RuntimeError:
             # If Qt event loop isn't running, just update the flag
+            pass
+
+        # Mirror to the React UI via the API server's WebSocket bus. The
+        # api_server module only exists in the daemon process; if we're
+        # running in the desktop_app process, the import is harmless but
+        # there will be no subscribers — that's fine.
+        try:
+            from jarvis import api_server
+            react_state = _JARVIS_STATE_TO_REACT.get(state, "idle")
+            api_server.publish_state(state=react_state)
+        except Exception:
             pass
 
 
@@ -1064,13 +1096,63 @@ class FaceWindow(QWidget):
         # Layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         # Face widget
         self.face = LowPolyFaceWidget()
         layout.addWidget(self.face)
 
+        # Control row: STOP button (kills TTS + interrupts current reply)
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        self.stop_button = QPushButton("⏹  STOP")
+        self.stop_button.setToolTip("Stop current speech & cancel pending response")
+        self.stop_button.setMinimumHeight(36)
+        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_button.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #b91c1c;"
+            "  color: #fff;"
+            "  border: 1px solid #f87171;"
+            "  border-radius: 8px;"
+            "  padding: 6px 14px;"
+            "  font-size: 13px;"
+            "  font-weight: 600;"
+            "  letter-spacing: 1px;"
+            "}"
+            "QPushButton:hover { background-color: #dc2626; }"
+            "QPushButton:pressed { background-color: #991b1b; }"
+        )
+        self.stop_button.clicked.connect(self._on_stop_clicked)
+        button_row.addWidget(self.stop_button)
+        layout.addLayout(button_row)
+
         # Position on the right side of the screen
         self._position_on_right()
+
+    def _on_stop_clicked(self):
+        """Stop button: interrupt TTS playback and cancel in-flight processing."""
+        try:
+            # Pull the live TTS handle from the running daemon. The face
+            # widget runs in the desktop_app process which holds the
+            # listener; the listener owns the tts instance.
+            from jarvis.daemon import get_active_listener  # type: ignore
+            listener = get_active_listener()
+            if listener is not None and getattr(listener, "tts", None) is not None:
+                try:
+                    listener.tts.interrupt()
+                except AttributeError:
+                    # Fallback: try common alt method names
+                    for m in ("stop", "cancel", "_stop"):
+                        if hasattr(listener.tts, m):
+                            getattr(listener.tts, m)()
+                            break
+            # Also clear listener wake state so any pending dispatch dies fast
+            if listener is not None:
+                listener._wake_timestamp = None
+            print("⏹  STOP pressed — interrupting TTS and clearing state", flush=True)
+        except Exception as e:
+            print(f"⏹  STOP error: {e}", flush=True)
 
     def _position_on_right(self):
         """Position the window on the right side of the screen, vertically centered."""

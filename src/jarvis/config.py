@@ -90,6 +90,11 @@ class Settings:
     active_profiles: list[str]
     use_stdin: bool
     voice_debug: bool
+    # When True, save each VAD-gated audio segment as a WAV file under
+    # %LOCALAPPDATA%/Jarvis/debug_audio/ (Windows) or ~/.cache/jarvis/
+    # debug_audio/ (other). Lets us listen to exactly what Whisper receives.
+    # Off by default — only useful for diagnostic sessions.
+    voice_debug_save_audio: bool
 
     # Screen Capture
     allowlist_bundles: list[str]
@@ -137,15 +142,38 @@ class Settings:
     whisper_no_speech_threshold: float
     whisper_min_audio_duration: float
     whisper_min_word_length: int
+    # Whisper decoder accuracy knobs. None = use library default.
+    whisper_compression_ratio_threshold: Optional[float]
+    whisper_initial_prompt: Optional[str]
+    whisper_allowed_languages: list[str]
+    # Bootstrap language for the first few utterances before the sticky
+    # language lock reaches consensus. None = auto-detect.
+    whisper_default_language: Optional[str]
+    # Decoder strategy knobs (Phase A — see listening.spec.md "ASR reliability").
+    whisper_beam_size: int  # 1 = greedy, recommended for command-style ASR
+    whisper_temperature_fallback: list[float]  # fallback schedule on retry
+    whisper_hallucination_silence_threshold: Optional[float]  # faster-whisper hallucination guard
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
-    vad_aggressiveness: int
+    vad_backend: str  # "silero" (default, ~4x fewer errors than webrtc) or "webrtc" (fallback)
+    vad_aggressiveness: int  # webrtc backend only: 0-3
+    # Silero backend tunables — hysteresis pair + segmentation params.
+    vad_silero_threshold: float          # onset threshold (strict — fewer false starts)
+    vad_silero_neg_threshold: float      # offset threshold (permissive — catch Greek codas)
+    vad_silero_min_speech_ms: int        # filter out sub-N ms breath/click noise
+    vad_silero_min_silence_ms: int       # don't split intra-utterance pauses
+    vad_silero_speech_pad_ms: int        # preserve unvoiced consonants
     vad_frame_ms: int
     vad_pre_roll_ms: int
     endpoint_silence_ms: int
     max_utterance_ms: int
     tts_max_utterance_ms: int
+
+    # Microphone input preprocessing (AGC)
+    mic_agc_enabled: bool
+    mic_agc_target_rms: float
+    mic_agc_max_gain: float
 
     # UI/UX Features
     tune_enabled: bool
@@ -308,6 +336,164 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
         cfg_json["_config_version"] = 1
         modified = True
 
+    # Migration v2: mic accuracy upgrade — only migrate fields the user clearly
+    # did NOT customise (still on their pre-upgrade default), so users who chose
+    # int8 deliberately or wrote their own initial_prompt keep their preference.
+    if migration_version < 2:
+        # int8 → float16 (faster AND more accurate on CUDA; CPU fallback chain
+        # automatically downgrades back to int8 if float16 isn't supported).
+        if cfg_json.get("whisper_compute_type") == "int8":
+            cfg_json["whisper_compute_type"] = "float16"
+            print("📢 Upgraded Whisper compute type: int8 → float16 (faster + more accurate on CUDA)", flush=True)
+        # NOTE: v2 also seeded a verbose initial_prompt, but migration v3 below
+        # reverts that — it turned out to poison Whisper's decoder. We keep the
+        # v2 marker so the schema-version counter is monotonic.
+        cfg_json["_config_version"] = 2
+        modified = True
+
+    # Migration v3: undo the prompt-poisoning regression from v2 and disable
+    # the AGC default that interfered with Whisper's internal normalisation.
+    if migration_version < 3:
+        # The v2 prompt was instruction-style and Whisper memorised it,
+        # echoing "Greek voice assistant. Λέξεις,..." into transcripts.
+        # Wipe back to None unless the user has manually written a different
+        # prompt in the meantime. See:
+        #   - medium.com/axinc-ai/prompt-engineering-in-whisper-6bb18003562d
+        #   - openai/whisper Discussion #1150
+        _poisoned_prompts = {
+            (
+                "Jarvis. Greek/English voice assistant. "
+                "Λέξεις: καιρός, αύριο, Θεσσαλονίκη, Αθήνα, σήμερα, "
+                "παίξε, βάλε, μουσική, email."
+            ),
+            "Jarvis. Greek/English voice assistant.",
+        }
+        if cfg_json.get("whisper_initial_prompt") in _poisoned_prompts:
+            cfg_json["whisper_initial_prompt"] = None
+            print(
+                "📢 Reverted whisper_initial_prompt to null — prior value "
+                "was being echoed in transcripts (prompt poisoning).",
+                flush=True,
+            )
+        # mic_agc_enabled defaulted to True in v2; auto-disable for users
+        # still on that default. A user who explicitly wrote `true` after
+        # opting in remains unaffected — we mark them via _agc_v2_default
+        # so this only fires once, and we never touch a future explicit
+        # `true` they may write after this migration.
+        if "_agc_v2_default" not in cfg_json:
+            if cfg_json.get("mic_agc_enabled") is True:
+                cfg_json["mic_agc_enabled"] = False
+                print(
+                    "📢 Disabled mic AGC by default — interfered with "
+                    "Whisper's internal mel-spectrogram normalisation.",
+                    flush=True,
+                )
+            cfg_json["_agc_v2_default"] = True
+        cfg_json["_config_version"] = 3
+        modified = True
+
+    # Migration v4: ASR reliability upgrade — Phase A defaults.
+    # Synthesised from 3 AI consultations + production logs (Greek detected
+    # as French/German due to FP16 underflow + lax thresholds). We only
+    # auto-bump values that match the v2/v3 default; explicit user overrides
+    # remain untouched.
+    if migration_version < 4:
+        # float16 → int8_float16. Saves ~3 GB VRAM, 1.5-2× speed, <0.2% WER.
+        # Verified across RTX 30/40/50. We only migrate `float16` (the v2
+        # default) — users who explicitly chose something else stay put.
+        if cfg_json.get("whisper_compute_type") == "float16":
+            cfg_json["whisper_compute_type"] = "int8_float16"
+            print(
+                "📢 Upgraded Whisper compute type: float16 → int8_float16 "
+                "(smaller VRAM + faster, verified across RTX 30/40/50)",
+                flush=True,
+            )
+        # beam_size: only set if currently missing or explicitly = 5 (the
+        # historical hard-coded value). Greedy decoding (1) avoids GSP
+        # firmware crashes on Blackwell AND reduces silence hallucinations.
+        if cfg_json.get("whisper_beam_size") in (None, 5):
+            cfg_json["whisper_beam_size"] = 1
+            print(
+                "📢 Set Whisper beam_size to 1 (greedy) — eliminates the "
+                "decoder's hallucination feedback loop on silent input.",
+                flush=True,
+            )
+        # no_speech_threshold: 0.4 → 0.6 (only if at the v3 default).
+        if cfg_json.get("whisper_no_speech_threshold") == 0.4:
+            cfg_json["whisper_no_speech_threshold"] = 0.6
+            print(
+                "📢 Raised whisper_no_speech_threshold: 0.4 → 0.6 (filters "
+                "more 'Thank you'/'Okay' hallucinations on silence).",
+                flush=True,
+            )
+        # compression_ratio_threshold: 2.0 → 1.35 (only if at OpenAI default).
+        if cfg_json.get("whisper_compression_ratio_threshold") == 2.0:
+            cfg_json["whisper_compression_ratio_threshold"] = 1.35
+            print(
+                "📢 Tightened whisper_compression_ratio_threshold: 2.0 → "
+                "1.35 (catches repetition hallucinations earlier).",
+                flush=True,
+            )
+        # vad_silero_threshold: 0.5 → 0.7 (and seed hysteresis fields). Only
+        # touch threshold if at the v2/v3 default.
+        if cfg_json.get("vad_silero_threshold") == 0.5:
+            cfg_json["vad_silero_threshold"] = 0.7
+            cfg_json.setdefault("vad_silero_neg_threshold", 0.4)
+            cfg_json.setdefault("vad_silero_min_speech_ms", 300)
+            cfg_json.setdefault("vad_silero_min_silence_ms", 400)
+            cfg_json.setdefault("vad_silero_speech_pad_ms", 400)
+            print(
+                "📢 Upgraded Silero VAD: threshold 0.5 → 0.7 with hysteresis "
+                "0.4 offset (catches Greek codas, drops breathing noise).",
+                flush=True,
+            )
+        cfg_json["_config_version"] = 4
+        modified = True
+
+    # Migration v5: emergency rollback of two Phase A values that turned
+    # out to be too aggressive for the user's PD200X dynamic mic + Greek
+    # speech. Observed in production: only 0.3-0.5 s of audio reached
+    # Whisper for 1.5-3 s utterances ("Jarvis, ποιος είναι ο καιρός στη
+    # Θεσσαλονίκη" was captured as just "Javi"). Root cause: Silero VAD
+    # at 0.7 onset rejects Greek fricatives / unaspirated plosives that
+    # sit at probability ~0.5-0.6 on a dynamic mic; no_speech_threshold
+    # 0.6 then filtered the borderline short fragments that survived.
+    if migration_version < 5:
+        if cfg_json.get("vad_silero_threshold") == 0.7:
+            cfg_json["vad_silero_threshold"] = 0.5
+            cfg_json["vad_silero_neg_threshold"] = 0.3  # also retune hysteresis
+            print(
+                "📢 Rolled back Silero VAD onset: 0.7 → 0.5 (was rejecting "
+                "Greek phonemes on dynamic mic). Hysteresis offset: 0.3.",
+                flush=True,
+            )
+        if cfg_json.get("whisper_no_speech_threshold") == 0.6:
+            cfg_json["whisper_no_speech_threshold"] = 0.5
+            print(
+                "📢 Eased whisper_no_speech_threshold: 0.6 → 0.5 (was "
+                "filtering short quiet Greek utterances).",
+                flush=True,
+            )
+        cfg_json["_config_version"] = 5
+        modified = True
+
+    # Migration v6: bump endpoint_silence_ms 800 → 1200. Pairs with the
+    # silence-frame-inclusion fix in listener.py. With silence frames now
+    # included in the audio sent to Whisper, the user can pause longer
+    # mid-sentence (for breath / thinking) without losing context. Extending
+    # endpoint to 1200 ms gives natural conversational pauses room to
+    # breathe without finalising the utterance prematurely.
+    if migration_version < 6:
+        if cfg_json.get("endpoint_silence_ms") == 800:
+            cfg_json["endpoint_silence_ms"] = 1200
+            print(
+                "📢 Extended endpoint_silence_ms: 800 → 1200 ms (gives "
+                "natural mid-sentence pauses room before finalising).",
+                flush=True,
+            )
+        cfg_json["_config_version"] = 6
+        modified = True
+
     # Save migrated config
     if modified:
         if _save_json(cfg_path, cfg_json):
@@ -432,24 +618,121 @@ def get_default_config() -> Dict[str, Any]:
         "wake_fuzzy_ratio": 0.78,
 
         # Whisper Speech Recognition
-        "whisper_model": "medium",
+        # `large-v3-turbo` is ~2-5x faster than large-v3 and roughly the speed
+        # of medium while retaining ~95% of large-v3 accuracy. The listener
+        # has a built-in fallback to large-v3 → medium if turbo isn't
+        # supported by the installed faster-whisper (≥1.1.0 required).
+        "whisper_model": "large-v3-turbo",
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
-        "whisper_compute_type": "int8",
+        # int8_float16: 8-bit weight quantization with FP16 activations.
+        # Verified across RTX 30/40/50 series, ~3 GB VRAM savings (frees room
+        # for Ollama LLM), 1.5-2× speed, <0.2% WER vs float16. Fallback chain
+        # downgrades to plain int8 / float32 if unsupported.
+        "whisper_compute_type": "int8_float16",
         "whisper_vad": True,
         "whisper_min_confidence": 0.3,  # Filter low-confidence segments (hallucinations)
-        "whisper_no_speech_threshold": 0.5,  # Hard cutoff: reject segments where no_speech_prob >= this
+        # 0.5 — middle-ground: aggressive enough to filter most YouTube
+        # residue ("Thank you", "Ciao") on silence, lenient enough to keep
+        # short quiet legitimate speech. We tried 0.6 (Calm-Whisper paper)
+        # but it filtered borderline quiet Greek phonemes from a dynamic mic.
+        # The downstream Calm-Whisper exact-match blocklist catches anything
+        # this leaks through.
+        "whisper_no_speech_threshold": 0.5,
         "whisper_min_audio_duration": 0.15,
         "whisper_min_word_length": 1,
+        # 1.35 (was 2.0) — much stricter compression-ratio guard. Whisper's
+        # canonical 2.0 was tuned for long-form transcription; for short
+        # command-style utterances, anything compressing more than ~1.35× is
+        # almost certainly looping ("don't don't don't"). Per AI #3 research.
+        "whisper_compression_ratio_threshold": 1.35,
+        # Greedy decoding (beam_size=1). Two reasons: (a) command-style ASR
+        # processes short utterances independently — beam search just explores
+        # more "plausible" hallucinations on silence; (b) known GSP firmware
+        # crash with Blackwell + multi-stream beam search.
+        "whisper_beam_size": 1,
+        # Temperature fallback schedule. Whisper retries decoding with these
+        # temperatures when the primary (T=0.0) hits compression/no-speech
+        # gates. Climbing schedule helps the model break out of repetition
+        # loops on ambiguous input.
+        "whisper_temperature_fallback": [0.0, 0.2, 0.4],
+        # faster-whisper API: drops segments where Whisper appears to be
+        # hallucinating during silence (heuristic based on token timing vs
+        # audio energy). 2.0 is the conservative production default.
+        "whisper_hallucination_silence_threshold": 2.0,
+        # Whisper's `initial_prompt` is interpreted as "the start of the
+        # transcript the model has been writing" — NOT as instructions. A
+        # long or instruction-style prompt (e.g. listing vocabulary words)
+        # gets memorised and echoed back as transcription. See:
+        #   - medium.com/axinc-ai/prompt-engineering-in-whisper-6bb18003562d
+        #   - openai/whisper Discussion #1150
+        # Default to None: rely on the `language=` hint (sticky language
+        # lock + `whisper_default_language` bootstrap) for EL/EN bias.
+        # A user may set a SHORT speech-style prompt (e.g. "Γεια σου Jarvis.")
+        # but never an instructional one.
+        "whisper_initial_prompt": None,
+        "whisper_allowed_languages": ["el", "en"],
+        # Force this language on every transcribe call BEFORE the sticky
+        # lock has consensus (i.e. the first few utterances). None = auto-
+        # detect. Recommended: set to "el" if your daily use is primarily
+        # Greek, or "en" if primarily English — it removes the first-
+        # utterance ambiguity that can land Whisper on a wrong language
+        # (e.g. detecting Greek as German on quiet input).
+        "whisper_default_language": None,
 
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
-        "vad_aggressiveness": 2,
+        # Silero is the neural VAD default — Picovoice 2026 benchmark shows
+        # ~4× lower error rate than WebRTC at the same false-positive rate,
+        # especially for speech onset (fixes "missing the start of the word").
+        # Auto-falls back to webrtc when silero-vad isn't installed.
+        "vad_backend": "silero",
+        "vad_aggressiveness": 2,                # webrtc backend only
+        # Silero hysteresis. Earlier we tried 0.7/0.4 (strict onset) — that
+        # was too aggressive for the user's PD200X dynamic mic + Greek
+        # speech: unaspirated plosives (π, τ, κ) and fricatives (θ, φ, χ,
+        # σ) sit at Silero probability ~0.5-0.6 on that mic, so a 0.7 onset
+        # rejected most of every Greek utterance. 0.5 onset / 0.3 offset
+        # is gentler: lets quiet Greek phonemes start an utterance, then
+        # stays open through softer trailing sounds.
+        "vad_silero_threshold": 0.5,            # onset — moderate
+        "vad_silero_neg_threshold": 0.3,        # offset — permissive (small hysteresis spread)
+        # The following three fields are RESERVED for a future migration to
+        # silero-vad's get_speech_timestamps() chunked API. The current
+        # per-frame SileroVAD wrapper does not consume them — they have no
+        # effect at runtime today. Documented so users who set them know.
+        "vad_silero_min_speech_ms": 300,
+        "vad_silero_min_silence_ms": 400,
+        "vad_silero_speech_pad_ms": 400,
         "vad_frame_ms": 20,
-        "vad_pre_roll_ms": 240,
-        "endpoint_silence_ms": 800,
+        # 400 ms pre-roll buffers more lead-in audio so VAD-triggered
+        # transcription includes the first phoneme. No latency cost — the
+        # pre-roll fills in parallel and is consumed only when speech begins.
+        "vad_pre_roll_ms": 400,
+        # 1200 (was 800) — give the user more breathing room mid-sentence
+        # before the listener finalises an utterance. With endpoint at 800 ms,
+        # natural conversational pauses ("Jarvis,......ποιος είναι...") were
+        # triggering early termination, especially for bilingual code-switching
+        # where the user may pause to translate. Costs 400 ms of extra latency
+        # after the user's LAST word — acceptable trade-off for far fewer
+        # mid-sentence cuts.
+        "endpoint_silence_ms": 1200,
         "max_utterance_ms": 12000,
         "tts_max_utterance_ms": 3000,  # Shorter timeout during TTS for quick stop detection
+
+        # Microphone input preprocessing — AGC is OPT-IN.
+        # Whisper's feature extractor already normalises the mel spectrogram
+        # ([-1, 1], near-zero mean), so external AGC duplicates that work
+        # and the soft-clip changes the energy envelope the encoder expects.
+        # Worse, in quiet moments the AGC amplifies the noise floor ~10×
+        # which lifts background hum into the VAD trigger band. We saw
+        # measurable regressions in real-world Greek transcription when
+        # this was on, so it now defaults off. Enable only when the mic
+        # genuinely under-drives at normal positioning. See:
+        #   - huggingface.co/docs/transformers/en/model_doc/whisper
+        "mic_agc_enabled": False,
+        "mic_agc_target_rms": 0.1,
+        "mic_agc_max_gain": 10.0,
 
         # UI/UX Features
         "tune_enabled": True,
@@ -580,6 +863,12 @@ def load_settings() -> Settings:
     # Build Settings. Some fields support env var overrides.
     # Env overrides: JARVIS_VOICE_DEBUG, JARVIS_WHISPER_BACKEND
     voice_debug = os.environ.get("JARVIS_VOICE_DEBUG", "0") == "1"
+    # Audio dump is off by default. Enable via config.json OR
+    # JARVIS_VOICE_DEBUG_SAVE_AUDIO=1 env var for a one-shot diagnostic session.
+    voice_debug_save_audio = (
+        os.environ.get("JARVIS_VOICE_DEBUG_SAVE_AUDIO", "0") == "1"
+        or bool(merged.get("voice_debug_save_audio", False))
+    )
 
     # Normalize/convert fields
     db_path = str(merged.get("db_path") or _default_db_path())
@@ -631,23 +920,117 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
-    whisper_model = str(merged.get("whisper_model", "medium"))
+    whisper_model = str(merged.get("whisper_model", "large-v3-turbo"))
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
         whisper_backend = "auto"
     whisper_device = str(merged.get("whisper_device", "auto")).lower()
     if whisper_device not in ("cuda", "auto", "cpu"):
         whisper_device = "auto"
-    whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
+    whisper_compute_type = str(merged.get("whisper_compute_type", "int8_float16"))
     whisper_vad = bool(merged.get("whisper_vad", True))
+    # New: compression-ratio threshold, initial prompt, allowed languages.
+    _crt_raw = merged.get("whisper_compression_ratio_threshold", 1.35)
+    whisper_compression_ratio_threshold: Optional[float]
+    if _crt_raw in (None, "", "null"):
+        whisper_compression_ratio_threshold = None
+    else:
+        try:
+            whisper_compression_ratio_threshold = float(_crt_raw)
+        except (TypeError, ValueError):
+            whisper_compression_ratio_threshold = 1.35
+    _ip_raw = merged.get("whisper_initial_prompt", None)
+    whisper_initial_prompt: Optional[str]
+    if _ip_raw in (None, "", "null"):
+        whisper_initial_prompt = None
+    else:
+        whisper_initial_prompt = str(_ip_raw)
+    _allowed_raw = merged.get("whisper_allowed_languages", ["el", "en"])
+    whisper_allowed_languages = (
+        [str(x).strip().lower() for x in _allowed_raw if str(x).strip()]
+        if isinstance(_allowed_raw, list)
+        else ["el", "en"]
+    )
+    _default_lang_raw = merged.get("whisper_default_language", None)
+    whisper_default_language: Optional[str]
+    if _default_lang_raw in (None, "", "null", "auto"):
+        whisper_default_language = None
+    else:
+        whisper_default_language = str(_default_lang_raw).strip().lower() or None
+    # Decoder strategy knobs (Phase A).
+    try:
+        whisper_beam_size = max(1, int(merged.get("whisper_beam_size", 1)))
+    except (TypeError, ValueError):
+        whisper_beam_size = 1
+    _temp_raw = merged.get("whisper_temperature_fallback", [0.0, 0.2, 0.4])
+    if isinstance(_temp_raw, list) and _temp_raw:
+        try:
+            whisper_temperature_fallback = [max(0.0, float(t)) for t in _temp_raw]
+        except (TypeError, ValueError):
+            whisper_temperature_fallback = [0.0, 0.2, 0.4]
+    else:
+        # Single float supplied — wrap into a one-element schedule.
+        try:
+            whisper_temperature_fallback = [max(0.0, float(_temp_raw))]
+        except (TypeError, ValueError):
+            whisper_temperature_fallback = [0.0, 0.2, 0.4]
+    _hst_raw = merged.get("whisper_hallucination_silence_threshold", 2.0)
+    whisper_hallucination_silence_threshold: Optional[float]
+    if _hst_raw in (None, "", "null"):
+        whisper_hallucination_silence_threshold = None
+    else:
+        try:
+            whisper_hallucination_silence_threshold = float(_hst_raw)
+        except (TypeError, ValueError):
+            whisper_hallucination_silence_threshold = 2.0
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
+    vad_backend = str(merged.get("vad_backend", "silero")).strip().lower()
+    if vad_backend not in ("silero", "webrtc"):
+        vad_backend = "silero"
     vad_aggressiveness = int(merged.get("vad_aggressiveness", 2))
+    try:
+        vad_silero_threshold = float(merged.get("vad_silero_threshold", 0.5))
+    except (TypeError, ValueError):
+        vad_silero_threshold = 0.5
+    # Clamp Silero threshold into the [0, 1] probability range.
+    if vad_silero_threshold < 0.0:
+        vad_silero_threshold = 0.0
+    elif vad_silero_threshold > 1.0:
+        vad_silero_threshold = 1.0
+    try:
+        vad_silero_neg_threshold = float(merged.get("vad_silero_neg_threshold", 0.3))
+    except (TypeError, ValueError):
+        vad_silero_neg_threshold = 0.3
+    # Hysteresis sanity: offset MUST be <= onset, else collapse to no hysteresis.
+    if vad_silero_neg_threshold > vad_silero_threshold:
+        vad_silero_neg_threshold = vad_silero_threshold
+    try:
+        vad_silero_min_speech_ms = max(0, int(merged.get("vad_silero_min_speech_ms", 300)))
+    except (TypeError, ValueError):
+        vad_silero_min_speech_ms = 300
+    try:
+        vad_silero_min_silence_ms = max(0, int(merged.get("vad_silero_min_silence_ms", 400)))
+    except (TypeError, ValueError):
+        vad_silero_min_silence_ms = 400
+    try:
+        vad_silero_speech_pad_ms = max(0, int(merged.get("vad_silero_speech_pad_ms", 400)))
+    except (TypeError, ValueError):
+        vad_silero_speech_pad_ms = 400
     vad_frame_ms = int(merged.get("vad_frame_ms", 20))
-    vad_pre_roll_ms = int(merged.get("vad_pre_roll_ms", 240))
-    endpoint_silence_ms = int(merged.get("endpoint_silence_ms", 800))
+    vad_pre_roll_ms = int(merged.get("vad_pre_roll_ms", 400))
+    endpoint_silence_ms = int(merged.get("endpoint_silence_ms", 1200))
     max_utterance_ms = int(merged.get("max_utterance_ms", 12000))
     tts_max_utterance_ms = int(merged.get("tts_max_utterance_ms", 3000))
+    mic_agc_enabled = bool(merged.get("mic_agc_enabled", False))
+    try:
+        mic_agc_target_rms = float(merged.get("mic_agc_target_rms", 0.1))
+    except (TypeError, ValueError):
+        mic_agc_target_rms = 0.1
+    try:
+        mic_agc_max_gain = float(merged.get("mic_agc_max_gain", 10.0))
+    except (TypeError, ValueError):
+        mic_agc_max_gain = 10.0
     sample_rate = int(merged.get("sample_rate", 16000))
     tune_enabled = bool(merged.get("tune_enabled", True))
     hot_window_enabled = bool(merged.get("hot_window_enabled", True))
@@ -756,6 +1139,7 @@ def load_settings() -> Settings:
         active_profiles=active_profiles,
         use_stdin=use_stdin,
         voice_debug=voice_debug,
+        voice_debug_save_audio=voice_debug_save_audio,
 
         # Screen Capture
         allowlist_bundles=allowlist_bundles,
@@ -803,15 +1187,33 @@ def load_settings() -> Settings:
         whisper_no_speech_threshold=whisper_no_speech_threshold,
         whisper_min_audio_duration=whisper_min_audio_duration,
         whisper_min_word_length=whisper_min_word_length,
+        whisper_compression_ratio_threshold=whisper_compression_ratio_threshold,
+        whisper_initial_prompt=whisper_initial_prompt,
+        whisper_allowed_languages=whisper_allowed_languages,
+        whisper_default_language=whisper_default_language,
+        whisper_beam_size=whisper_beam_size,
+        whisper_temperature_fallback=whisper_temperature_fallback,
+        whisper_hallucination_silence_threshold=whisper_hallucination_silence_threshold,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,
+        vad_backend=vad_backend,
         vad_aggressiveness=vad_aggressiveness,
+        vad_silero_threshold=vad_silero_threshold,
+        vad_silero_neg_threshold=vad_silero_neg_threshold,
+        vad_silero_min_speech_ms=vad_silero_min_speech_ms,
+        vad_silero_min_silence_ms=vad_silero_min_silence_ms,
+        vad_silero_speech_pad_ms=vad_silero_speech_pad_ms,
         vad_frame_ms=vad_frame_ms,
         vad_pre_roll_ms=vad_pre_roll_ms,
         endpoint_silence_ms=endpoint_silence_ms,
         max_utterance_ms=max_utterance_ms,
         tts_max_utterance_ms=tts_max_utterance_ms,
+
+        # Microphone preprocessing
+        mic_agc_enabled=mic_agc_enabled,
+        mic_agc_target_rms=mic_agc_target_rms,
+        mic_agc_max_gain=mic_agc_max_gain,
 
         # UI/UX Features
         tune_enabled=tune_enabled,

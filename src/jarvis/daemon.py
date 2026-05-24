@@ -32,6 +32,22 @@ if sys.platform == 'win32' and not getattr(sys, 'frozen', False):
 from typing import Optional
 from faster_whisper import WhisperModel
 
+
+# Module-level singleton accessor for the live VoiceListener instance.
+# Used by the face widget's STOP button (which lives in the same process)
+# to reach into the listener's TTS without needing complex IPC.
+_active_listener = None
+
+
+def _set_active_listener(listener) -> None:
+    global _active_listener
+    _active_listener = listener
+
+
+def get_active_listener():
+    """Return the running VoiceListener, or None if Jarvis hasn't started one yet."""
+    return _active_listener
+
 from .config import load_settings
 from .memory.db import Database
 from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memory
@@ -479,6 +495,7 @@ def main() -> None:
     print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
     voice_thread: Optional[threading.Thread] = None
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
+    _set_active_listener(voice_thread)
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
 

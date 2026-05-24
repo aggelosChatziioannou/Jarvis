@@ -190,10 +190,11 @@ def _build_field_metadata() -> List[FieldMeta]:
       "wake", "float", min_val=0.5, max_val=1.0, step=0.01)
     # --- Whisper ---
     f("whisper_model", "Model Size",
-      "Whisper model size (tiny/base/small/medium/large)",
+      "Whisper model size — turbo is recommended (~medium speed, ~large-v3 accuracy)",
       "whisper", "choice",
       choices=[("tiny", "Tiny"), ("base", "Base"), ("small", "Small"),
-               ("medium", "Medium"), ("large-v3", "Large v3")])
+               ("medium", "Medium"), ("large-v3", "Large v3"),
+               ("large-v3-turbo", "Large v3 Turbo")])
     f("whisper_backend", "Backend",
       "Speech recognition backend",
       "whisper", "choice",
@@ -204,9 +205,16 @@ def _build_field_metadata() -> List[FieldMeta]:
       "whisper", "choice",
       choices=[("auto", "Auto"), ("cuda", "CUDA (GPU)"), ("cpu", "CPU")])
     f("whisper_compute_type", "Compute Type",
-      "Quantisation level for inference",
+      "Quantisation level — int8_float16 is recommended (saves VRAM + faster, no accuracy loss)",
       "whisper", "choice",
-      choices=[("int8", "INT8 (Fast)"), ("float16", "Float16"), ("float32", "Float32")])
+      choices=[
+          ("int8", "INT8 (smallest)"),
+          ("int8_float16", "INT8 + Float16 (recommended)"),
+          ("int8_bfloat16", "INT8 + BFloat16 (Blackwell-optimised)"),
+          ("float16", "Float16"),
+          ("bfloat16", "BFloat16"),
+          ("float32", "Float32 (largest, slowest)"),
+      ])
     f("whisper_vad", "Use VAD Filter",
       "Filter audio with VAD before transcription",
       "whisper", "bool")

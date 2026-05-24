@@ -1240,6 +1240,48 @@ class MemoryViewerWindow(QMainWindow):
         event.accept()
 
 
+_JARVIS_APP_USER_MODEL_ID = "Jarvis.Desktop.Assistant"
+_JARVIS_APP_ICON_PATH = Path(__file__).parent / "desktop_assets" / "icon_idle.ico"
+
+
+def _configure_pre_qapplication() -> None:
+    """Register process-wide identity that MUST be set before QApplication.
+
+    On Windows, calling SetCurrentProcessExplicitAppUserModelID makes the
+    taskbar / Start menu / jump lists treat this process as its own app
+    (instead of folding it under wscript.exe or python.exe). The
+    AA_ShareOpenGLContexts attribute lets multiple QWebEngineView windows
+    coexist without one rendering blank. Idempotent.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                _JARVIS_APP_USER_MODEL_ID
+            )
+        except Exception as e:
+            try:
+                debug_log(f"AppUserModelID set failed: {e}", "desktop")
+            except Exception:
+                pass
+    try:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+    except Exception:
+        pass
+
+
+def _configure_qapplication(app: "QApplication") -> None:
+    """Apply Jarvis identity to an existing QApplication. Idempotent."""
+    app.setApplicationName("Jarvis")
+    app.setOrganizationName("Jarvis")
+    app.setApplicationDisplayName("Jarvis")
+    if _JARVIS_APP_ICON_PATH.exists():
+        try:
+            app.setWindowIcon(QIcon(str(_JARVIS_APP_ICON_PATH)))
+        except Exception:
+            pass
+
+
 class JarvisSystemTray:
     """System tray application for Jarvis voice assistant."""
 
@@ -1247,7 +1289,9 @@ class JarvisSystemTray:
         # Use existing QApplication if available, otherwise create one
         self.app = QApplication.instance()
         if self.app is None:
+            _configure_pre_qapplication()
             self.app = QApplication(sys.argv)
+        _configure_qapplication(self.app)
         self.app.setQuitOnLastWindowClosed(False)
 
         # Initialize state
@@ -1267,10 +1311,21 @@ class JarvisSystemTray:
         # Create memory viewer window (hidden by default)
         self.memory_viewer = MemoryViewerWindow()
 
-        # Create face window (hidden by default)
-        # Note: Creating the face window also initializes the SpeakingState singleton
-        # in the main thread, which is important for cross-thread signal delivery
+        # Construct FaceWindow only to initialise the JarvisStateManager
+        # singleton on the main thread (other modules subscribe to it).
+        # It is NEVER shown — the new React-based WebFloatingHUD replaces it.
         self.face_window = FaceWindow()
+
+        # The legacy JarvisHUDWindow is gone. We now host the React UI in a
+        # frameless QWebEngineView. It loads the React Home page from the
+        # daemon's API server (port 38130).
+        self.hud_window = None
+        try:
+            from desktop_app.web_floating_hud import WebFloatingHUD
+            self.web_hud = WebFloatingHUD()
+        except Exception as _hud_err:
+            print(f"⚠ WebFloatingHUD unavailable: {_hud_err}", flush=True)
+            self.web_hud = None
 
         # Create dictation history window (hidden by default)
         from desktop_app.dictation_history import DictationHistoryWindow
@@ -1373,10 +1428,15 @@ class JarvisSystemTray:
         self.dictation_history_action.triggered.connect(self.show_dictation_history)
         self.menu.addAction(self.dictation_history_action)
 
-        # Face window action
-        self.face_action = QAction("👤 Show Face")
+        # Floating HUD action — opens the React Home card if hidden.
+        self.face_action = QAction("✨ Show Jarvis HUD")
         self.face_action.triggered.connect(self.show_face_window)
         self.menu.addAction(self.face_action)
+
+        # Control Console action — opens the React Control Panel in Edge --app.
+        self.console_action = QAction("🖥 Control Console")
+        self.console_action.triggered.connect(self.open_control_console)
+        self.menu.addAction(self.console_action)
 
         # Setup wizard action
         self.setup_wizard_action = QAction("🔧 Setup Wizard")
@@ -1653,10 +1713,27 @@ class JarvisSystemTray:
             debug_log(f"failed to connect dictation history: {e}", "desktop")
 
     def show_face_window(self) -> None:
-        """Show the face window and bring it to front."""
-        self.face_window.show()
-        self.face_window.raise_()
-        self.face_window.activateWindow()
+        """Show the floating web HUD (React Home page in a frameless container)."""
+        if self.web_hud is not None:
+            self.web_hud.show()
+            self.web_hud.raise_()
+            self.web_hud.activateWindow()
+
+    def open_control_console(self) -> None:
+        """Show the Control Console — a native PyQt6 window hosting the React /panel UI."""
+        if not hasattr(self, "console_window") or self.console_window is None:
+            try:
+                from desktop_app.web_console_window import JarvisConsoleWindow
+                self.console_window = JarvisConsoleWindow()
+            except Exception as e:
+                debug_log(f"failed to create console window: {e}", "desktop")
+                return
+        self.console_window.show()
+        self.console_window.raise_()
+        self.console_window.activateWindow()
+        # If it was minimized, restore.
+        if self.console_window.isMinimized():
+            self.console_window.showNormal()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""
@@ -1887,11 +1964,6 @@ class JarvisSystemTray:
             self.status_action.setText("🟢 Status: Listening")
             self.update_icon()
 
-            # Show log viewer when starting listening
-            self.log_viewer.show()
-            self.log_viewer.raise_()
-            self.log_viewer.activateWindow()
-
             self.tray_icon.showMessage(
                 "Jarvis Started",
                 "Voice assistant is now listening",
@@ -1899,9 +1971,18 @@ class JarvisSystemTray:
                 2000
             )
 
-            # Show face window when starting
-            self.face_window.show()
-            self.face_window.raise_()
+            # Show the floating web HUD (React card) — no more PyQt face/log viewer.
+            if self.web_hud is not None:
+                self.web_hud.show()
+                self.web_hud.raise_()
+
+            # Auto-open the Control Console alongside the floating HUD so the
+            # full app surface is available immediately, not buried behind the
+            # tray menu.
+            try:
+                self.open_control_console()
+            except Exception as _console_err:
+                debug_log(f"failed to auto-open console: {_console_err}", "desktop")
 
             debug_log("daemon started from desktop app", "desktop")
 
@@ -2000,6 +2081,8 @@ class JarvisSystemTray:
                     # Hide other windows while showing diary dialog
                     if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
                         self.face_window.hide()
+                    if hasattr(self, 'web_hud') and self.web_hud is not None and self.web_hud.isVisible():
+                        self.web_hud.hide()
                     if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
                         self.log_viewer.hide()
 
@@ -2079,6 +2162,8 @@ class JarvisSystemTray:
                     # Hide other windows
                     if hasattr(self, 'face_window') and self.face_window and self.face_window.isVisible():
                         self.face_window.hide()
+                    if hasattr(self, 'web_hud') and self.web_hud is not None and self.web_hud.isVisible():
+                        self.web_hud.hide()
                     if hasattr(self, 'log_viewer') and self.log_viewer.isVisible():
                         self.log_viewer.hide()
 
@@ -2272,6 +2357,9 @@ def main() -> int:
     import multiprocessing
     multiprocessing.freeze_support()
 
+    # Register Windows app identity + OpenGL sharing BEFORE any QApplication
+    _configure_pre_qapplication()
+
     # Single-instance check
     # This prevents multiple tray icons and log windows from spawning
     if not acquire_single_instance_lock():
@@ -2280,6 +2368,7 @@ def main() -> int:
         # Create a minimal QApplication for the dialog
         from PyQt6.QtWidgets import QApplication
         temp_app = QApplication(sys.argv)
+        _configure_qapplication(temp_app)
 
         if show_instance_conflict_dialog():
             # User wants to kill the existing instance
@@ -2354,6 +2443,7 @@ def main() -> int:
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
+        _configure_qapplication(app)
         app.setQuitOnLastWindowClosed(False)
 
         # Show crash report dialog if previous session crashed
@@ -2661,7 +2751,9 @@ def main() -> int:
         try:
             from PyQt6.QtWidgets import QApplication, QMessageBox
             if not QApplication.instance():
+                _configure_pre_qapplication()
                 app = QApplication(sys.argv)
+                _configure_qapplication(app)
 
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Icon.Critical)

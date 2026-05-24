@@ -6,11 +6,16 @@ lxml>=4.9.0
 html2text>=2020.1.16
 playwright>=1.40.0
 numpy<2.0.0
-faster-whisper==1.0.3
+# faster-whisper ≥ 1.1.0 required for large-v3-turbo support; listener
+# falls back to large-v3 / medium automatically on older installs.
+faster-whisper>=1.1.0
 setuptools<81
 sounddevice==0.4.7
 pytesseract==0.3.13
 Pillow==10.4.0
+# Silero VAD (default) is the primary backend; webrtcvad is the fallback
+# when silero-vad fails to import on the target machine.
+silero-vad>=5.1.2
 webrtcvad==2.0.10
 rapidfuzz==3.6.1
 pynput>=1.7.6

@@ -7,6 +7,7 @@ Coordinates audio capture, speech recognition, echo detection, and state managem
 from __future__ import annotations
 import functools
 import os
+import re
 import threading
 import time
 import queue
@@ -392,12 +393,49 @@ class VoiceListener(threading.Thread):
         self._samplerate = int(getattr(self.cfg, "sample_rate", 16000))
         self._vad: Optional = None
 
-        # Initialise VAD if available
-        if webrtcvad is not None and bool(getattr(self.cfg, "vad_enabled", True)):
-            try:
-                self._vad = webrtcvad.Vad(int(getattr(self.cfg, "vad_aggressiveness", 2)))
-            except Exception:
-                self._vad = None
+        # Initialise VAD. Default backend is Silero (neural, ~4× lower error
+        # rate than WebRTC at the same false-positive rate per Picovoice 2026
+        # benchmark). Falls back to WebRTC automatically on import failure so
+        # the listener still starts on machines without silero-vad installed.
+        if bool(getattr(self.cfg, "vad_enabled", True)):
+            backend = str(getattr(self.cfg, "vad_backend", "silero")).lower()
+            if backend == "silero":
+                try:
+                    from .vad_silero import SileroVAD
+                    _silero_onset = float(getattr(self.cfg, "vad_silero_threshold", 0.7))
+                    _silero_offset = float(getattr(self.cfg, "vad_silero_neg_threshold", _silero_onset))
+                    self._vad = SileroVAD(
+                        threshold=_silero_onset,
+                        neg_threshold=_silero_offset,
+                    )
+                    debug_log(
+                        f"VAD backend: silero (onset={_silero_onset}, offset={_silero_offset})",
+                        "voice",
+                    )
+                    print(
+                        f"  🎙️  VAD backend: silero (hysteresis {_silero_onset}/{_silero_offset})",
+                        flush=True,
+                    )
+                except Exception as e:
+                    debug_log(
+                        f"silero VAD unavailable ({e}), falling back to webrtc",
+                        "voice",
+                    )
+                    print(
+                        f"  ⚠️  silero-vad unavailable ({e}); falling back to webrtcvad",
+                        flush=True,
+                    )
+                    backend = "webrtc"
+            if backend == "webrtc":
+                if webrtcvad is not None:
+                    try:
+                        self._vad = webrtcvad.Vad(int(getattr(self.cfg, "vad_aggressiveness", 2)))
+                        debug_log(
+                            f"VAD backend: webrtc (aggressiveness={getattr(self.cfg, 'vad_aggressiveness', 2)})",
+                            "voice",
+                        )
+                    except Exception:
+                        self._vad = None
 
         # Initialise modular components
         self.echo_detector = EchoDetector(
@@ -418,11 +456,34 @@ class VoiceListener(threading.Thread):
         # Audio-level wake word detection timestamp
         self._wake_timestamp: Optional[float] = None
 
+        # STOP-button plumbing. _llm_cancel_event is set by reset_everything()
+        # to signal in-flight LLM calls to bail out; the reply engine and
+        # dispatch loop poll this on safe boundaries. _muted suppresses
+        # audio queue ingestion when the user presses MUTE.
+        self._llm_cancel_event = threading.Event()
+        self._muted = False
+
+        # Control bus server — accepts STOP/MUTE/PING from the desktop HUD.
+        # Lazy import to avoid pulling sockets into early init paths that
+        # may run before threading is fully set up.
+        self._control_bus = None
+
         # Rolling transcript buffer for context-aware processing
         # Used for both retention and context passed to intent judge
         self._buffer_duration = float(getattr(self.cfg, "transcript_buffer_duration_sec", 120.0))
         self._transcript_buffer = TranscriptBuffer(max_duration_sec=self._buffer_duration)
         debug_log(f"transcript buffer initialised ({self._buffer_duration}s)", "voice")
+
+        # Sticky language lock — avoids re-detecting EL/EN every utterance.
+        # Whisper auto-detecting per-utterance in a bilingual setup can land
+        # in a hybrid phonetic decoding mode that produces failures like
+        # "καιρός" → "κύριος". The lock votes 2-of-3 over a sliding window.
+        from .language_lock import LanguageLock
+        self._language_lock = LanguageLock(
+            history_size=3,
+            min_agreement=2,
+            allowed=tuple(getattr(self.cfg, "whisper_allowed_languages", None) or ("el", "en")),
+        )
 
         # Intent judge (full context, larger model) - always used when available
         self._intent_judge = create_intent_judge(self.cfg)
@@ -434,9 +495,124 @@ class VoiceListener(threading.Thread):
         # Thinking tune player
         self._tune_player: Optional = None
 
+        # Control bus: accepts cross-process commands (STOP / MUTE / PING)
+        # from the desktop HUD. Daemon-thread server, never blocks audio loop.
+        try:
+            from ..control_bus import ControlBusServer
+            self._control_bus = ControlBusServer(self._handle_control_command)
+            self._control_bus.start()
+        except Exception as e:
+            debug_log(f"control bus startup failed (non-fatal): {e}", "voice")
+            self._control_bus = None
+
+        # HTTP/WebSocket API server for the React control console.
+        # Same process, daemon thread, port 38130. Also install the stdout
+        # mirror so every print() in the daemon ends up in the Live Logs feed.
+        try:
+            from .. import api_server
+            api_server.start_in_background()
+            api_server.install_stdout_mirror()
+            api_server.publish_log("info", "Jarvis daemon initialised")
+        except Exception as e:
+            debug_log(f"API server startup failed (non-fatal): {e}", "voice")
+
+        # Optional Porcupine wake detector — runs alongside Whisper-based wake
+        # detection; either path can set _wake_timestamp. Only spins up when
+        # `porcupine_enabled: true` is set in config and the key is present.
+        self._porcupine = None
+        try:
+            from .wake_porcupine import create_porcupine_from_config
+
+            def _on_porcupine_wake(ts: float) -> None:
+                self._wake_timestamp = ts
+                debug_log(f"Porcupine set _wake_timestamp = {ts:.3f}", "voice")
+
+            self._porcupine = create_porcupine_from_config(self.cfg, _on_porcupine_wake)
+            if self._porcupine is not None:
+                debug_log("Porcupine wake detector active", "voice")
+        except Exception as e:
+            debug_log(f"Porcupine integration error (non-fatal): {e}", "voice")
+
     def stop(self) -> None:
         """Stop the voice listener."""
         self._should_stop = True
+        if self._porcupine is not None:
+            try:
+                self._porcupine.stop()
+            except Exception as e:
+                debug_log(f"Porcupine stop error: {e}", "voice")
+        if self._control_bus is not None:
+            try:
+                self._control_bus.stop()
+            except Exception as e:
+                debug_log(f"control bus stop error: {e}", "voice")
+
+    def _handle_control_command(self, command: str) -> Optional[str]:
+        """Dispatch a single control-bus command. Runs on a bus worker thread."""
+        cmd = command.strip().upper()
+        if cmd == "PING":
+            return "PONG"
+        if cmd == "STOP":
+            self.reset_everything()
+            return "OK STOP"
+        if cmd == "MUTE":
+            self._muted = not self._muted
+            print(f"🔇 Mic {'muted' if self._muted else 'unmuted'} via control bus", flush=True)
+            return f"OK MUTED={self._muted}"
+        if cmd == "UNMUTE":
+            self._muted = False
+            print("🔊 Mic unmuted via control bus", flush=True)
+            return "OK UNMUTED"
+        debug_log(f"control bus: unknown command '{cmd}'", "voice")
+        return f"ERROR unknown command '{cmd}'"
+
+    def reset_everything(self) -> None:
+        """STOP-button entry point.
+
+        Interrupts the currently-playing TTS, asks any in-flight LLM call to
+        unwind on its next polling boundary, clears dialogue memory and wake
+        state, drains audio buffers, and stops the thinking tune. Safe to
+        call repeatedly and from any thread.
+        """
+        print("⏹  STOP — TTS interrupted, LLM cancelled, memory cleared", flush=True)
+        # TTS interrupt
+        try:
+            if self.tts is not None:
+                self.tts.interrupt()
+        except Exception as e:
+            debug_log(f"reset_everything: tts interrupt failed: {e}", "voice")
+        # Signal LLM cancellation. The reply engine + control loops poll
+        # this between turns and on long operations.
+        try:
+            self._llm_cancel_event.set()
+        except Exception:
+            pass
+        # Clear dialogue context (best-effort — the memory object may or may
+        # not expose .clear(); we try common variants).
+        if self.dialogue_memory is not None:
+            for method_name in ("clear", "reset", "wipe"):
+                fn = getattr(self.dialogue_memory, method_name, None)
+                if callable(fn):
+                    try:
+                        fn()
+                        break
+                    except Exception:
+                        continue
+        # Wake + hot window
+        self._wake_timestamp = None
+        try:
+            self.state_manager.cancel_hot_window_activation()
+        except Exception:
+            pass
+        # Audio buffers + thinking tune
+        try:
+            self._clear_audio_buffers()
+        except Exception:
+            pass
+        try:
+            self._stop_thinking_tune()
+        except Exception:
+            pass
         self.state_manager.stop()
         self._stop_thinking_tune()
 
@@ -731,6 +907,60 @@ class VoiceListener(threading.Thread):
             or could_be_hot_window
             or is_speaking_now
         )
+
+        # FAST-PATH SHORT-CIRCUIT: when the user explicitly addresses the
+        # assistant (wake word detected) AND the transcript matches a
+        # registered pattern, skip the intent judge entirely and dispatch
+        # the query directly. The intent judge call itself takes ~1-2s
+        # with qwen3.5:9b — bypassing it makes action commands
+        # ("next song", "παύση") feel genuinely instant.
+        #
+        # Excluded for hot-window follow-ups: per listening.spec.md the
+        # judge is the canonical extractor for hot-window speech — it
+        # strips fillers ("uh okay what's the weather…") and resolves
+        # references ("what about this/that…") that the regex patterns
+        # see only as literal tokens.
+        if (
+            has_engagement_signal
+            and not could_be_hot_window
+            and not is_speaking_now
+            and not skip_intent_judge_during_tts
+        ):
+            try:
+                from .fast_paths import match as _fp_match_early
+
+                # Strip leading wake-word so the pattern can match the action
+                # portion of the utterance (e.g. "hey jarvis next song" →
+                # "next song"). This is best-effort; the patterns themselves
+                # are tolerant of wake-word prefixes too.
+                _stripped = text_lower
+                for _wake_term in ("jarvis", "τζάρβις", "τζάρβης", "hey", "τζέρβη"):
+                    if _wake_term in _stripped:
+                        _idx = _stripped.find(_wake_term)
+                        _after = _stripped[_idx + len(_wake_term):].lstrip(" ,.;:!?")
+                        if _after:
+                            _stripped = _after
+                            break
+
+                _early_match = _fp_match_early(_stripped)
+                if _early_match is not None:
+                    print(
+                        f"  ⚡ Fast-path SHORT-CIRCUIT (skipping intent judge): "
+                        f"{_early_match.mcp_server}.{_early_match.tool_name}",
+                        flush=True,
+                    )
+                    debug_log(
+                        f"fast-path short-circuit: bypassing intent judge for '{_stripped}'",
+                        "voice",
+                    )
+                    # Clear wake state so we don't double-fire
+                    self._wake_timestamp = None
+                    # Dispatch through the normal path which has the parallel
+                    # action+voice plumbing already wired up.
+                    self._dispatch_query(_stripped)
+                    return
+            except Exception as _e:
+                debug_log(f"fast-path short-circuit failed (non-fatal): {_e}", "voice")
 
         if not has_engagement_signal:
             debug_log(
@@ -1180,6 +1410,39 @@ class VoiceListener(threading.Thread):
         except Exception as e:
             debug_log(f"failed to set face state to THINKING: {e}", "voice")
 
+        # EASTER EGG: "daddy's home" / "μπαμπάς γύρισε" — start background
+        # music + cinematic greeting in parallel. Sync is guaranteed: music
+        # starts immediately, speech starts AT LEAST 3 seconds later, and
+        # only after the LLM has produced a greeting (or a fallback fires).
+        if self._try_easter_egg_daddys_home(query):
+            return
+
+        # FAST-PATH: try direct MCP routing for common phrases.
+        # Skips intent judge + chat LLM entirely (~5x latency reduction).
+        # See src/jarvis/listening/fast_paths.py for the pattern registry.
+        fast_reply = self._try_fast_path(query)
+        if fast_reply is not None:
+            self._stop_thinking_tune()
+            if fast_reply and self.tts and self.tts.enabled:
+                def _fp_tts_complete():
+                    import time as _time
+                    debug_log(f"fast-path TTS completion at {_time.time():.3f}", "voice")
+                    self.activate_hot_window()
+
+                def _fp_duration_known(duration: float):
+                    debug_log(f"fast-path TTS exact duration: {duration:.2f}s", "voice")
+                    if self.echo_detector:
+                        self.echo_detector._tts_exact_duration = duration
+
+                self.track_tts_start(fast_reply)
+                debug_log(f"starting TTS for fast-path reply ({len(fast_reply)} chars)", "voice")
+                self.tts.speak(
+                    fast_reply,
+                    completion_callback=_fp_tts_complete,
+                    duration_callback=_fp_duration_known,
+                )
+            return
+
         # Import reply engine
         from ..reply.engine import run_reply_engine
 
@@ -1227,6 +1490,361 @@ class VoiceListener(threading.Thread):
             # Stop thinking tune if no TTS response
             self._stop_thinking_tune()
 
+    def _try_easter_egg_daddys_home(self, query: str) -> bool:
+        """Iron Man "JARVIS, daddy's home" trigger.
+
+        Plays The Clash music underneath a cinematic greeting. Synchronisation
+        guarantee: the speech starts no earlier than 3 seconds after the
+        music does AND no earlier than the LLM has finished generating the
+        greeting. If the LLM takes longer than 3 s, we still don't speak
+        until the text is ready (no half-baked output). If it's faster, we
+        wait the remaining time so the music has a chance to set the mood.
+
+        Returns True if the easter egg fired (caller should not run normal
+        dispatch); False to fall through.
+        """
+        import re as _re
+        # Trigger phrases (English + Greek). Matches both "daddy" and "dad",
+        # with or without apostrophe-s, "is", "has come", etc.
+        triggers = [
+            r"\b(?:daddy|dad|papa)(?:'?s| is| has)?\s+(?:home|back)\b",
+            r"\b(?:papa|daddy|dad)\s+home\b",
+            r"\bμπαμπ[άα]ς\s+(?:γύρισε|γυρισε|είναι\s+σπίτι|ειναι\s+σπιτι|ηρθε|ήρθε)\b",
+            r"\b(?:ο\s+)?μπαμπ[άα]ς\s+(?:ήρθε|ηρθε|γύρισε|γυρισε)\b",
+        ]
+        if not any(_re.search(p, query, _re.IGNORECASE | _re.UNICODE) for p in triggers):
+            return False
+
+        print("  🎬 Easter egg: daddy's home — cueing music + cinematic greeting", flush=True)
+        debug_log("easter egg: daddy's home fired", "voice")
+
+        # Resolve the music asset path (relative to repo root)
+        from pathlib import Path as _Path
+        asset_path = _Path(__file__).resolve().parents[3] / "assets" / "daddys_home.wav"
+        if not asset_path.exists():
+            print(f"  ⚠ Easter egg asset missing: {asset_path}", flush=True)
+            return False
+
+        # Kick off music IMMEDIATELY (sounddevice, parallel to TTS later).
+        # Music sits at ~20% so the cloned voice cuts through cleanly.
+        self._stop_thinking_tune()  # silence the regular thinking pad
+        try:
+            from ..output.audio_overlay import get_overlay
+            overlay = get_overlay()
+            overlay.play(str(asset_path), volume=0.20, fade_in_sec=0.4)
+        except Exception as e:
+            debug_log(f"easter egg: overlay start failed: {e}", "voice")
+            return False
+
+        # Start LLM greeting generation in a background thread; we'll join
+        # before speaking, with a hard cap so a stuck LLM can't lock things up.
+        import threading as _th
+        import time as _time
+        greeting_text: dict = {"value": None}
+        greeting_done = _th.Event()
+
+        def _gen_greeting() -> None:
+            try:
+                greeting_text["value"] = self._compose_daddys_home_greeting()
+            except Exception as _e:
+                debug_log(f"easter egg: greeting gen error: {_e}", "voice")
+                greeting_text["value"] = self._fallback_daddys_home_greeting()
+            finally:
+                greeting_done.set()
+
+        _th.Thread(target=_gen_greeting, daemon=True, name="DaddysHomeGreeting").start()
+
+        # Sync: wait until BOTH conditions hold
+        #   (a) at least 3 seconds elapsed since music start
+        #   (b) greeting text is ready (or 10s hard deadline)
+        music_start = _time.time()
+        MIN_DELAY = 3.0
+        HARD_DEADLINE = 10.0
+        greeting_done.wait(timeout=HARD_DEADLINE)
+        elapsed = _time.time() - music_start
+        if elapsed < MIN_DELAY:
+            _time.sleep(MIN_DELAY - elapsed)
+
+        text = greeting_text["value"] or self._fallback_daddys_home_greeting()
+        debug_log(f"easter egg: speaking ({len(text)} chars) over music", "voice")
+
+        # Speak the greeting (music keeps playing underneath via sounddevice).
+        if self.tts and self.tts.enabled:
+            def _on_done() -> None:
+                # Let music tail off for a few seconds after speech ends,
+                # then stop overlay.
+                try:
+                    _th.Timer(4.0, lambda: get_overlay().stop()).start()
+                except Exception:
+                    pass
+                self.activate_hot_window()
+            self.track_tts_start(text)
+            self.tts.speak(text, completion_callback=_on_done)
+        else:
+            # No TTS — stop music after a short while anyway
+            _th.Timer(8.0, lambda: get_overlay().stop()).start()
+        return True
+
+    def _compose_daddys_home_greeting(self) -> str:
+        """Build a cinematic Iron Man-style intro greeting via direct LLM call.
+
+        Pulls today's weather (OpenWeather) and today's calendar events
+        (Google Calendar MCP) and feeds them as context. Asks qwen3.5:9b
+        for a short, dry-witty JARVIS reply. If the calendar comes back
+        empty, the prompt tells the model to riff on having a free day —
+        no awkward "there are zero events" lines.
+        """
+        import datetime as _dt
+        import requests as _requests
+
+        now = _dt.datetime.now()
+        day_str = now.strftime("%A, %B %d at %I:%M %p").lstrip("0")
+
+        # ----- weather ----------------------------------------------------
+        weather_blurb = ""
+        try:
+            import os as _os
+            from pathlib import Path as _Path
+            from dotenv import dotenv_values
+            env = dotenv_values(_Path("C:/Users/aggel/Jarvis/mcps/.env"))
+            ow_key = env.get("OPENWEATHER_API_KEY") or _os.environ.get("OPENWEATHER_API_KEY")
+            if ow_key:
+                r = _requests.get(
+                    "https://api.openweathermap.org/data/2.5/weather",
+                    params={"q": "Ioannina,GR", "appid": ow_key, "units": "metric", "lang": "en"},
+                    timeout=4,
+                )
+                if r.ok:
+                    d = r.json()
+                    weather_blurb = (
+                        f"{d['main']['temp']:.0f}°C with "
+                        f"{d['weather'][0]['description']}"
+                    )
+        except Exception:
+            pass
+
+        # ----- calendar (today's events via Calendar MCP) ------------------
+        calendar_summary = ""
+        calendar_empty = False
+        try:
+            mcps_cfg = getattr(self.cfg, "mcps", {}) or {}
+            cal_cfg = mcps_cfg.get("calendar")
+            if cal_cfg:
+                from ..tools.external.mcp_runtime import get_runtime
+                from .fast_paths import extract_mcp_text
+                runtime = get_runtime()
+                result = runtime.invoke(
+                    server_name="calendar",
+                    server_cfg=cal_cfg,
+                    tool_name="list_events_today",
+                    arguments={},
+                    timeout=6.0,
+                )
+                cal_text = (extract_mcp_text(result) or "").strip()
+                lower_cal = cal_text.lower()
+                if (
+                    not cal_text
+                    or "no more events" in lower_cal
+                    or "no events" in lower_cal
+                    or "calendar lookup failed" in lower_cal
+                ):
+                    calendar_empty = True
+                else:
+                    # Keep it short — pass the first 350 chars as context
+                    calendar_summary = cal_text[:350]
+        except Exception as e:
+            debug_log(f"daddy's home calendar fetch failed: {e}", "voice")
+            calendar_empty = True
+
+        # ----- Build the greeting -----------------------------------------
+        # The OPENER is always a classic JARVIS line (verbatim from the
+        # Iron Man films). The BODY is LLM-generated to riff on the date,
+        # weather, and calendar — picked up fresh each invocation.
+        import random as _random
+        openers = (
+            "Welcome back, Sir.",
+            "Welcome home, Sir.",
+            "At your service, Sir.",
+            "It is a pleasure to see you again, Sir.",
+            "Good to have you back, Sir.",
+        )
+        opener = _random.choice(openers)
+
+        if calendar_empty:
+            calendar_block = (
+                "Calendar: The user has NO events scheduled today. Allude to "
+                "this lightheartedly — phrases like 'your schedule is "
+                "delightfully empty', 'plenty of free time on your hands', or "
+                "'the day is yours to squander as you please'. Do NOT say 'no "
+                "events' literally."
+            )
+        else:
+            calendar_block = (
+                "Today's calendar (mention naturally, paraphrase — do NOT read "
+                "verbatim):\n" + calendar_summary
+            )
+
+        prompt = (
+            "You are JARVIS, Tony Stark's AI butler from Iron Man. The user "
+            "(addressed as 'Sir') just walked in and triggered the 'daddy's "
+            "home' line. Write the BODY of a greeting (2 sentences, max 45 "
+            "words). Dry-witty, deadpan, British-butler register. Mention "
+            "the time/day naturally, the weather only if relevant, and the "
+            "calendar info per instructions below. DO NOT start with a "
+            "greeting word — the opener is already handled. DO NOT use stage "
+            "directions, quotes, or 'Sir' again at the start. Begin with the "
+            "date or a wry observation.\n\n"
+            f"Current local time: {day_str}.\n"
+            f"Weather in Ioannina: {weather_blurb or 'unknown'}.\n"
+            f"{calendar_block}\n\n"
+            "Body (continues after 'Welcome back, Sir.'):"
+        )
+
+        try:
+            ollama_url = getattr(self.cfg, "ollama_base_url", "http://127.0.0.1:11434")
+            model = getattr(self.cfg, "ollama_chat_model", "qwen3.5:9b")
+            r = _requests.post(
+                f"{ollama_url}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.8, "num_predict": 110},
+                },
+                timeout=12,
+            )
+            r.raise_for_status()
+            body = (r.json().get("response") or "").strip()
+            # Clean any wrapping quotes/asterisks
+            body = body.strip("\"'*` \n")
+            # Strip leading "Sir," / "Welcome back" if the model ignored instructions
+            body = _re.sub(r"^(welcome\s+(back|home)[,.]?\s*sir[,.]?\s*|sir[,.]?\s+)", "", body, flags=_re.IGNORECASE)
+            if body:
+                return f"{opener} {body}"
+        except Exception as e:
+            debug_log(f"daddy's home LLM call failed: {e}", "voice")
+        return self._fallback_daddys_home_greeting(opener_override=opener)
+
+    def _fallback_daddys_home_greeting(self, opener_override: Optional[str] = None) -> str:
+        """Deterministic fallback if LLM is unreachable. Always works.
+
+        Opener is always a verbatim JARVIS line from the Iron Man films.
+        Body mentions the current day/time and a witty empty-schedule line.
+        """
+        import datetime as _dt
+        import random as _random
+        now = _dt.datetime.now()
+        time_str = now.strftime("%I:%M %p").lstrip("0")
+        day = now.strftime("%A, %B %d").lstrip("0")
+        openers = (
+            "Welcome back, Sir.",
+            "Welcome home, Sir.",
+            "At your service, Sir.",
+            "It is a pleasure to see you again, Sir.",
+            "Good to have you back, Sir.",
+        )
+        opener = opener_override or _random.choice(openers)
+        bodies = (
+            f"It is {time_str} on {day}, and your schedule is delightfully empty. Do try not to break anything important.",
+            f"The hour is {time_str}, {day}. Nothing on the agenda today — the world, briefly, is yours.",
+            f"Currently {time_str} on {day}. You have plenty of free time on your hands, which is either a blessing or a warning.",
+            f"{day}, {time_str}. The lab missed you, Sir, though the calendar remains, as ever, your problem to fill.",
+        )
+        return f"{opener} {_random.choice(bodies)}"
+
+    def _try_fast_path(self, query: str) -> Optional[str]:
+        """Try fast-path matching: route common phrases directly to MCPs.
+
+        Two modes:
+
+        1. ACTION (response_override set) — dispatch the MCP call in a
+           background thread and IMMEDIATELY return the override text
+           (typically a pre-cached short ack like "Skipped."). The user
+           hears the ack within ~50ms while the action happens in parallel.
+
+        2. QUERY (no override) — call MCP synchronously, return its dynamic
+           response text (e.g., "Currently playing X by Y…"). Used for
+           commands that need to report data.
+
+        Returns the spoken response text on match, or None to fall through
+        to the full reply engine.
+        """
+        try:
+            from .fast_paths import match as _fp_match, extract_mcp_text
+        except Exception as e:
+            debug_log(f"fast-path import failed: {e}", "voice")
+            return None
+
+        fp = _fp_match(query)
+        if fp is None:
+            return None
+
+        mcps_cfg = getattr(self.cfg, "mcps", {}) or {}
+        server_cfg = mcps_cfg.get(fp.mcp_server)
+        if not server_cfg:
+            debug_log(
+                f"fast-path: MCP server '{fp.mcp_server}' not configured — falling back",
+                "voice",
+            )
+            return None
+
+        mode = "ACTION" if fp.action_only else "QUERY"
+        print(
+            f"  ⚡ Fast-path [{mode}]: {fp.mcp_server}.{fp.tool_name}({fp.arguments})",
+            flush=True,
+        )
+        debug_log(
+            f"fast-path {mode} invoking {fp.mcp_server}.{fp.tool_name}({fp.arguments})",
+            "voice",
+        )
+
+        # ACTION mode: fire-and-forget the MCP call; voice ack is immediate.
+        if fp.action_only and fp.response_override:
+            import threading as _threading
+
+            def _invoke_async() -> None:
+                try:
+                    from ..tools.external.mcp_runtime import get_runtime
+                    runtime = get_runtime()
+                    result = runtime.invoke(
+                        server_name=fp.mcp_server,
+                        server_cfg=server_cfg,
+                        tool_name=fp.tool_name,
+                        arguments=fp.arguments,
+                        timeout=15.0,
+                    )
+                    debug_log(
+                        f"fast-path async result: {extract_mcp_text(result)[:120]}",
+                        "voice",
+                    )
+                except Exception as e:
+                    debug_log(f"fast-path async invocation failed: {e}", "voice")
+                    print(f"  ❌ Fast-path async error: {e}", flush=True)
+
+            _threading.Thread(
+                target=_invoke_async, daemon=True, name=f"FastPath-{fp.mcp_server}"
+            ).start()
+            return fp.response_override
+
+        # QUERY mode: synchronous, return MCP's dynamic response.
+        try:
+            from ..tools.external.mcp_runtime import get_runtime
+            runtime = get_runtime()
+            result = runtime.invoke(
+                server_name=fp.mcp_server,
+                server_cfg=server_cfg,
+                tool_name=fp.tool_name,
+                arguments=fp.arguments,
+                timeout=15.0,
+            )
+            text = extract_mcp_text(result)
+            debug_log(f"fast-path response: {text[:120]}", "voice")
+            return text
+        except Exception as e:
+            debug_log(f"fast-path invocation failed: {e}", "voice")
+            print(f"  ❌ Fast-path error, falling back to LLM: {e}", flush=True)
+            return None
+
     def _calculate_audio_energy(self, frames: list) -> float:
         """Calculate RMS energy from audio frames."""
         if not frames or np is None:
@@ -1273,15 +1891,210 @@ class VoiceListener(threading.Thread):
         if self._vad is None:
             return rms >= float(getattr(self.cfg, "voice_min_energy", 0.0045))
 
-        # Use WebRTC VAD
+        # Use VAD backend (Silero or WebRTC). When voice_debug is on, log
+        # per-frame Silero probability + decision — invaluable for diagnosing
+        # "VAD is rejecting my speech" issues without guessing.
         try:
             pcm16 = np.clip(frame.flatten() * 32768.0, -32768, 32767).astype(np.int16).tobytes()
-            return bool(self._vad.is_speech(pcm16, getattr(self, "_stream_samplerate", self._samplerate)))
+            sample_rate = getattr(self, "_stream_samplerate", self._samplerate)
+            is_speech = bool(self._vad.is_speech(pcm16, sample_rate))
+            if getattr(self.cfg, "voice_debug", False):
+                prob = getattr(self._vad, "last_probability", None)
+                if prob is not None:
+                    debug_log(
+                        f"VAD frame: rms={rms:.4f} prob={prob:.3f} → "
+                        f"{'speech' if is_speech else 'silence'}",
+                        "vad",
+                    )
+            return is_speech
         except Exception:
             return False
 
+    # Whole-utterance whisper hallucinations: matched ONLY when the entire
+    # transcript (after punctuation strip) equals one of these. We use
+    # exact-match here because words like "you" / "thanks" / "bye"
+    # appear in normal speech and we must not blacklist them globally.
+    _HALLUCINATION_EXACT = frozenset({
+        "thank you",
+        "thanks",
+        "you",
+        "bye",
+        "bye bye",
+        "goodbye",
+        "subscribe",
+        # Greek lone-word silence outputs
+        "ευχαριστώ",
+        "ευχαριστω",
+        "ευχαριστώ πολύ",
+        "ευχαριστω πολυ",
+        "γεια σας",
+        "καλή συνέχεια",
+        "καλη συνεχεια",
+        # Calm-Whisper (Interspeech 2025) identified the "crazy heads"
+        # (decoder attention heads #1, #6, #11) that account for >75% of
+        # Whisper's non-speech hallucinations. The most common outputs are
+        # English filler / outro words. Drop them only when they appear as
+        # the ENTIRE utterance (length ≤ 3 words after punctuation strip);
+        # an embedded "okay" inside a real sentence is still legitimate.
+        "so",
+        "okay",
+        "ok",
+        "good",
+        "take care",
+        "alright",
+        "all right",
+        "um",
+        "uh",
+        "hmm",
+        "mm",
+        "mhm",
+        # Pure punctuation / whitespace
+        ".", "..", "...", "?", "!",
+    })
+
+    # Substring blacklist: any utterance containing one of these is rejected.
+    # These are distinctive enough that legitimate speech never contains them.
+    _HALLUCINATION_SUBSTRINGS = (
+        "thank you for watching",
+        "thanks for watching",
+        "like and subscribe",
+        "please subscribe",
+        "don't forget to subscribe",
+        "subtitles by the amara.org community",
+        "subtitles by amara.org",
+        "subtitles by",
+        "transcription by",
+        "transcribed by",
+        "captions by",
+        "amara.org community",
+        "amara.org",
+        "see you in the next",
+        "see you next time",
+        # Sound-event markers
+        "♪",
+        "[music]",
+        "[applause]",
+        "[laughter]",
+        "[silence]",
+        # Our own initial_prompt echoes
+        "the user mixes english and greek",
+        # Greek YouTube-subtitle residues
+        # AUTHORWAVE is a Greek subtitling collective whose stamp Whisper
+        # learned during training; it leaks onto silence regardless of input.
+        "υπότιτλοι authorwave",
+        "authorwave",
+        "ευχαριστώ που με παρακολουθήσατε",
+        "ευχαριστω που με παρακολουθησατε",
+        "εγγραφείτε στο κανάλι",
+        "εγγραφειτε στο καναλι",
+        "μην ξεχάσετε να κάνετε εγγραφή",
+    )
+
+    def _is_youtube_hallucination(self, text: str) -> bool:
+        """Reject Whisper's known silence/echo hallucinations.
+
+        Triggers when:
+          - The utterance contains ≤1 alphanumeric character (just punctuation).
+          - The whole utterance exactly matches a known noise word/phrase.
+          - The utterance contains any distinctive YouTube-subtitle substring.
+        """
+        if not text:
+            return False
+        stripped = text.strip()
+        # Pure punctuation / whitespace
+        bare = re.sub(r"[^\wͰ-Ͽἀ-῿]", "", stripped, flags=re.UNICODE)
+        if len(bare) <= 1:
+            return True
+        norm = stripped.lower().rstrip("!.?,;: \t\n")
+        if norm in self._HALLUCINATION_EXACT:
+            return True
+        for phrase in self._HALLUCINATION_SUBSTRINGS:
+            if phrase in norm:
+                return True
+        return False
+
+    def _dump_utterance_wav(self, audio) -> None:
+        """Save a VAD-gated audio segment to a WAV file for offline inspection.
+
+        Output location: %LOCALAPPDATA%/Jarvis/debug_audio/utterance_<timestamp>.wav
+        on Windows; falls back to ~/.cache/jarvis/debug_audio/ elsewhere.
+
+        Only called when `voice_debug_save_audio` is True. Designed for
+        diagnosing mistranscription cases — playing the WAV in any audio
+        player lets us (and the user) confirm whether the input was clear
+        enough for Whisper to have had a chance, or whether the audio was
+        already lost / noisy by the time it reached the model.
+        """
+        import os
+        import struct
+        import wave
+        from datetime import datetime
+        from pathlib import Path
+
+        if sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))) / "Jarvis" / "debug_audio"
+        else:
+            base = Path(os.path.expanduser("~/.cache/jarvis/debug_audio"))
+        base.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        path = base / f"utterance_{stamp}.wav"
+
+        # Convert float32 [-1, 1] → int16 PCM mono.
+        pcm = np.clip(audio.flatten() * 32767.0, -32768, 32767).astype(np.int16).tobytes()
+        with wave.open(str(path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 16-bit
+            wf.setframerate(int(self._samplerate))
+            wf.writeframes(pcm)
+        debug_log(f"saved debug audio: {path}", "voice")
+
+    def _pick_fallback_language(self, audio, allowed, decode_kwargs):
+        """Pick the best allowed language when Whisper detected something outside the whitelist.
+
+        Strategy:
+          1. If the sticky language lock has consensus on an allowed language,
+             use that — recent history is a strong signal that survives a
+             single mis-detection on quiet audio.
+          2. Otherwise, try each allowed language and keep whichever Whisper
+             reports the higher `language_probability` for. One extra
+             transcribe call (~150 ms on GPU) but only fires on the rare
+             out-of-whitelist detection.
+          3. As a last resort, fall back to `allowed[0]` (the legacy behaviour).
+        """
+        locked = self._language_lock.suggest()
+        if locked and locked in allowed:
+            return locked
+        best_lang = None
+        best_prob = -1.0
+        for candidate in allowed:
+            try:
+                with self.transcribe_lock:
+                    _segs, info = self.model.transcribe(
+                        audio, language=candidate, **decode_kwargs,
+                    )
+                    # Drain the generator so faster-whisper actually decodes;
+                    # we only need the language_probability from `info`.
+                    list(_segs)
+                prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+            except Exception as e:
+                debug_log(
+                    f"fallback probe for language='{candidate}' failed: {e}",
+                    "voice",
+                )
+                continue
+            if prob > best_prob:
+                best_prob = prob
+                best_lang = candidate
+        if best_lang is None:
+            return allowed[0]
+        debug_log(
+            f"fallback language probe: picked '{best_lang}' (prob={best_prob:.2f})",
+            "voice",
+        )
+        return best_lang
+
     def _filter_noisy_segments(self, segments):
-        """Filter out low-confidence Whisper segments."""
+        """Filter out low-confidence Whisper segments + known hallucinations."""
         min_confidence = getattr(self.cfg, "whisper_min_confidence", 0.3)
         marginal_threshold = min_confidence / 3  # Show user-visible log for marginal confidence
         # Threshold above which a segment is considered non-speech (hallucination during silence).
@@ -1291,6 +2104,15 @@ class VoiceListener(threading.Thread):
         filtered = []
 
         for seg in segments:
+            # Hard filter #0: known YouTube-trained hallucinations
+            # (Whisper outputs these on silence/echo regardless of confidence).
+            if self._is_youtube_hallucination(seg.text):
+                debug_log(
+                    f"segment filtered (YouTube hallucination): '{seg.text[:60]}'",
+                    "voice",
+                )
+                continue
+
             # Hard filter: high no_speech_prob means no real speech regardless of logprob.
             if hasattr(seg, 'no_speech_prob') and is_whisper_hallucination(seg.no_speech_prob, no_speech_threshold):
                 debug_log(
@@ -1426,6 +2248,26 @@ class VoiceListener(threading.Thread):
                 return
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
+            # Apply soft AGC before queueing so VAD + Whisper see a consistent
+            # signal level regardless of mic output (dynamic mics like the
+            # PD200X have low inherent output and would otherwise feed weak
+            # signals into downstream gates). ~10µs/frame — negligible.
+            if (
+                np is not None
+                and bool(getattr(self.cfg, "mic_agc_enabled", True))
+                and chunk is not None
+                and getattr(chunk, "size", 0) > 0
+            ):
+                try:
+                    from .audio_preproc import normalize
+                    chunk = normalize(
+                        chunk,
+                        target_rms=float(getattr(self.cfg, "mic_agc_target_rms", 0.1)),
+                        max_gain=float(getattr(self.cfg, "mic_agc_max_gain", 10.0)),
+                    )
+                except Exception as e:
+                    # AGC must never break audio capture — log and pass raw.
+                    debug_log(f"AGC failed (passing raw chunk): {e}", "voice")
             try:
                 self._audio_q.put_nowait(chunk)
             except Exception:
@@ -1918,14 +2760,45 @@ class VoiceListener(threading.Thread):
                     cpu_mode = self._whisper_device == "cpu"
                     rng = np.random.default_rng(0)
                     warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
+                    _crt = getattr(self.cfg, "whisper_compression_ratio_threshold", 1.35)
+                    # Mirror the real-path policy: only include initial_prompt
+                    # when the user has explicitly written one. Forcing a
+                    # fallback ("Jarvis.") for the warmup would silently
+                    # diverge from the prompt-free real-path behaviour.
+                    _warmup_prompt = getattr(self.cfg, "whisper_initial_prompt", None)
+                    if isinstance(_warmup_prompt, str):
+                        _warmup_prompt = _warmup_prompt.strip() or None
+                    _warmup_beam = int(getattr(self.cfg, "whisper_beam_size", 1))
+                    _warmup_temp_chain = list(
+                        getattr(self.cfg, "whisper_temperature_fallback", [0.0, 0.2, 0.4])
+                    ) or [0.0]
+                    _warmup_temp = (
+                        tuple(_warmup_temp_chain)
+                        if len(_warmup_temp_chain) > 1
+                        else _warmup_temp_chain[0]
+                    )
+                    _warmup_hst = getattr(
+                        self.cfg, "whisper_hallucination_silence_threshold", 2.0,
+                    )
+                    _warmup_kwargs = dict(
+                        language=None,
+                        vad_filter=False,
+                        condition_on_previous_text=False,
+                        without_timestamps=cpu_mode,
+                        beam_size=_warmup_beam,
+                        temperature=_warmup_temp,
+                        no_speech_threshold=float(
+                            getattr(self.cfg, "whisper_no_speech_threshold", 0.6)
+                        ),
+                    )
+                    if _warmup_prompt:
+                        _warmup_kwargs["initial_prompt"] = _warmup_prompt
+                    if _crt is not None:
+                        _warmup_kwargs["compression_ratio_threshold"] = float(_crt)
+                    if _warmup_hst is not None:
+                        _warmup_kwargs["hallucination_silence_threshold"] = float(_warmup_hst)
                     try:
-                        segments_iter, _ = self.model.transcribe(
-                            warmup_audio,
-                            language=None,
-                            vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
-                        )
+                        segments_iter, _ = self.model.transcribe(warmup_audio, **_warmup_kwargs)
                     except TypeError:
                         segments_iter, _ = self.model.transcribe(warmup_audio, language=None)
                     for _ in segments_iter:
@@ -2243,8 +3116,18 @@ class VoiceListener(threading.Thread):
                                 except Exception:
                                     break
                     else:
+                        # CRITICAL: append EVERY frame to the utterance, even
+                        # ones VAD labelled "silence". The VAD's role is
+                        # endpoint detection (when to STOP listening), not
+                        # which frames to keep. Dropping VAD-silence frames
+                        # mid-utterance gave Whisper a swiss-cheese audio
+                        # stream and was the root cause of mistranscriptions
+                        # like "ποιος είναι ο καιρός στη Θεσσαλονίκη" →
+                        # "εσείς είναι από την Καλονίκη" (Whisper hallucinated
+                        # connective tissue between captured speech fragments).
+                        # Whisper handles intra-utterance silence fine.
+                        self._utterance_frames.append(frame.copy())
                         if is_voice:
-                            self._utterance_frames.append(frame.copy())
                             self._silence_frames = 0
                         else:
                             self._silence_frames += 1
@@ -2316,6 +3199,47 @@ class VoiceListener(threading.Thread):
             self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
             return
 
+        # Per-utterance RMS diagnostic (Phase A — A8). Logs the segment's
+        # signal level so we can tell whether the mic is genuinely underdriving
+        # (in which case Phase B's DSP frontend is the right escalation) or
+        # whether the issue is downstream of audio capture.
+        try:
+            _seg_rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float64))))
+            debug_log(
+                f"utterance RMS={_seg_rms:.4f} duration={audio_duration:.2f}s",
+                "voice",
+            )
+        except Exception:
+            _seg_rms = 0.0
+
+        # Optional debug WAV dump. When `voice_debug_save_audio: true` is set
+        # in config, each VAD-gated segment is written to %LOCALAPPDATA%/
+        # Jarvis/debug_audio/ as utterance_YYYYMMDD_HHMMSS.wav. Lets us
+        # listen to exactly what Whisper hears and decide whether
+        # mistranscriptions are an audio-quality problem or a model problem.
+        # Off by default — has zero effect on the live path.
+        if bool(getattr(self.cfg, "voice_debug_save_audio", False)):
+            try:
+                self._dump_utterance_wav(audio)
+            except Exception as e:
+                debug_log(f"debug audio dump failed: {e}", "voice")
+
+        # Per-segment gain normalisation (Phase A — A4). Different from the
+        # continuous AGC we removed: this runs ONCE on the complete VAD-gated
+        # segment, after VAD has confirmed there's actual speech. It does not
+        # amplify silence frames and does not interfere with Whisper's
+        # internal mel-spectrogram normalisation (which is a global statistic,
+        # not aware of per-segment levels). Brings PD200X-style dynamic-mic
+        # input up to the amplitude range Whisper's training set occupies.
+        try:
+            from .audio_preproc import normalize_segment
+            audio = normalize_segment(
+                audio,
+                target_rms=float(getattr(self.cfg, "mic_agc_target_rms", 0.1)),
+            )
+        except Exception as e:
+            debug_log(f"segment normalisation failed (using raw audio): {e}", "voice")
+
         # Speech recognition with appropriate backend
         try:
             if self._whisper_backend == "mlx":
@@ -2371,24 +3295,115 @@ class VoiceListener(threading.Thread):
                     text = result.get("text", "").strip()
             else:
                 # faster-whisper transcription
-                # CPU mode: skip timestamps and disable context carry-over for speed
+                # CPU mode: skip timestamps for speed.
                 cpu_mode = self._whisper_device == "cpu"
+
+                allowed = list(getattr(self.cfg, "whisper_allowed_languages", None) or ["el", "en"])
+
+                # `initial_prompt` is interpreted as "the start of the
+                # transcript the model has been writing", not as instructions.
+                # Long / instruction-style prompts get memorised and echoed
+                # back as transcription (real failure observed in production:
+                # the prompt's literal text replaced the user's speech). We
+                # only pass a prompt when the user has explicitly written one
+                # — and document in the spec that it must be SHORT and
+                # speech-style. See the "Prompt poisoning" section.
+                effective_prompt = getattr(self.cfg, "whisper_initial_prompt", None)
+                if isinstance(effective_prompt, str):
+                    effective_prompt = effective_prompt.strip() or None
+
+                # Language hint selection:
+                # 1. Sticky lock consensus from recent utterances (best).
+                # 2. Configured `whisper_default_language` bootstrap (covers
+                #    the first-utterance case where the lock has no data).
+                # 3. None → Whisper auto-detects (least reliable on short or
+                #    quiet audio — e.g. it once labelled Greek as German).
+                language_hint = self._language_lock.suggest()
+                if language_hint is None:
+                    default_lang = getattr(self.cfg, "whisper_default_language", None)
+                    if isinstance(default_lang, str) and default_lang:
+                        language_hint = default_lang
+
+                # Decoder accuracy knobs (Phase A — see listening.spec.md):
+                # - condition_on_previous_text=False ALWAYS — command-style ASR
+                #   processes utterances independently; carry-over only spreads
+                #   one utterance's errors into the next.
+                # - beam_size=1 (greedy) by default — large beam values explore
+                #   the decoding tree to "find" plausible sentences in noise,
+                #   amplifying silence hallucinations. Greedy collapses the
+                #   search space so the model fails fast on silence. Also
+                #   avoids a Blackwell GSP firmware crash with multi-stream
+                #   beam search.
+                # - temperature schedule [0.0, 0.2, 0.4] — Whisper retries
+                #   with rising temperatures when the primary T=0.0 trips the
+                #   compression/no-speech gates, helping it escape repetition
+                #   loops on ambiguous input.
+                # - no_speech_threshold + compression_ratio_threshold +
+                #   hallucination_silence_threshold — three layers of
+                #   hallucination defence at the decoder level.
+                _no_speech = float(getattr(self.cfg, "whisper_no_speech_threshold", 0.6))
+                _crt = getattr(self.cfg, "whisper_compression_ratio_threshold", 1.35)
+                _beam = int(getattr(self.cfg, "whisper_beam_size", 1))
+                _temp_chain = list(getattr(self.cfg, "whisper_temperature_fallback", [0.0, 0.2, 0.4])) or [0.0]
+                _hst = getattr(self.cfg, "whisper_hallucination_silence_threshold", 2.0)
+                _temp_arg = tuple(_temp_chain) if len(_temp_chain) > 1 else _temp_chain[0]
+                _decode_kwargs = dict(
+                    vad_filter=False,
+                    condition_on_previous_text=False,
+                    without_timestamps=cpu_mode,
+                    beam_size=_beam,
+                    temperature=_temp_arg,
+                    no_speech_threshold=_no_speech,
+                )
+                if effective_prompt:
+                    _decode_kwargs["initial_prompt"] = effective_prompt
+                if _crt is not None:
+                    _decode_kwargs["compression_ratio_threshold"] = float(_crt)
+                if _hst is not None:
+                    # faster-whisper added this in 1.1.x — the TypeError
+                    # fallback below covers older versions that don't accept it.
+                    _decode_kwargs["hallucination_silence_threshold"] = float(_hst)
+
                 with self.transcribe_lock:
                     try:
                         segments, _info = self.model.transcribe(
-                            audio, language=None, vad_filter=False,
-                            condition_on_previous_text=not cpu_mode,
-                            without_timestamps=cpu_mode,
+                            audio, language=language_hint, **_decode_kwargs,
                         )
                     except TypeError:
-                        segments, _info = self.model.transcribe(audio, language=None)
+                        # Older faster-whisper that doesn't accept some kwargs.
+                        segments, _info = self.model.transcribe(audio, language=language_hint)
                     segments_list = list(segments)
-                # Capture the detected language (faster-whisper exposes it
-                # on the info object). Guard against older API variants
-                # where the attribute may be absent.
+
+                # Capture detected language; guard against older API variants.
                 detected = getattr(_info, "language", None)
+                if isinstance(detected, str) and detected and allowed and detected not in allowed:
+                    # Smart fallback: prefer the locked language, otherwise
+                    # probability-vote between the allowed languages. Avoids
+                    # the regression where Greek speech mis-detected as `de`
+                    # got force-transcribed as English (allowed[0]) producing
+                    # nonsense like "That'll be...".
+                    fallback_lang = self._pick_fallback_language(
+                        audio, allowed, _decode_kwargs,
+                    )
+                    debug_log(
+                        f"whisper detected '{detected}' (not in allowed {allowed}); "
+                        f"re-transcribing as '{fallback_lang}'",
+                        "voice",
+                    )
+                    with self.transcribe_lock:
+                        try:
+                            segments, _info = self.model.transcribe(
+                                audio, language=fallback_lang, **_decode_kwargs,
+                            )
+                        except TypeError:
+                            segments, _info = self.model.transcribe(audio, language=fallback_lang)
+                        segments_list = list(segments)
+                    detected = fallback_lang
+
                 if isinstance(detected, str) and detected:
                     self._last_detected_language = detected
+                    # Feed the lock so future utterances benefit from consensus.
+                    self._language_lock.record(detected)
                 filtered_segments = self._filter_noisy_segments(segments_list)
                 text = " ".join(seg.text for seg in filtered_segments).strip()
         except Exception as e:

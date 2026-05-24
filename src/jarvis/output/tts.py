@@ -513,6 +513,41 @@ class ChatterboxTTS:
             import pygame
             import os
 
+            # --- TTS cache lookup -------------------------------------------------
+            # Hash (text, voice_prompt, exaggeration, cfg_weight); replay cached
+            # audio instantly when the same combination reappears.
+            from .tts_cache import get_cache
+            _cache = get_cache()
+            _cached_wav = _cache.lookup(
+                text, self.audio_prompt_path, self.exaggeration, self.cfg_weight
+            )
+            if _cached_wav is not None:
+                debug_log(f"TTS cache HIT for: {text[:60]}", "tts")
+                # Compute duration via soundfile (no model invocation needed)
+                import soundfile as _sf
+                _info = _sf.info(str(_cached_wav))
+                exact_duration = float(_info.frames) / float(_info.samplerate)
+                debug_log(f"cached audio duration: {exact_duration:.2f}s", "tts")
+                if self._duration_callback is not None:
+                    try:
+                        self._duration_callback(exact_duration)
+                    except Exception as e:
+                        debug_log(f"cached duration callback error: {e}", "tts")
+                pygame.mixer.init(frequency=_info.samplerate, size=-16, channels=1, buffer=1024)
+                try:
+                    pygame.mixer.music.load(str(_cached_wav))
+                    pygame.mixer.music.play()
+                    while pygame.mixer.music.get_busy():
+                        if self._should_interrupt.is_set():
+                            pygame.mixer.music.stop()
+                            interrupted = True
+                            break
+                        pygame.time.wait(100)
+                finally:
+                    pygame.mixer.quit()
+                return  # Done — no neural synthesis needed
+            # --- end cache lookup -------------------------------------------------
+
             # Generate speech
             wav = self._model.generate(
                 text,
@@ -540,6 +575,17 @@ class ChatterboxTTS:
                 # Save audio
                 import torchaudio as ta
                 ta.save(tmp_path, wav, self._model.sr)
+
+                # Cache the freshly-synthesized audio so we skip generation
+                # next time the same text + voice combination is spoken.
+                try:
+                    _cache.store(
+                        text, self.audio_prompt_path,
+                        self.exaggeration, self.cfg_weight,
+                        Path(tmp_path),
+                    )
+                except Exception as _ce:
+                    debug_log(f"TTS cache store error (non-fatal): {_ce}", "tts")
 
                 # Play audio using pygame (cross-platform)
                 pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)

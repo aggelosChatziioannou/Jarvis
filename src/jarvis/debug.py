@@ -29,6 +29,14 @@ def debug_log(message: str, category: str = "debug") -> None:
         message: The debug message to log
         category: The log category (e.g., "debug", "voice", "echo", "tts", etc.)
     """
+    # Always mirror debug output to the API log buffer so the React UI can show it.
+    try:
+        from .api_server import publish_log
+        level = "error" if category in ("error", "crash") else "info"
+        publish_log(level, f"[{category}] {message}")
+    except Exception:
+        pass
+
     if not _is_debug_enabled():
         return
     try:

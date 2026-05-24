@@ -301,10 +301,88 @@ If the intent judge later rejects the query (and no hot window override applies)
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `transcript_buffer_duration_sec` | 120 | Duration (seconds) for rolling ambient speech transcript. Provides conversation context so the intent judge can synthesise a complete query when someone involves Jarvis. Separate from dialogue memory. |
+| `whisper_model` | `large-v3-turbo` | Whisper variant. `large-v3-turbo` is ~2-5× faster than `large-v3` while retaining ~95% of its accuracy and is roughly the speed of `medium`. Listener auto-falls back to `large-v3` → `medium` → CPU if the installed faster-whisper (<1.1.0) or the device can't run the requested combo. |
+| `whisper_compute_type` | `float16` | CTranslate2 quantisation. `float16` is both faster AND more accurate than `int8` on modern NVIDIA GPUs (int8 incurs runtime conversion overhead). Auto-falls back to `int8` then `float32` if the device rejects the preferred type. Migration v2 bumps existing users off `int8`. |
 | `whisper_min_confidence` | 0.3 | Minimum `avg_logprob`-derived confidence score for a transcribed segment. Segments below this are discarded before the intent judge sees them. |
-| `whisper_no_speech_threshold` | 0.5 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). This filter runs before the `avg_logprob` check so it catches high-confidence hallucinations that would otherwise survive. Applies to both the faster-whisper and MLX backends. |
+| `whisper_no_speech_threshold` | 0.4 | Hard cutoff on Whisper's `no_speech_prob` field. Any segment at or above this value is discarded **regardless of `avg_logprob`** — Whisper can be confident about a hallucinated phrase even when no real speech is present (e.g. the "MBC 뉴스" hallucination on background noise). Lowered from the historical 0.5 to catch more confident YouTube-residue hallucinations ("thank you for watching"). Applies to both the faster-whisper and MLX backends. |
+| `whisper_compression_ratio_threshold` | 2.0 | Whisper internal sanity check — discards segments whose decoded token sequence compresses more aggressively than this ratio (a fingerprint of repetition hallucinations like "don't don't don't…"). OpenAI's canonical default. Set to `null` in config to disable. |
+| `whisper_initial_prompt` | `null` | **READ THE WARNING BELOW.** Optional speech-style prefix passed to Whisper. Default `null` — no prompt. Whisper interprets this as "the start of the transcript I have been writing", NOT as instructions. Long or instruction-style prompts get memorised and echoed back as transcription (real failure observed in production: `"Greek voice assistant. Λέξεις,"` replaced the user's speech). For EL/EN bias use the `language=` hint chain (sticky lock + `whisper_default_language`) instead of a prompt. |
+| `whisper_allowed_languages` | `["el", "en"]` | Whitelist for both the language guard (when Whisper auto-detects something outside this set, the listener re-transcribes with `_pick_fallback_language` — sticky-lock first, otherwise probability vote between allowed languages) and the sticky language lock (only allowed-language detections vote toward consensus). |
+| `whisper_default_language` | `null` | Bootstrap language for the first few utterances before the sticky lock reaches consensus. `null` = auto-detect. Recommended values: `"el"` for daily Greek users, `"en"` for daily English users. Removes the first-utterance ambiguity that previously caused Greek speech to be detected as `de` (German). The sticky lock still adapts later if the actual language differs. |
+| `vad_backend` | `silero` | Voice-activity detection backend. `silero` is a small ONNX model that benchmarks ~4× fewer errors than `webrtc` at the same false-positive rate (Picovoice 2026), particularly at speech onset. Auto-falls back to `webrtc` on import error. |
+| `vad_silero_threshold` | 0.5 | Speech-probability cutoff (onset) for the Silero backend, range [0, 1]. Higher = stricter. We tried 0.7 briefly in v4 because research recommends it for noise rejection, but in production on a PD200X dynamic mic + Greek speech, 0.7 rejected unaspirated plosives (π, τ, κ) and fricatives (θ, φ, χ, σ) that sit at ~0.5-0.6 Silero confidence on that mic — only 0.3-0.5 s of every 1.5-3 s utterance reached Whisper. Rolled back to 0.5 in v5; users who explicitly chose higher keep their preference. |
+| `vad_silero_neg_threshold` | 0.3 | Offset threshold for the hysteresis pair. While the gate is open, frames at this probability or higher keep it open. Lower than `vad_silero_threshold` so quiet trailing phonemes (Greek codas) can keep speech detection alive without lowering the strict onset bar. |
+| `vad_silero_min_speech_ms` / `_min_silence_ms` / `_speech_pad_ms` | 300 / 400 / 400 | **Reserved for future use.** The current per-frame `SileroVAD` wrapper does not consume these — they only apply to the chunked `get_speech_timestamps()` API, which the listener doesn't use. Documented so users who write them know they have no effect today. |
+| `vad_aggressiveness` | 2 | WebRTC backend only, range 0-3. Higher = stricter. Ignored when `vad_backend == "silero"`. |
+| `vad_pre_roll_ms` | 400 | Milliseconds of audio retained before a VAD speech trigger so the captured utterance includes the leading phoneme. Increased from 240 to 400 for cleaner word onsets — no latency cost (pre-roll fills in parallel with silence and is consumed only when speech begins). |
+| `mic_agc_enabled` | `false` | **Opt-in.** Apply soft automatic gain control to each audio frame in the sounddevice callback before VAD/Whisper sees it. Was on-by-default briefly but regressed Whisper accuracy: the encoder's own mel-spectrogram normalisation already handles level variation, and the soft-clip changed the energy envelope distribution the encoder was trained on. Enable only when the mic genuinely under-drives at normal positioning (rare for a PD200X at 6-12 inches). |
+| `mic_agc_target_rms` | 0.1 | When AGC is enabled: target RMS for weak signals, in [-1, 1] normalised audio scale. 0.1 ≈ −20 dBFS. |
+| `mic_agc_max_gain` | 10.0 | When AGC is enabled: upper bound on AGC gain so very-quiet frames don't get amplified into a noise blow-up. |
 
 Note: Intent judge is always used when available (no enable flag). Falls back to simple wake word detection when Ollama is unavailable.
+
+### Whisper decoder parameters
+
+Every faster-whisper transcribe call (the main path AND the warmup path) is invoked with the same explicit knobs:
+
+- `condition_on_previous_text=False` — **always**, both CPU and GPU. Command-style ASR processes utterances independently; carry-over only propagates one utterance's errors into the next. faster-whisper maintainers explicitly recommend disabling for distil and turbo variants.
+- `beam_size=5` / `temperature=0.0` — deterministic best-path decode. No sampling variance between identical inputs.
+- `no_speech_threshold` and `compression_ratio_threshold` — wired from config so the hallucination gates are user-tunable without touching code.
+- `initial_prompt` — the bilingual Greek-aware prompt above.
+- `language` — supplied by the sticky language lock (see below) when consensus exists, else `None` for auto-detect.
+
+### Sticky Language Lock
+
+`jarvis.listening.language_lock.LanguageLock` keeps a rolling deque of the languages Whisper detected on the last N utterances (default N=3). When the same allowed language appears ≥ `min_agreement` times (default 2), `suggest()` returns that language code; the next transcribe call passes it as the `language` hint, skipping auto-detect entirely.
+
+**Why:** in a bilingual setup (default EL/EN) auto-detect runs per-utterance and occasionally lands in a hybrid phonetic decoding mode that produces failures like `καιρός` (`kairós`, weather) → `κύριος` (`kýrios`, sir/mayor). With consensus locking, an established Greek conversation stays Greek and Whisper's decoder doesn't get to second-guess itself.
+
+**Disallowed observations are silently skipped.** Whisper sometimes detects `cy` (Welsh) or `pl` (Polish) on noisy Greek input — those never vote toward consensus, so a few mis-detections don't unlock the wrong language.
+
+**Bilingual switching still works.** When mixed-language input arrives (e.g. `"Jarvis, what's the weather in Αθήνα tomorrow"`), the lock simply produces no fresh consensus, the suggestion falls back to `None`, and Whisper auto-detects normally for that utterance.
+
+## Prompt Poisoning — why `whisper_initial_prompt` is dangerous
+
+Whisper's `initial_prompt` parameter does **not** behave like an instruction. The decoder treats the prompt as *"the start of the transcript I have been writing"* and continues in that style. If the prompt looks like prose, the model continues with prose; if the prompt looks like an instruction or a labelled list, the model continues with an instruction or a labelled list — verbatim.
+
+**Real failure from production (recorded in the post-mortem on this branch):** an initial_prompt of
+> *"Jarvis. Greek/English voice assistant. Λέξεις: καιρός, αύριο, Θεσσαλονίκη, Αθήνα, σήμερα, παίξε, βάλε, μουσική, email."*
+
+— intended as a "Greek vocabulary bias" — got memorised. Subsequent transcripts showed
+> `📝 Heard: "Greek voice assistant. Λέξεις,"`
+
+instead of the user's actual speech. The poisoned transcript then cascaded into false wake-word triggers (the word `voice` from the prompt matched a fuzzy-aliased token) and wasted intent-judge calls.
+
+**Authoritative sources:**
+- [Prompt Engineering in Whisper (ailia Tech blog)](https://medium.com/axinc-ai/prompt-engineering-in-whisper-6bb18003562d) — *"The initial_prompt isn't instructions — it's text that looks like the start of the transcript, and Whisper will continue in that style."*
+- [OpenAI Whisper GitHub Discussion #1150](https://github.com/openai/whisper/discussions/1150) — multiple users reporting the prompt appearing in the output; the canonical mitigation is to use a SHORT speech-style phrase or no prompt at all.
+
+**Hard rule for this project:** `whisper_initial_prompt` defaults to `null`. For language bias, use the `language=` hint chain (sticky lock + `whisper_default_language`). For named-entity bias, prefer a Greek-finetuned model (e.g. [`sam8000/whisper-large-v3-turbo-greek-greece`](https://huggingface.co/sam8000/whisper-large-v3-turbo-greek-greece)) over a prompt. If a user does choose to set a prompt, it must:
+- Be ≤ 1 sentence
+- Read like real speech, not like instructions ("Γεια σου Jarvis." OK, "Greek/English voice assistant." NOT OK)
+- Never contain word lists, headers, or meta-descriptions
+
+## Audio Preprocessing (opt-in)
+
+`jarvis.listening.audio_preproc.normalize` is a soft-AGC available behind `mic_agc_enabled`. **It defaults to off.**
+
+Why off by default: Whisper's encoder already normalises the mel-spectrogram to `[-1, 1]` with near-zero mean (see [Hugging Face Whisper docs](https://huggingface.co/docs/transformers/en/model_doc/whisper)), so external AGC duplicates that work. Worse, the soft-clip via `tanh(x/2)*2` reshapes the energy envelope distribution the encoder was trained on, and a `target_rms=0.1` with `max_gain=10` blows the noise floor up during silence (lifting hum into the VAD trigger band). Real-world Greek transcription regressed measurably when this was on.
+
+When AGC is on, each audio frame's RMS is measured; weak frames are amplified by `min(target_rms/rms, max_gain)` clamped to `[1.0, max_gain]` (the AGC never attenuates). When the gain would push any sample past ±0.95 the output is bent through `tanh(x/2) * 2` for soft saturation.
+
+**Enable only when the mic genuinely under-drives at proper positioning.** For a PD200X at 6-12 inches with sensible MAONO Link gain, no external AGC is needed.
+
+**Cost:** ~10 µs/frame on a single core — but the cost is irrelevant if it harms accuracy.
+
+## VAD Backend Selection
+
+`vad_backend: "silero"` (default) loads `jarvis.listening.vad_silero.SileroVAD`, a wrapper around the Silero ONNX VAD model. It exposes the same `is_speech(pcm16_bytes, sample_rate) -> bool` API as `webrtcvad.Vad` so the rest of the listener is backend-agnostic.
+
+`vad_backend: "webrtc"` keeps the original `webrtcvad` path tunable via `vad_aggressiveness`. This is the automatic fallback when `silero-vad` is not installed.
+
+**Why Silero by default:** the Picovoice 2026 VAD benchmark measures Silero at ~4× lower frame-classification error than WebRTC at the same false-positive operating point, especially at speech onset — which is exactly the symptom that previously caused the listener to clip the first word of utterances like `"Jarvis, τι ώρα είναι;"`. Per-frame inference is sub-millisecond on CPU so the wall-clock cost is comparable to WebRTC.
+
+**Model is cached process-wide.** A module-level singleton holds the loaded ONNX model so multiple `SileroVAD` instances (e.g. tests + listener) share weights without paying the ~hundreds-of-ms load cost twice.
 
 ## State Transitions
 

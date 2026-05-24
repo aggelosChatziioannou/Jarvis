@@ -83,9 +83,11 @@ The central controller that manages:
 
 | Window | Purpose |
 |--------|---------|
+| **WebFloatingHUD** | Small (380×460) frameless always-on-top card hosting the React Home page in a QWebEngineView. Auto-shown when the daemon starts. |
+| **JarvisConsoleWindow** | Full Control Console (native QMainWindow) hosting the React `/panel` UI in a QWebEngineView. Auto-opened alongside the floating HUD; reopenable via the tray menu. |
 | **LogViewerWindow** | Real-time log output from the daemon, with "Report Issue" button |
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
-| **FaceWindow** | Animated face that reacts to speaking state |
+| **FaceWindow** | Animated face that reacts to speaking state. Constructed at startup **purely to initialise the `JarvisStateManager` singleton on the main thread**; never shown — the WebFloatingHUD replaces it visually. |
 | **SettingsWindow** | Auto-generated config editor with tabbed categories |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
 | **DictationHistoryWindow** | Scrollable list of past dictations with copy/delete/clear actions |
@@ -124,6 +126,70 @@ Animated loading screen shown during startup with:
 - Pulsing orb animation (matches theme colors)
 - Status text updates ("Checking Ollama...", "Starting daemon...")
 - Frameless, centered, always-on-top
+
+## Web-Based UI
+
+The legacy PyQt face/HUD has been replaced by a React app hosted in two
+`QWebEngineView` containers. The React bundle is served by an in-process
+FastAPI server living inside the daemon.
+
+| Component | File | Port | Role |
+|-----------|------|------|------|
+| **`api_server`** | `src/jarvis/api_server.py` | 38130 | Serves `ui/dist` (built React app), REST (`/api/health`, `/api/state`, `/api/config`, …), WebSockets `/ws/logs` and `/ws/state` |
+| **`control_bus`** | `src/jarvis/control_bus.py` | 38127 | Lightweight cross-process command channel (STOP / MUTE / PING) used when daemon and desktop_app run in separate processes (dev mode) |
+| **`WebFloatingHUD`** | `src/desktop_app/web_floating_hud.py` | — | Native shell hosting `http://127.0.0.1:38130/` |
+| **`JarvisConsoleWindow`** | `src/desktop_app/web_console_window.py` | — | Native shell hosting `http://127.0.0.1:38130/panel` |
+
+### Cold-start handshake
+
+The HUD is constructed and shown **before** the daemon's API has finished
+booting. To avoid the user seeing a "site can't be reached" page, both
+containers:
+
+1. Show a native PyQt `_LoadingPlaceholder` (cyan-on-navy rings + "BOOTING
+   DAEMON…" label) painted directly with `QPainter` — no WebEngine needed.
+2. Poll `127.0.0.1:38130` every 200ms (up to ~120s) waiting for the API to
+   accept connections.
+3. Once reachable, load the React URL into the WebEngine view and swap the
+   `QStackedWidget` index so the WebEngine page becomes visible.
+
+The api_server itself enforces a startup contract: it pre-checks the port,
+waits up to 10 seconds for uvicorn to actually accept connections, and
+exposes `get_startup_error()` so the daemon can surface a port-conflict or
+crash to the user instead of letting the HUD spin forever.
+
+### Windows App Identity
+
+For the desktop app to appear as a discrete "Jarvis" application in the
+taskbar / Start menu / Alt+Tab / jump lists (instead of being folded under
+`wscript.exe` or `python.exe`), three things must happen **before any
+QWebEngineView is created**:
+
+1. `SetCurrentProcessExplicitAppUserModelID("Jarvis.Desktop.Assistant")` —
+   via `ctypes.windll.shell32`. The string is the canonical AppUserModelID
+   and must match the one stamped onto the desktop shortcut by
+   `Install-DesktopShortcut.ps1` (otherwise pinned and running entries
+   appear as two separate taskbar groups).
+2. `QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)` — required by
+   Qt 6 when more than one `QWebEngineView` exists in the process (HUD +
+   Console + embedded Memory Viewer). Without it the second-shown view
+   renders blank.
+3. `setApplicationName / setOrganizationName / setApplicationDisplayName /
+   setWindowIcon` — applied to every `QApplication` instance (single-
+   instance conflict dialog, main app, error-fallback dialog).
+
+These three steps live in helpers `_configure_pre_qapplication()` and
+`_configure_qapplication(app)` in `src/desktop_app/app.py`; every call site
+that constructs a `QApplication` must invoke both.
+
+### Window flag policy for frameless containers
+
+The floating HUD uses `Qt.Window | FramelessWindowHint | WindowStaysOnTopHint`
+plus `WA_TranslucentBackground`. **`Qt.WindowType.Tool` must NOT be used** —
+tool windows are excluded from the Windows taskbar and Alt+Tab, which
+defeats the "Jarvis is a real app" requirement. The frameless-but-not-Tool
+combination keeps the chrome minimal while preserving normal app affordances
+(taskbar entry, Alt+Tab, native minimize).
 
 ## Daemon Integration
 

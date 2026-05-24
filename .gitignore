@@ -22,3 +22,27 @@ qt.conf
 
 # Auto-generated version file (created at build time)
 src/jarvis/_version.py
+
+# Test artifacts (pytest MagicMock leaves a dir named MagicMock when an
+# attribute access ends up being used as a path)
+MagicMock/
+
+# graphify skill outputs (analysis artefacts, can be regenerated)
+graphify-out/
+
+# Temporary developer test scripts + outputs (not part of the test suite)
+_test_chatterbox.py
+test_porcupine.py
+test_clone_output.wav
+
+# Large voice-clone reference audio (kept locally, not committed — too big
+# for plain git; if you need to share, use git-lfs or a separate channel)
+assets/daddys_home.wav
+
+# Debug audio dumps from voice_debug_save_audio (under repo for convenience
+# during local debugging, never useful upstream)
+debug_audio/
+
+# .env files anywhere (Picovoice keys, OpenAI keys, etc.)
+.env
+**/.env

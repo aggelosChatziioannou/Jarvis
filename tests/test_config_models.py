@@ -106,6 +106,10 @@ class TestWhisperHallucinationFilterDefaults:
     def test_no_speech_threshold_default(self):
         config = get_default_config()
         assert "whisper_no_speech_threshold" in config
+        # 0.5 — middle ground. 0.6 (Calm-Whisper recommendation) was too
+        # aggressive in production: it filtered borderline-quiet Greek
+        # phonemes captured by a dynamic mic (rolled back in migration v5).
+        # The Calm-Whisper exact-match blocklist catches anything 0.5 leaks.
         assert config["whisper_no_speech_threshold"] == 0.5
         assert 0.0 <= config["whisper_no_speech_threshold"] <= 1.0
 

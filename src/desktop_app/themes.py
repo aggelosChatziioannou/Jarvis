@@ -29,13 +29,22 @@ COLORS = {
     
     "border": "#27272a",
     "border_glow": "rgba(245, 158, 11, 0.3)",
-    
+
     "success": "#22c55e",
     "success_light": "#4ade80",
     "warning": "#f59e0b",
     "warning_light": "#fbbf24",
     "error": "#ef4444",
     "error_light": "#f87171",
+
+    # HUD cyan accent — paired with amber for the Iron Man / Tony Stark
+    # HUD aesthetic. Cyan is used for data lines (live feed, telemetry
+    # values) so amber stays reserved for state / activation indicators.
+    "hud_cyan": "#06b6d4",
+    "hud_cyan_light": "#22d3ee",
+    "hud_cyan_glow": "rgba(6, 182, 212, 0.35)",
+    "hud_panel_bg": "rgba(10, 11, 15, 0.92)",
+    "hud_grid": "rgba(245, 158, 11, 0.08)",
 }
 
 
@@ -452,6 +461,143 @@ JARVIS_THEME_STYLESHEET = """
         border: 1px solid #27272a;
         border-radius: 12px;
         padding: 16px;
+    }
+
+    /* ─── HUD: Iron Man unified window ──────────────────────────────── */
+
+    /* The outer chrome of the frameless HUD window */
+    QWidget#hud_root {
+        background-color: rgba(10, 11, 15, 245);
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        border-radius: 10px;
+    }
+
+    /* Title bar across the top — drag region + brand text */
+    QFrame#hud_title_bar {
+        background-color: rgba(18, 20, 26, 220);
+        border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+    }
+    QLabel#hud_title_brand {
+        color: #fbbf24;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 6px;
+    }
+    QLabel#hud_title_clock {
+        color: #22d3ee;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 12px;
+        letter-spacing: 2px;
+    }
+    QPushButton#hud_title_btn {
+        background: transparent;
+        border: none;
+        color: #a1a1aa;
+        padding: 4px 10px;
+        font-size: 14px;
+    }
+    QPushButton#hud_title_btn:hover {
+        color: #f4f4f5;
+        background-color: rgba(245, 158, 11, 0.10);
+    }
+    QPushButton#hud_title_btn_close:hover {
+        color: #f4f4f5;
+        background-color: rgba(239, 68, 68, 0.40);
+    }
+
+    /* Right column: live feed + system panel */
+    QFrame#hud_feed_panel, QFrame#hud_system_panel {
+        background-color: rgba(18, 20, 26, 180);
+        border: 1px solid rgba(245, 158, 11, 0.18);
+        border-radius: 6px;
+    }
+    QLabel#hud_panel_header {
+        color: #fbbf24;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        padding: 4px 8px 2px 8px;
+    }
+    QTextEdit#hud_feed_log {
+        background: transparent;
+        border: none;
+        color: #d4d4d8;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 11px;
+        padding: 4px 8px;
+        selection-background-color: rgba(245, 158, 11, 0.30);
+    }
+    QLabel#hud_telemetry_row {
+        color: #22d3ee;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 11px;
+        padding: 2px 8px;
+    }
+    QLabel#hud_telemetry_dim {
+        color: #71717a;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 11px;
+        padding: 2px 8px;
+    }
+
+    /* Activation gauge + state pill */
+    QLabel#hud_state_pill {
+        color: #fbbf24;
+        background-color: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.50);
+        border-radius: 10px;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        padding: 3px 12px;
+    }
+
+    /* Control bar across the bottom */
+    QFrame#hud_control_bar {
+        background-color: rgba(18, 20, 26, 220);
+        border-top: 1px solid rgba(245, 158, 11, 0.35);
+    }
+    QPushButton#hud_stop {
+        background-color: #b91c1c;
+        color: #fff;
+        border: 1px solid #f87171;
+        border-radius: 6px;
+        padding: 8px 18px;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 3px;
+    }
+    QPushButton#hud_stop:hover {
+        background-color: #dc2626;
+    }
+    QPushButton#hud_stop:pressed {
+        background-color: #991b1b;
+    }
+    QPushButton#hud_secondary_btn {
+        background-color: rgba(245, 158, 11, 0.10);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.50);
+        border-radius: 6px;
+        padding: 8px 14px;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 11px;
+        letter-spacing: 2px;
+    }
+    QPushButton#hud_secondary_btn:hover {
+        background-color: rgba(245, 158, 11, 0.20);
+    }
+    QPushButton#hud_secondary_btn:pressed {
+        background-color: rgba(245, 158, 11, 0.30);
+    }
+    QLabel#hud_weather {
+        color: #22d3ee;
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 11px;
+        letter-spacing: 2px;
     }
 """
 

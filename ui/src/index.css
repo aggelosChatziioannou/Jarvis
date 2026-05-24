@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 216 50% 4%;
+    --foreground: 195 60% 94%;
+    --card: 216 58% 7%;
+    --card-foreground: 195 60% 94%;
+    --popover: 216 58% 7%;
+    --popover-foreground: 195 60% 94%;
+    --primary: 193 100% 50%;
+    --primary-foreground: 216 50% 4%;
+    --secondary: 207 35% 15%;
+    --secondary-foreground: 195 60% 94%;
+    --muted: 207 35% 15%;
+    --muted-foreground: 207 18% 43%;
+    --accent: 193 100% 50%;
+    --accent-foreground: 216 50% 4%;
+    --destructive: 348 100% 62%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 193 100% 50% / 0.12;
+    --input: 207 35% 15%;
+    --ring: 193 100% 50%;
+    --radius: 0.75rem;
+
+    --bg-base: #050B14;
+    --bg-card: rgba(8, 16, 30, 0.92);
+    --bg-card-border: rgba(0, 212, 255, 0.15);
+    --accent-cyan: #00D4FF;
+    --accent-cyan-dim: rgba(0, 212, 255, 0.4);
+    --text-primary: #E8F4F8;
+    --text-secondary: #5A7182;
+    --icon-muted: #2A3F50;
+    --danger: #FF3B5C;
+    --success: #00E5A0;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html, body, #root {
+    font-family: 'Inter', sans-serif;
+    background: transparent;
+    color: var(--text-primary);
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+@layer components {
+  .font-orbitron {
+    font-family: 'Orbitron', sans-serif;
+  }
+}

@@ -35,39 +35,35 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
 
     Returns (int16 mono samples, sample_rate).
     """
+    # Continuous breathing pad: no pulse on/off cycles (the old behaviour
+    # felt "spastic"). A slow ~0.2 Hz LFO modulates a low-frequency triad
+    # so the listener hears a calm hum that drifts in intensity. Volume
+    # is set very low (~0.06) — present enough to indicate "thinking",
+    # quiet enough to fade into the background.
     sample_rate = 44100
-    # 10s buffer = 5 pulse cycles of 2s each (1s tone + 1s silence).
-    duration_s = 10
-    pulse_cycle_s = 2.0
-    tone_s = 1.0  # audible portion per cycle
-    attack_s = 0.008  # ~8ms fast attack gives the slight "click"
+    duration_s = 10  # buffer loops seamlessly
 
-    chord_roots = (220, 275, 330)  # A3, ~C#4, ~E4 — integer Hz for seamless seam
+    chord_roots = (110, 138, 165)  # A2 / C#3 / E3 — lower octave, less ringy
     unison_offsets = (-1, 0, 1)
 
     n = int(sample_rate * duration_s)
     t = np.arange(n, dtype=np.float64) / sample_rate
     two_pi = 2 * np.pi
 
-    # Single-cycle envelope: fast linear attack → exponential decay →
-    # silence for the rest of the cycle. Tiles across the whole buffer.
-    cycle_len = int(sample_rate * pulse_cycle_s)
-    tone_len = int(sample_rate * tone_s)
-    attack_len = max(1, int(sample_rate * attack_s))
-    decay_len = tone_len - attack_len
-    one_cycle = np.zeros(cycle_len, dtype=np.float64)
-    one_cycle[:attack_len] = np.linspace(0.0, 1.0, attack_len, endpoint=True)
-    # Exponential decay from 1.0 down to effectively 0 over the tone body.
-    decay = np.exp(-4.0 * np.arange(decay_len) / decay_len)
-    one_cycle[attack_len:tone_len] = decay
-    # Tile three cycles across the 9s buffer (matches duration_s exactly).
-    num_cycles = n // cycle_len
-    envelope = np.zeros(n, dtype=np.float64)
-    for i in range(num_cycles):
-        envelope[i * cycle_len:(i + 1) * cycle_len] = one_cycle
+    # Slow breathing envelope (no silence between pulses)
+    breath_rate_hz = 0.2  # one full inhale/exhale every 5 s
+    breath = 0.55 + 0.45 * (0.5 - 0.5 * np.cos(two_pi * breath_rate_hz * t))
+    # Long fade-in/out at buffer ends so the seamless loop has no
+    # perceptible amplitude jump.
+    fade_len = int(sample_rate * 0.6)
+    if fade_len * 2 < n:
+        ramp = np.linspace(0.0, 1.0, fade_len, dtype=np.float64)
+        breath[:fade_len] *= ramp
+        breath[-fade_len:] *= ramp[::-1]
+    envelope = breath
 
     # Build the triad once: three pure sines per chord tone with ±1 Hz
-    # unison detune for the characteristic beat.
+    # unison detune for the characteristic beat (gives gentle warmth).
     tone = np.zeros(n, dtype=np.float64)
     for root in chord_roots:
         for offset in unison_offsets:
@@ -76,7 +72,8 @@ def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
     peak = float(np.max(np.abs(tone))) or 1.0
     tone = tone / peak
 
-    signal = tone * envelope * 0.38
+    # Very quiet so it doesn't fight with TTS or distract during thinking
+    signal = tone * envelope * 0.06
 
     samples = np.clip(signal * 32767, -32768, 32767).astype(np.int16)
     return samples, sample_rate
