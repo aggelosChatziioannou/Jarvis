@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Iterator, NamedTuple, Optional
 
 from ..debug import debug_log
+from ..listening.hallucinations import looks_like_hallucination
 from ..llm import call_llm_direct
 from .graph import (
     BRANCH_DIRECTIVES,
@@ -29,6 +30,66 @@ from .graph import (
     SPLIT_THRESHOLD,
     normalise_fact,
 )
+
+
+# ── Write-time hygiene: transient-data shape detector ─────────────────
+#
+# Small models occasionally ignore the prompt's ban on storing transient
+# tool readings (current weather / temperature / time) as enduring facts.
+# This deterministic detector is the belt to the prompt's braces: it drops
+# a candidate fact whose SHAPE is a live reading rather than a durable
+# statement. It deliberately keys on current-reading wording — a numeric
+# temperature reading, an explicit "right now" weather snapshot, or a clock
+# time — NOT on the mere presence of a weather word. So an enduring climate
+# fact ("Ioannina has cold, snowy winters") survives, while a snapshot
+# ("It is 12 degrees and partly cloudy", "It is currently 3:45 PM") is
+# dropped. These shapes are data formats, not natural-language vocabulary
+# lists, so the language-agnostic rule (no hardcoded human-language word
+# lists) is respected — a number followed by a degree sign is a reading in
+# any language.
+_TRANSIENT_FACT_PATTERNS = (
+    # Numeric temperature reading: "12C", "12.6 C", "22 degrees", "-3°C", "20 °".
+    re.compile(r"-?\d+(?:\.\d+)?\s*(?:°|degrees?\b|deg\b|℃|℉)", re.IGNORECASE),
+    re.compile(r"-?\d+(?:\.\d+)?\s*°?\s*[CF]\b"),
+    # Clock time of day: "3:45 PM", "15:30", "at 9 am".
+    re.compile(r"\b\d{1,2}:\d{2}\b"),
+    re.compile(r"\b\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.)\b", re.IGNORECASE),
+    # "Right now"-style live-snapshot markers paired with a weather/time word:
+    # the marker alone is too broad, but with a transient noun it's a reading.
+    re.compile(
+        r"\b(?:currently|right now|at the moment|at present|as of now)\b"
+        r".{0,40}?\b(?:weather|temperature|cloud|cloudy|sunny|rain|raining|"
+        r"wind|windy|humidity|forecast|sky|degrees?|time|o'?clock)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:weather|temperature|cloud|cloudy|sunny|rain|raining|wind|"
+        r"windy|humidity|forecast|sky|degrees?)\b.{0,40}?"
+        r"\b(?:currently|right now|at the moment|at present|as of now)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # "experiencing <weather>" — the live-conditions phrasing the field
+    # incident produced ("Ioannina is experiencing partly cloudy weather").
+    re.compile(
+        r"\bexperiencing\b.{0,40}?\b(?:weather|cloud|cloudy|sunny|rain|"
+        r"raining|wind|windy|fog|foggy|snow|snowing|sky)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
+
+
+def _looks_like_transient_fact(text: str) -> bool:
+    """Return True when a candidate fact is a transient tool reading.
+
+    Belt to the extractor prompt's braces: drops live weather/temperature/
+    time snapshots that the model dressed up as enduring facts. Keys on the
+    SHAPE of a current reading (numeric temperature, clock time, or a
+    weather/time word adjacent to a live-snapshot marker), so durable
+    climate statements without a reading are preserved.
+    """
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _TRANSIENT_FACT_PATTERNS)
 
 
 # Mapping from the branch id the extractor emits to its human-readable
@@ -121,7 +182,25 @@ def extract_graph_memories(
         "- Common knowledge you already have.\n"
         "- Vague, content-free statements ('user explored options').\n"
         "- Pure meta-interaction (greetings, thank-yous, requests for "
-        "a recap).\n\n"
+        "a recap).\n"
+        "- LOW-CONFIDENCE IDENTITY OR LANGUAGE CLAIMS. Do NOT assert who "
+        "the user is, where a named person is located, or which language "
+        "the user speaks unless the user STATED it plainly. A "
+        "mistranscribed or ambiguous word is not evidence: never infer "
+        "'the user speaks <language>' from a stray foreign-looking token, "
+        "and never turn a person's name into a place "
+        "('<person> is located in ...'). When unsure, drop the claim — a "
+        "missing fact is recoverable, a wrong identity poisons every "
+        "future reply.\n"
+        "- TRANSCRIPTION ARTEFACTS. Speech-to-text leaves residues on "
+        "silence (subtitle credits, channel-subscribe outros, stray "
+        "filler words). These are never facts — drop them.\n\n"
+        "ATTRIBUTION FOR THIRD-PARTY CLAIMS: when a fact came from a "
+        "specific source the user named (a friend said, an article "
+        "claimed, a website stated) rather than being established truth, "
+        "keep the attribution in the fact ('According to <source>, ...') "
+        "instead of asserting it as bare fact. This stops an unverified "
+        "claim being recalled later as something you confirmed.\n\n"
         "MIXED SUMMARIES: a summary may interleave novel user-stated "
         "facts with assistant recommendations and current weather / "
         "time. Drop the bans below, but keep ALL user-stated facts in "
@@ -216,6 +295,7 @@ def extract_graph_memories(
         return []
 
     facts: list[tuple[str, str]] = []
+    dropped = 0
     for item in parsed:
         if not isinstance(item, dict):
             continue
@@ -223,6 +303,30 @@ def extract_graph_memories(
         fact_text = str(item.get("fact") or "").strip()
         if not fact_text:
             continue
+
+        # Write-time hygiene gate (the belt; the prompt is the braces).
+        # Drop any candidate fact that is a Whisper hallucination that
+        # leaked through STT, or a transient tool reading (current
+        # weather / temperature / time) dressed up as enduring knowledge.
+        # Per-fact so a mixed batch keeps its legitimate facts — never an
+        # all-or-nothing wipe.
+        if looks_like_hallucination(fact_text):
+            dropped += 1
+            debug_log(
+                f"graph memory extraction: dropped hallucination fact: "
+                f"{fact_text[:60]!r}",
+                "memory",
+            )
+            continue
+        if _looks_like_transient_fact(fact_text):
+            dropped += 1
+            debug_log(
+                f"graph memory extraction: dropped transient-data fact: "
+                f"{fact_text[:60]!r}",
+                "memory",
+            )
+            continue
+
         branch_id = _LABEL_TO_BRANCH.get(branch_label)
         if branch_id is None:
             # Unknown branch label → default to USER. Assistant is a
@@ -237,7 +341,11 @@ def extract_graph_memories(
             branch_id = BRANCH_USER
         facts.append((branch_id, fact_text))
 
-    debug_log(f"graph memory extraction: got {len(facts)} facts", "memory")
+    debug_log(
+        f"graph memory extraction: got {len(facts)} facts "
+        f"({dropped} dropped by hygiene gate)",
+        "memory",
+    )
     return facts
 
 
