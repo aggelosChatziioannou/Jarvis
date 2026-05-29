@@ -93,7 +93,7 @@ export default function AudioIOTab() {
               }}
               style={selectStyle}
             >
-              <option value="">(System Default)</option>
+              <option value="">(Follow Windows default)</option>
               {outputs.map((d) => (
                 <option key={d.name} value={d.name}>
                   {d.name}

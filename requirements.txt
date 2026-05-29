@@ -11,6 +11,12 @@ numpy<2.0.0
 faster-whisper>=1.1.0
 setuptools<81
 sounddevice==0.4.7
+# pycaw: read Windows Core Audio (live default playback endpoint + active
+# device enumeration) so the settings UI shows only real devices and TTS can
+# auto-follow the current Windows default output. Windows-only; comtypes is its
+# COM bridge. Local Core Audio only, no network.
+pycaw>=20240210; sys_platform == "win32"
+comtypes>=1.2.0; sys_platform == "win32"
 pytesseract==0.3.13
 Pillow==10.4.0
 # Silero VAD (default) is the primary backend; webrtcvad is the fallback
