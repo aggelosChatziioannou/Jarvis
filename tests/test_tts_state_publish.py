@@ -51,3 +51,31 @@ def test_chatterbox_publish_state_delegates_to_helper(monkeypatch):
     monkeypatch.setattr(tts, "_publish_tts_react_state", lambda s: seen.append(s))
     tts.ChatterboxTTS._publish_tts_state(None, "speaking")
     assert seen == ["speaking"]
+
+
+def test_idle_publishes_over_stale_thinking(monkeypatch, tmp_path):
+    """A finishing TTS MUST go idle even when the shared state file holds a
+    leftover 'thinking' from THIS reply (set_state writes the same file). The
+    old guard skipped idle for anything != speaking/synthesizing, which left the
+    HUD stuck on PROCESSING when a 'thinking' raced the idle read."""
+    calls = []
+    monkeypatch.setattr(api_server, "publish_state", lambda **kw: calls.append(kw))
+    sf = tmp_path / "jstate"
+    sf.write_text("thinking")
+    monkeypatch.setattr(tts, "_JARVIS_STATE_FILE", str(sf))
+
+    tts._publish_tts_react_state("idle")
+    assert {"state": "idle"} in calls  # idle must NOT be skipped over stale thinking
+
+
+def test_idle_skipped_during_active_listening(monkeypatch, tmp_path):
+    """A genuine follow-up (user speaking again -> LISTENING) still blocks a
+    late idle from a finishing TTS, so we don't clobber the new listening."""
+    calls = []
+    monkeypatch.setattr(api_server, "publish_state", lambda **kw: calls.append(kw))
+    sf = tmp_path / "jstate"
+    sf.write_text("listening")
+    monkeypatch.setattr(tts, "_JARVIS_STATE_FILE", str(sf))
+
+    tts._publish_tts_react_state("idle")
+    assert {"state": "idle"} not in calls  # don't clobber an active listening

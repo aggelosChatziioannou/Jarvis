@@ -76,19 +76,25 @@ class TestPublishTtsState:
         assert fresh_state_manager.state == JarvisState.LISTENING
 
     @patch("src.jarvis.output.tts.debug_log")
-    def test_chatterbox_respects_thinking_state_on_idle(self, _mock_debug, fresh_state_manager):
-        """If state is already THINKING when TTS ends, don't overwrite it."""
+    def test_chatterbox_idle_overrides_stale_thinking(self, _mock_debug, fresh_state_manager):
+        """A finishing TTS MUST go IDLE even if THINKING is the current state.
+
+        THINKING is written to the shared state file by BOTH the reply engine
+        and set_state, so a leftover THINKING from THIS reply used to make the
+        TTS idle get skipped — pinning the HUD on PROCESSING forever. Only an
+        ACTIVE-input state (LISTENING/dictation) may block a late idle; a stale
+        THINKING must not."""
         from src.jarvis.output.tts import ChatterboxTTS
         from desktop_app.face_widget import JarvisState
 
         tts = ChatterboxTTS(enabled=False)
 
-        # Reply engine already set THINKING
+        # A leftover THINKING from this reply (engine set it before TTS).
         fresh_state_manager.set_state(JarvisState.THINKING)
 
-        # TTS ends — should NOT overwrite THINKING
+        # TTS ends — idle MUST win so the HUD returns to AWAITING COMMAND.
         tts._publish_tts_state(JarvisState.IDLE)
-        assert fresh_state_manager.state == JarvisState.THINKING
+        assert fresh_state_manager.state == JarvisState.IDLE
 
     @patch("src.jarvis.output.tts.debug_log")
     def test_piper_idle_from_synthesizing_interrupted(self, _mock_debug, fresh_state_manager):

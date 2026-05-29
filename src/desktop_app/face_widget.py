@@ -164,8 +164,10 @@ class JarvisStateManager(QObject):
         # there will be no subscribers — that's fine.
         try:
             from jarvis import api_server
+            from jarvis.debug import info_log
             react_state = _JARVIS_STATE_TO_REACT.get(state, "idle")
             api_server.publish_state(state=react_state)
+            info_log(f"HUD <- {react_state} (set_state {state.value})", "🖥️")
         except Exception:
             pass
 

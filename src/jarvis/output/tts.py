@@ -90,8 +90,13 @@ def _publish_tts_react_state(state) -> None:
         try:
             with open(_JARVIS_STATE_FILE) as _f:
                 _current = _f.read().strip()
-            if _current and _current not in ("speaking", "synthesizing"):
-                debug_log(f"_publish_tts_state: skip idle (current={_current})", "tts")
+            # Only an ACTIVE input state (user speaking again, dictation, or
+            # asleep) may block a finishing TTS from going idle. A leftover
+            # THINKING/SYNTHESIZING from THIS reply must NOT block idle: the
+            # state file is written by set_state too, so a racing "thinking"
+            # used to make idle get skipped, leaving the HUD stuck on PROCESSING.
+            if _current in ("listening", "dictating", "dictation_processing", "asleep"):
+                debug_log(f"_publish_tts_state: skip idle (active {_current})", "tts")
                 return
         except Exception:
             pass  # no readable state file -> fail open and write idle
@@ -105,6 +110,7 @@ def _publish_tts_react_state(state) -> None:
         from jarvis import api_server
         react_state = _JARVIS_STATE_TO_REACT_VOCAB.get(state_value, "idle")
         api_server.publish_state(state=react_state)
+        info_log(f"HUD <- {react_state} (tts {state_value})", "🖥️")
     except Exception as e:
         debug_log(f"api_server publish_state failed: {e!r}", "tts")
 
