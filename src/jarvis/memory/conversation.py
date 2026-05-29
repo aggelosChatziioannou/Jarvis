@@ -1676,6 +1676,69 @@ def get_relevant_conversation_context(
     )
 
 
+def consolidate_previous_month(
+    db: "Database",
+    store,
+    ollama_base_url: str,
+    ollama_chat_model: str,
+    picker_model: Optional[str] = None,
+    now: Optional[datetime] = None,
+    delete_raw: bool = True,
+) -> Optional[str]:
+    """Fold the previous calendar month's diary into the graph + episodic_archive.
+
+    Reuses the existing graph extraction (``update_graph_from_dialogue``) rather
+    than duplicating consolidate logic; records one archive row (idempotent via
+    UNIQUE(month_year)); then removes the raw diary rows (``delete_raw=True``,
+    the default) or keeps them (``False``). Returns the consolidated month_year,
+    or None when there is nothing to do. Fail-open on fold errors: a fallback
+    truncated narrative is archived rather than losing the month entirely.
+    """
+    from datetime import timedelta as _timedelta
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+    first_of_this = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_year = (first_of_this - _timedelta(days=1)).strftime("%Y-%m")
+
+    rows = db.get_summaries_for_month(month_year)
+    if not rows:
+        return None
+
+    joined = "\n".join((r["summary"] or "") for r in rows if r["summary"])
+    folded = ""
+    try:
+        from .graph_ops import update_graph_from_dialogue
+
+        result = update_graph_from_dialogue(
+            store=store,
+            summary=joined,
+            ollama_base_url=ollama_base_url,
+            ollama_chat_model=ollama_chat_model,
+            date_utc=month_year,
+            picker_model=picker_model,
+        )
+        if result and getattr(result, "stored", None):
+            folded = "\n".join(result.stored)
+    except Exception as exc:
+        debug_log(
+            f"monthly consolidation fold failed (non-fatal): {type(exc).__name__}", "memory"
+        )
+
+    if not folded:
+        folded = joined[:2000]  # fallback: archive a truncated narrative
+
+    db.archive_month(month_year, consolidated_summary=folded, original_count=len(rows))
+    if delete_raw:
+        db.delete_summaries_for_month(month_year)
+    debug_log(
+        f"monthly consolidation: archived {len(rows)} diary row(s) for {month_year} "
+        f"(delete_raw={delete_raw})",
+        "memory",
+    )
+    return month_year
+
+
 def update_diary_from_dialogue_memory(
     db: Database,
     dialogue_memory: DialogueMemory,
@@ -1763,6 +1826,10 @@ def update_diary_from_dialogue_memory(
                 from .graph_ops import update_graph_from_dialogue
 
                 graph_store = GraphMemoryStore(db.db_path)
+                # Record supersession history to the diary DB (both stores are
+                # alive here). Absence elsewhere is fine — the audit is never a
+                # gate on the merge succeeding.
+                graph_store.history_sink = db.append_memory_history
                 # Retrieve the summary we just stored to use for extraction
                 today = datetime.now(timezone.utc).date().isoformat()
                 existing = db.get_conversation_summary(today, source_app)

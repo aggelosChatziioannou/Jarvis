@@ -84,6 +84,18 @@ class MockConfig:
     dictation_thinking_enabled: bool = False
     mcps: Dict[str, Any] = field(default_factory=dict)
     use_stdin: bool = True
+    reminders_enabled: bool = True
+    reminder_check_interval_sec: float = 2.0
+    reminder_grace_window_sec: float = 300.0
+    reminder_default_snooze_min: int = 5
+    reminder_speak_on_fire: bool = True
+    reminder_parse_timeout_sec: float = 8.0
+    memory_ttl_enabled: bool = False
+    memory_ttl_default_days: int = 0
+    memory_weekly_prune_enabled: bool = True
+    memory_weekly_prune_min_age_days: int = 30
+    memory_monthly_consolidation_enabled: bool = True
+    memory_archive_delete_raw: bool = True
 
 
 @pytest.fixture

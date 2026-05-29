@@ -145,7 +145,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Model**: same `picker_model` chain as #11 (small router model when configured, falls back to `ollama_chat_model`). Temperature 0 — the task is rule-following classification.
 - **Inputs**: existing node `data` + the batch of new facts (zero or more) routed to that node in this flush.
 - **System prompt**: defines an ordered rule set — contradiction/reversal drops the old version, near-duplicate phrasings collapse to one, repeated daily activities consolidate into patterns, independent attributes coexist (visible contradictions are NOT silently dropped), common-knowledge facts are pruned. Demands a bare `{"facts": [...]}` JSON object. Parser tries direct `json.loads` first, then a scoped regex (no greedy `\{.*\}`) before giving up.
-- **Output**: `MergeResult(success: bool, incorporated_indices: list[int])`. The revised fact list is written back as the node's full `data`; `incorporated_indices` tells the orchestrator which inputs survived as new lines (under NFKC + casefold matching) so consolidated-out facts aren't reported as "newly stored". Subsumes per-flush supersession, near-duplicate dedupe, and ongoing consolidation in a single call. Because the latest prompt rewrites the whole node, updated conventions propagate to old data without a separate migration step.
+- **Output**: `MergeResult(success: bool, incorporated_indices: list[int])`. The revised fact list is written back as the node's full `data`; `incorporated_indices` tells the orchestrator which inputs survived as new lines (under NFKC + casefold matching) so consolidated-out facts aren't reported as "newly stored". Subsumes per-flush supersession, near-duplicate dedupe, and ongoing consolidation in a single call. Because the latest prompt rewrites the whole node, updated conventions propagate to old data without a separate migration step. A superseding rewrite also records a change-history row and bumps the node `version` — an additive side-write that does not alter the merge's `data` output (see graph.spec.md "Versioning & Change History").
 - **Limits**: 20s timeout. **Hallucination guard**: rewrites with more than `len(existing) + len(new) + 2` lines are rejected as runaway output. Fail-open on any error, parse failure, oversized rewrite, or empty rewrite → caller falls back to plain `append_to_node` for each new fact so they still land (a contradiction is recoverable; a silent wipe or hallucinated bloat is not).
 
 ## 11c. Knowledge Graph Fact Scrub (review-gated cleanup)
@@ -192,6 +192,23 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Inputs**: one in-memory screenshot (PIL → base64 PNG, never on disk) + a fixed English instruction (DESCRIBE_PROMPT or the `bbox_2d` LOCATE prompt). Not user-language matching.
 - **Output**: free text — a scene description (consumed by the reply loop to answer "what do you see") or a grounding reply (`{"bbox_2d":[...]}` / `{"x":,"y":}` / prose) parsed to a centre point by `parse_point_or_box`, then converted to absolute desktop coords.
 - **Limits**: `timeout_sec` 30s, `num_ctx` 4096, `keep_alive` = `cfg.vision_keep_alive` (default "5m" so the bursty vision model self-evicts and returns VRAM to the resident chat model). Loaded on-demand. Chat path (`chat_with_messages`/`call_llm_direct`) is untouched.
+## 16. Reminder Time-Parser Fallback
+
+- **File**: [src/jarvis/reminders/parser.py](src/jarvis/reminders/parser.py) — `parse_when()` LLM branch (`_llm_fallback`).
+- **Trigger**: once per `createReminder` / `snoozeReminder` time parse, **only when the deterministic paths fail**. Recurrence (`every`/`κάθε` → cron) and `dateparser` (EL/EN relative, EN absolute) resolve the common cases with no LLM call; EL absolute times and long-tail phrasings fall through to this.
+- **Model / gating**: warm router chain inlined as `tool_router_model → intent_judge_model → ollama_chat_model` (inlined rather than importing `resolve_tool_router_model` to avoid a circular import into the hot-path parser). No model configured → returns None (fails closed).
+- **Inputs**: the time phrase fenced as untrusted data; current local time as `RELATIVE_BASE`.
+- **System prompt**: inline in `parser.py` — strict single-line output contract.
+- **Output**: one line — an ISO-8601 local datetime, a 5-field cron string, or `NONE`. Validated (`datetime.fromisoformat` / `croniter.is_valid`); anything else → None. Consumed by `ReminderStore.create`.
+- **Limits**: `reminder_parse_timeout_sec` (8s), `num_ctx: 1024`, `temperature: 0.0`, no thinking. Fails closed — an unresolved time creates no reminder rather than guessing.
+
+## 17. Monthly Diary Consolidation (reuses extractor + merge)
+
+- **File**: [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py) — `consolidate_previous_month`, scheduled via `memory/maintenance.py` on the daemon poll loop.
+- **Trigger**: monthly (28-day guard, last-run persisted in `job_state`), gated by `memory_monthly_consolidation_enabled` (default on). Targets the previous calendar month.
+- **Model / gating**: **no new LLM call** — folds the month's summaries through `update_graph_from_dialogue`, reusing the diary→graph extractor + best-child picker + node merge (contexts #10 / #11 / #11b) with the warm picker chain. Fail-open: a fold error archives a truncated fallback narrative instead.
+- **Inputs / Output**: the month's `conversation_summaries` → durable graph facts + one `episodic_archive` row; raw rows then removed (or kept when `memory_archive_delete_raw=False`).
+- **Limits**: bounded by the reused extractor/merge timeouts; ≤ once/month, on its own poll-loop tick so it never blocks voice.
 
 ---
 
@@ -215,6 +232,9 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
+| 15 | Vision model (describe + grounding) | 0-N (vision tools only) | tool-initiated | LARGE (vision model, on-demand) |
+| 16 | Reminder time-parse fallback | 0 (only on ambiguous parse, tool-time) | gated; deterministic-first | SMALL (via router chain) |
+| 17 | Monthly consolidation | 0 (reuses #10/#11b, ~once/month) | gated; background | SMALL/LARGE (reuses extractor chain) |
 
 ## Size-aware auto switches
 

@@ -187,6 +187,13 @@ class MemoryNode:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     data_token_count: int = 0
+    # Lifecycle metadata (additive). importance 0=ephemeral..3=core; ttl_days
+    # NULL=no TTL; permanent=never deleted; version bumped on superseding merge.
+    importance: int = 2
+    ttl_days: Optional[int] = None
+    permanent: bool = False
+    version: int = 1
+    last_consolidated: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Serialise to a dictionary."""
@@ -201,6 +208,11 @@ class MemoryNode:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "data_token_count": self.data_token_count,
+            "importance": self.importance,
+            "ttl_days": self.ttl_days,
+            "permanent": self.permanent,
+            "version": self.version,
+            "last_consolidated": self.last_consolidated,
         }
 
 
@@ -227,6 +239,11 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL,
     data_token_count INTEGER NOT NULL DEFAULT 0,
+    importance        INTEGER NOT NULL DEFAULT 2,
+    ttl_days          INTEGER,
+    permanent         INTEGER NOT NULL DEFAULT 0,
+    version           INTEGER NOT NULL DEFAULT 1,
+    last_consolidated TEXT,
     CHECK(parent_id IS NULL OR parent_id != id)
 );
 
@@ -234,6 +251,30 @@ CREATE INDEX IF NOT EXISTS idx_nodes_parent ON memory_nodes(parent_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_last_accessed ON memory_nodes(last_accessed DESC);
 CREATE INDEX IF NOT EXISTS idx_nodes_access_count ON memory_nodes(access_count DESC);
 """
+
+# Additive lifecycle columns. For a fresh DB they are created by the CREATE
+# TABLE above; for a pre-existing graph they are added at open via a guarded
+# ALTER TABLE (constant DEFAULTs make this a metadata-only, lossless change).
+_LIFECYCLE_COLUMNS = (
+    ("importance", "INTEGER NOT NULL DEFAULT 2"),
+    ("ttl_days", "INTEGER"),
+    ("permanent", "INTEGER NOT NULL DEFAULT 0"),
+    ("version", "INTEGER NOT NULL DEFAULT 1"),
+    ("last_consolidated", "TEXT"),
+)
+
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    return any(r[1] == column for r in conn.execute(f"PRAGMA table_info({table})").fetchall())
+
+
+def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:
+    # NOTE: table/column/decl are interpolated into SQL (SQLite cannot bind
+    # identifiers). Call ONLY with trusted, hardcoded identifiers, never user
+    # input. Current callers pass the literal "memory_nodes" + the constant
+    # _LIFECYCLE_COLUMNS entries.
+    if not _column_exists(conn, table, column):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 # ── Graph Memory Store ──────────────────────────────────────────────────────
@@ -254,6 +295,10 @@ class GraphMemoryStore:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        # Optional callback, set where the diary Database is also alive, that
+        # records supersession history. Absence is fine: the audit is never a
+        # gate on the merge succeeding (see graph_ops._record_history).
+        self.history_sink = None
         self._init_schema()
         self._ensure_root()
 
@@ -263,6 +308,8 @@ class GraphMemoryStore:
         with self._lock:
             self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.executescript(_GRAPH_SCHEMA_SQL)
+            for column, decl in _LIFECYCLE_COLUMNS:
+                _add_column_if_missing(self.conn, "memory_nodes", column, decl)
             self.conn.commit()
 
     def _ensure_root(self) -> None:
@@ -303,6 +350,16 @@ class GraphMemoryStore:
                        VALUES (?, ?, ?, '', 'root', 0, ?, ?, ?, 0)""",
                     (branch_id, name, description, now, now, now),
                 )
+            # Structural nodes (root + fixed branches) are permanent and
+            # top-importance so TTL/pruning can never remove the identity
+            # scaffolding the warm profile depends on. Idempotent re-stamp.
+            structural_ids = ["root", *FIXED_BRANCH_IDS]
+            placeholders = ",".join("?" * len(structural_ids))
+            self.conn.execute(
+                f"UPDATE memory_nodes SET permanent = 1, importance = 3 "
+                f"WHERE id IN ({placeholders})",
+                structural_ids,
+            )
             self.conn.commit()
 
     def migrate_legacy_shape(self) -> bool:
@@ -577,6 +634,68 @@ class GraphMemoryStore:
             )
             self.conn.commit()
 
+    def bump_version(self, node_id: str) -> int:
+        """Increment a node's version counter; return the new version (0 if absent)."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE memory_nodes SET version = version + 1 WHERE id = ?", (node_id,)
+            )
+            self.conn.commit()
+            row = self.conn.execute(
+                "SELECT version FROM memory_nodes WHERE id = ?", (node_id,)
+            ).fetchone()
+        return row["version"] if row else 0
+
+    def purge_expired_nodes(self) -> int:
+        """Delete expired low-importance LEAF nodes (TTL). Structural/permanent,
+        non-leaf, and normal/high-importance nodes are exempt. Returns the count
+        removed. Deletion goes through ``delete_node`` so its structural guard and
+        warm-profile invalidation always apply.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT id FROM memory_nodes
+                WHERE permanent = 0
+                  AND importance <= 1
+                  AND ttl_days IS NOT NULL
+                  AND id NOT IN (
+                      SELECT DISTINCT parent_id FROM memory_nodes WHERE parent_id IS NOT NULL
+                  )
+                  AND julianday('now') - julianday(updated_at) > ttl_days
+                """
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+        removed = sum(1 for node_id in ids if self.delete_node(node_id))
+        if removed:
+            debug_log(f"TTL purge: removed {removed} expired leaf node(s)", "memory")
+        return removed
+
+    def prune_low_importance(self, min_age_days: int = 30) -> int:
+        """Delete ephemeral (importance 0) LEAF nodes older than ``min_age_days``.
+        Structural/permanent and non-leaf nodes are exempt. Returns the count
+        removed. User/Directives facts sit on permanent roots / importance>=2
+        split-leaves, so this can only ever reach World-ish ephemera.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT id FROM memory_nodes
+                WHERE permanent = 0
+                  AND importance = 0
+                  AND id NOT IN (
+                      SELECT DISTINCT parent_id FROM memory_nodes WHERE parent_id IS NOT NULL
+                  )
+                  AND julianday('now') - julianday(updated_at) > ?
+                """,
+                (min_age_days,),
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+        removed = sum(1 for node_id in ids if self.delete_node(node_id))
+        if removed:
+            debug_log(f"weekly prune: removed {removed} ephemeral leaf node(s)", "memory")
+        return removed
+
     # ── Entry points ────────────────────────────────────────────────────
 
     def get_recent_nodes(self, limit: int = RECENT_NODES_COUNT) -> list[MemoryNode]:
@@ -809,6 +928,11 @@ class GraphMemoryStore:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             data_token_count=row["data_token_count"],
+            importance=row["importance"],
+            ttl_days=row["ttl_days"],
+            permanent=bool(row["permanent"]),
+            version=row["version"],
+            last_consolidated=row["last_consolidated"],
         )
 
     def close(self) -> None:

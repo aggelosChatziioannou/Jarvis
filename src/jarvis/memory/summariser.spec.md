@@ -16,6 +16,12 @@ The summariser prompt is the only write-time defence. There is no post-process s
 - Embedding: the concatenation of summary + topics is embedded and stored for vector retrieval.
 - LLM failure is non-fatal — the summariser returns `(None, None)` and the update is skipped entirely. Pending messages remain queued for the next cycle.
 
+## Monthly Consolidation & Episodic Archive
+
+On a monthly cadence (scheduled on the daemon poll loop via `memory/maintenance.py`, gated by `memory_monthly_consolidation_enabled`, default on), `conversation.py::consolidate_previous_month` compresses the **previous calendar month's** diary rows. It reuses the existing graph extraction (`update_graph_from_dialogue`; contexts #10/#11/#11b in `docs/llm_contexts.md`) to fold the month's summaries into durable graph facts — no consolidate logic is duplicated. It then writes one `episodic_archive` row (`month_year`, `consolidated_summary`, `original_count`, `archived_at`), idempotent via `UNIQUE(month_year)`, and removes the raw `conversation_summaries` rows for that month (FTS + vector rows are cleaned automatically by the existing `summaries_ad` / vec triggers).
+
+Archive-then-delete ordering guarantees the month's content survives in both the graph and the archive before any raw row is removed. `memory_archive_delete_raw=False` keeps the raw rows instead of deleting them (a conservative opt-out; bloat is not reduced in that mode). The job is fail-open: a fold error archives a truncated fallback narrative rather than losing the month, and any failure is logged without crashing the daemon. Scheduling state (`last_run_utc`) is persisted in `job_state` so the cadence survives restarts and never double-runs within an interval.
+
 ## Hygiene Rules
 
 ### 1. No deflection narration

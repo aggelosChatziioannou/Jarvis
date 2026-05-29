@@ -54,10 +54,27 @@ The warm profile is injected into every reply's initial system message (see `rep
 | `created_at` | ISO 8601 | When the node was created |
 | `updated_at` | ISO 8601 | Last modification time |
 | `data_token_count` | int | Cached token estimate (len/4 heuristic) |
+| `importance` | int 0-3 | Lifecycle weight: 0=ephemeral, 2=normal (default), 3=core. Structural nodes (root + branches) are 3 |
+| `ttl_days` | int or null | TTL for low-importance leaves; null = no TTL (default). Inert until the pruning jobs land |
+| `permanent` | bool | If set, the node is never removed by TTL/pruning. Root + fixed branches are permanent |
+| `version` | int | Incremented each time a superseding merge rewrites the node's data |
+| `last_consolidated` | ISO 8601 or null | Reserved for the scheduled consolidation job |
 
 ### Storage
 
 SQLite table `memory_nodes` in the same database as the diary system. Schema is initialised automatically on first access. The root node is created if absent.
+
+### Lifecycle Metadata & Migration
+
+Nodes carry additive lifecycle columns (`importance`, `ttl_days`, `permanent`, `version`, `last_consolidated`). On a fresh DB they are created with the table; on a pre-existing graph they are added at open via a `PRAGMA table_info`-guarded `ALTER TABLE ADD COLUMN` (constant defaults → metadata-only, lossless, idempotent). This additive migration is distinct from the destructive `migrate_legacy_shape()` wipe above. Defaults keep every existing row valid and exempt from deletion: `importance=2`, `ttl_days=NULL`, `permanent=0`, `version=1`. Root and the fixed branches are stamped `permanent=1, importance=3` on every bootstrap so TTL/pruning can never remove identity scaffolding.
+
+Importance is currently assigned by heuristic only (structural nodes 3; everything else the default 2). TTL and pruning are **inert plumbing** at this stage: no node is deleted until the lifecycle jobs (TTL purge, weekly prune, monthly consolidation) and richer importance tagging land in a later phase.
+
+### Versioning & Change History
+
+`merge_node_data` is the single point where a fact is superseded, consolidated, or dropped. When a merge changes the node's fact SET (reorder/whitespace-only rewrites are no-ops), it records an audit row before writing: `_record_history` bumps `memory_nodes.version` and, when a `history_sink` is set, writes one row to a `memory_history` table (`node_id, branch, old_text, new_text, previous_value, change_reason, version, ts_utc`). `memory_history` lives in the diary DB so it outlives node deletion.
+
+This is an **additive side-write**: the merge's own output (the rewritten `data`) is byte-identical to before the audit hook existed, so existing merge/consolidation behaviour and tests are unchanged. The sink is optional; absence or failure never gates the merge succeeding (a contradiction is recoverable, a silent wipe is not). It is wired where both the graph store and the diary `Database` are alive (the diary→graph bridge in `conversation.py`). `change_reason` defaults to `merge_supersede`.
 
 ### Entry Points
 

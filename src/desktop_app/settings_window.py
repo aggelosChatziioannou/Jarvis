@@ -64,6 +64,7 @@ CATEGORIES = [
     ("vad", "📊 Voice Activity Detection"),
     ("timing", "⏱️ Timing & Windows"),
     ("memory", "🧠 Memory & Dialogue"),
+    ("reminders", "⏰ Reminders"),
     ("location", "📍 Location"),
     ("features", "✨ Features"),
     ("mcps", "🔌 MCP Servers"),
@@ -95,6 +96,20 @@ def _build_field_metadata() -> List[FieldMeta]:
     def f(key, label, desc, cat, ftype, **kw):
         fields.append(FieldMeta(key=key, label=label, description=desc,
                                 category=cat, field_type=ftype, **kw))
+
+    # --- Reminders ---
+    f("reminders_enabled", "Enable Reminders", "Fire spoken + tray reminders when they're due",
+      "reminders", "bool")
+    f("reminder_check_interval_sec", "Check Interval", "How often to check for due reminders",
+      "reminders", "float", min_val=1, max_val=5, step=0.5, suffix="s")
+    f("reminder_grace_window_sec", "Misfire Grace", "Still fire a reminder overdue by less than this (e.g. after a restart)",
+      "reminders", "float", min_val=0, max_val=3600, step=30, suffix="s")
+    f("reminder_default_snooze_min", "Default Snooze", "Snooze length when none is specified",
+      "reminders", "int", min_val=1, max_val=120, step=1, suffix="min")
+    f("reminder_speak_on_fire", "Speak Reminders", "Read reminders aloud via TTS when they fire",
+      "reminders", "bool")
+    f("reminder_parse_timeout_sec", "Parse Timeout", "Max seconds for the LLM time-parse fallback",
+      "reminders", "float", min_val=1, max_val=60, step=1, suffix="s")
 
     # --- LLM & AI Models ---
     model_choices = [(mid, info["name"]) for mid, info in SUPPORTED_CHAT_MODELS.items()]
