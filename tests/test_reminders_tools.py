@@ -166,3 +166,26 @@ def test_single_text_property_schema_for_fast_path(tool):
     assert set(schema["properties"].keys()) == {"text"}
     assert schema["properties"]["text"]["type"] == "string"
     assert isinstance(tool.name, str) and tool.name
+
+
+# ── snooze duration parsing (EN + EL, abbreviations, no-match default) ────
+from jarvis.tools.builtin.reminders.snooze_reminder import _parse_minutes
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("5 minutes", 5),
+        ("30 min", 30),
+        ("2 hours", 120),
+        ("1 hour", 60),
+        ("3 h", 180),
+        ("10 λεπτά", 10),
+        ("1 ώρα", 60),
+        ("soon", None),
+        ("", None),
+    ],
+)
+def test_snooze_parse_minutes(text, expected):
+    assert _parse_minutes(text) == expected

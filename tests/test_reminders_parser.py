@@ -105,3 +105,16 @@ def test_llm_fallback_none_returns_none(mock_config, monkeypatch):
 def test_empty_text_returns_none(mock_config):
     assert parse_when("", mock_config, BASE, language="en") is None
     assert parse_when("   ", mock_config, BASE, language="en") is None
+
+
+@pytest.mark.unit
+def test_dateparser_absent_routes_to_llm_fallback(mock_config, monkeypatch):
+    import sys
+
+    # Make `import dateparser` raise ImportError inside _dateparser_parse.
+    monkeypatch.setitem(sys.modules, "dateparser", None)
+    monkeypatch.setattr(parser_mod, "call_llm_direct", lambda *a, **k: "2026-05-30T09:00:00")
+
+    pw = parse_when("tomorrow at 9", mock_config, BASE, language="en")
+    assert pw is not None and pw.trigger_at is not None
+    assert pw.trigger_at.hour == 9

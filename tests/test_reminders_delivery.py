@@ -83,3 +83,16 @@ def test_greek_body_is_ascii_safe_on_the_ipc_line(capsys):
     assert line.encode("ascii")
     payload = json.loads(line[len(REMINDER_IPC_PREFIX):])
     assert payload["body"] == "πιες νερό"
+
+
+@pytest.mark.unit
+def test_default_publish_used_when_publish_omitted(monkeypatch):
+    """With no injected publish, delivery routes the HUD event to _default_publish."""
+    import jarvis.reminders.delivery as delivery_mod
+
+    seen = {}
+    monkeypatch.setattr(delivery_mod, "_default_publish", lambda **fields: seen.update(fields))
+    speak_and_toast("ping", "rid-9", Cfg(), tts=None)  # publish omitted -> default path
+
+    assert seen.get("reminderFired", {}).get("id") == "rid-9"
+    assert seen["reminderFired"]["text"] == "ping"

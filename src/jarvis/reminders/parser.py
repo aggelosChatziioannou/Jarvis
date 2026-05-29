@@ -27,7 +27,10 @@ from jarvis.llm import call_llm_direct
 
 from .models import ParsedWhen
 
-# cron day-of-week numbering: 0 = Sunday … 6 = Saturday
+# Deterministic recurrence fast path for the two declared product languages
+# (EN/EL). Other languages and phrasings are NOT excluded: they resolve via
+# dateparser (multilingual) or the LLM fallback, so the assistant is not limited
+# to EN/EL. cron day-of-week numbering: 0 = Sunday … 6 = Saturday.
 _WEEKDAYS = {
     "monday": 1, "mon": 1, "δευτέρα": 1, "δευτερα": 1,
     "tuesday": 2, "tue": 2, "τρίτη": 2, "τριτη": 2,

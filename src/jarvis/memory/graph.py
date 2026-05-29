@@ -269,6 +269,10 @@ def _column_exists(conn, table: str, column: str) -> bool:
 
 
 def _add_column_if_missing(conn, table: str, column: str, decl: str) -> None:
+    # NOTE: table/column/decl are interpolated into SQL (SQLite cannot bind
+    # identifiers). Call ONLY with trusted, hardcoded identifiers, never user
+    # input. Current callers pass the literal "memory_nodes" + the constant
+    # _LIFECYCLE_COLUMNS entries.
     if not _column_exists(conn, table, column):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 

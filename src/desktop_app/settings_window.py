@@ -108,6 +108,8 @@ def _build_field_metadata() -> List[FieldMeta]:
       "reminders", "int", min_val=1, max_val=120, step=1, suffix="min")
     f("reminder_speak_on_fire", "Speak Reminders", "Read reminders aloud via TTS when they fire",
       "reminders", "bool")
+    f("reminder_parse_timeout_sec", "Parse Timeout", "Max seconds for the LLM time-parse fallback",
+      "reminders", "float", min_val=1, max_val=60, step=1, suffix="s")
 
     # --- LLM & AI Models ---
     model_choices = [(mid, info["name"]) for mid, info in SUPPORTED_CHAT_MODELS.items()]
