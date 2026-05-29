@@ -49,3 +49,10 @@ PyQt6-WebEngine>=6.6.0
 psutil>=5.9.0
 # Note: 6.13.0+ has VC runtime pre-loading fix for Windows
 pyinstaller>=6.13.0
+
+# Reminders: offline natural-language time parsing (dateparser, bilingual EL/EN)
+# and recurrence math (croniter). Both pure-Python; reminders fire on the daemon
+# poll loop, so there is no background-scheduler dependency. Code degrades
+# gracefully if either is absent (parser -> LLM fallback; recurring -> parked).
+dateparser>=1.4.0
+croniter>=6.0.0

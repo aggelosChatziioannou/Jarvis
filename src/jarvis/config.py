@@ -338,6 +338,14 @@ class Settings:
     # MCP Integration
     mcps: Dict[str, Any]
 
+    # Reminders (time-triggered spoken + tray reminders; fired on the daemon poll loop)
+    reminders_enabled: bool = True
+    reminder_check_interval_sec: float = 2.0
+    reminder_grace_window_sec: float = 300.0
+    reminder_default_snooze_min: int = 5
+    reminder_speak_on_fire: bool = True
+    reminder_parse_timeout_sec: float = 8.0
+
 
 
 def default_config_path() -> Path:
@@ -869,6 +877,14 @@ def get_default_config() -> Dict[str, Any]:
         # in group conversations. Separate from dialogue memory.
         "transcript_buffer_duration_sec": 120.0,
 
+        # Reminders (time-triggered spoken + tray reminders)
+        "reminders_enabled": True,
+        "reminder_check_interval_sec": 2.0,
+        "reminder_grace_window_sec": 300.0,
+        "reminder_default_snooze_min": 5,
+        "reminder_speak_on_fire": True,
+        "reminder_parse_timeout_sec": 8.0,
+
         # Memory & Dialogue
         # dialogue_memory_timeout drives the short-term memory window AND the forced
         # diary update interval. After a diary update, enrichment retrieves older context.
@@ -1238,6 +1254,14 @@ def load_settings() -> Settings:
     # Transcript Buffer - ambient speech context for intent judge (separate from dialogue)
     transcript_buffer_duration_sec = float(merged.get("transcript_buffer_duration_sec", 120.0))
 
+    # Reminders
+    reminders_enabled = bool(merged.get("reminders_enabled", True))
+    reminder_check_interval_sec = max(1.0, min(5.0, float(merged.get("reminder_check_interval_sec", 2.0))))
+    reminder_grace_window_sec = max(0.0, float(merged.get("reminder_grace_window_sec", 300.0)))
+    reminder_default_snooze_min = max(1, int(merged.get("reminder_default_snooze_min", 5)))
+    reminder_speak_on_fire = bool(merged.get("reminder_speak_on_fire", True))
+    reminder_parse_timeout_sec = max(1.0, float(merged.get("reminder_parse_timeout_sec", 8.0)))
+
     # Dialogue memory window and forced diary update share this duration
     dialogue_memory_timeout = float(merged.get("dialogue_memory_timeout", 300.0))
     memory_enrichment_max_results = int(merged.get("memory_enrichment_max_results", 3))
@@ -1465,6 +1489,14 @@ def load_settings() -> Settings:
 
         # Transcript Buffer
         transcript_buffer_duration_sec=transcript_buffer_duration_sec,
+
+        # Reminders
+        reminders_enabled=reminders_enabled,
+        reminder_check_interval_sec=reminder_check_interval_sec,
+        reminder_grace_window_sec=reminder_grace_window_sec,
+        reminder_default_snooze_min=reminder_default_snooze_min,
+        reminder_speak_on_fire=reminder_speak_on_fire,
+        reminder_parse_timeout_sec=reminder_parse_timeout_sec,
 
         # Memory & Dialogue
         dialogue_memory_timeout=dialogue_memory_timeout,

@@ -184,6 +184,16 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Weather** ([src/jarvis/tools/builtin/weather.py](src/jarvis/tools/builtin/weather.py), ~line 60) — `ollama_chat_model`, parses location/time/unit from the query.
 - **Nutrition log_meal** ([src/jarvis/tools/builtin/nutrition/log_meal.py](src/jarvis/tools/builtin/nutrition/log_meal.py), lines 48 & 136) — `ollama_chat_model`, extracts nutrients, confirms logging.
 
+## 15. Reminder Time-Parser Fallback
+
+- **File**: [src/jarvis/reminders/parser.py](src/jarvis/reminders/parser.py) — `parse_when()` LLM branch (`_llm_fallback`).
+- **Trigger**: once per `createReminder` / `snoozeReminder` time parse, **only when the deterministic paths fail**. Recurrence (`every`/`κάθε` → cron) and `dateparser` (EL/EN relative, EN absolute) resolve the common cases with no LLM call; EL absolute times and long-tail phrasings fall through to this.
+- **Model / gating**: warm router chain inlined as `tool_router_model → intent_judge_model → ollama_chat_model` (inlined rather than importing `resolve_tool_router_model` to avoid a circular import into the hot-path parser). No model configured → returns None (fails closed).
+- **Inputs**: the time phrase fenced as untrusted data; current local time as `RELATIVE_BASE`.
+- **System prompt**: inline in `parser.py` — strict single-line output contract.
+- **Output**: one line — an ISO-8601 local datetime, a 5-field cron string, or `NONE`. Validated (`datetime.fromisoformat` / `croniter.is_valid`); anything else → None. Consumed by `ReminderStore.create`.
+- **Limits**: `reminder_parse_timeout_sec` (8s), `num_ctx: 1024`, `temperature: 0.0`, no thinking. Fails closed — an unresolved time creates no reminder rather than guessing.
+
 ---
 
 ## Frequency / Size Summary
@@ -206,6 +216,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
+| 15 | Reminder time-parse fallback | 0 (only on ambiguous parse, tool-time) | gated; deterministic-first | SMALL (via router chain) |
 
 ## Size-aware auto switches
 

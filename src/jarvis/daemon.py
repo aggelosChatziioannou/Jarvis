@@ -631,6 +631,19 @@ def main() -> None:
     last_diary_check = time.time()
     diary_check_interval = 60.0
 
+    # Periodic reminder firing — reuses this poll loop (no separate scheduler).
+    from datetime import datetime as _datetime
+    last_reminder_check = time.time()
+    reminder_check_interval = max(1.0, min(5.0, float(getattr(cfg, "reminder_check_interval_sec", 2.0))))
+    reminder_store = None
+    if getattr(cfg, "reminders_enabled", True):
+        try:
+            from .reminders.store import ReminderStore
+            reminder_store = ReminderStore(cfg.db_path)
+            debug_log("reminder store initialised on daemon poll loop", "reminders")
+        except Exception as _rerr:
+            debug_log(f"reminders disabled (store init failed): {_rerr!r}", "reminders")
+
     # Start stdin monitor thread for Windows shutdown signal
     # On Windows, CTRL_BREAK_EVENT doesn't work reliably with CREATE_NO_WINDOW
     # So we also check for stdin being closed as a shutdown signal
@@ -667,6 +680,15 @@ def main() -> None:
                 _check_and_update_diary(db, cfg, verbose=False)
                 last_diary_check = now
 
+            # Fire any due reminders (non-blocking read + enqueue; fail-open).
+            if reminder_store is not None and (now - last_reminder_check) >= reminder_check_interval:
+                try:
+                    from .reminders.firing import fire_due_reminders
+                    fire_due_reminders(reminder_store, cfg, get_tts_engine(), _datetime.now().astimezone())
+                except Exception as _rerr:
+                    debug_log(f"reminder tick failed (non-fatal): {_rerr!r}", "reminders")
+                last_reminder_check = now
+
         # Keep voice thread alive (unless stop requested)
         if voice_thread is not None:
             while voice_thread.is_alive() and not _global_stop_requested:
@@ -702,6 +724,13 @@ def main() -> None:
             except Exception:
                 pass
             debug_log("voice thread stopped", "jarvis")
+
+        if reminder_store is not None:
+            try:
+                reminder_store.close()
+                debug_log("reminder store closed", "jarvis")
+            except Exception:
+                pass
 
         # Final diary update before shutdown
         debug_log("performing final diary update (force=True)...", "jarvis")
