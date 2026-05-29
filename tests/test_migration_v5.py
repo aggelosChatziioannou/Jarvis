@@ -60,9 +60,19 @@ def test_preserves_explicit_no_speech_threshold(tmp_cfg):
     assert out["whisper_no_speech_threshold"] == 0.7
 
 
-def test_bumps_version_to_5(tmp_cfg):
+def test_bumps_version_to_head(tmp_cfg):
+    """Migrating from v4 runs the v5 step and continues to the current head.
+
+    The terminal version is not pinned to a magic number (the chain grows as
+    later features add migrations, e.g. reminders/vision pushed it past 5).
+    Instead we assert the mechanism: the v5 step is in the chain (head >= 5)
+    and migrating an already-migrated config is a version no-op (idempotent
+    at head)."""
     out = _run(tmp_cfg, {"_config_version": 4})
-    assert out["_config_version"] == 5
+    head = out["_config_version"]
+    assert head >= 5
+    again = _migrate_config(tmp_cfg, dict(out))
+    assert again["_config_version"] == head
 
 
 def test_does_not_re_run_when_already_v5(tmp_cfg, capsys):
