@@ -19,6 +19,18 @@ import numpy as np
 
 from ..debug import debug_log, info_log, log_state_transition
 
+# Module-scope so the live output-device resolver (and its tests) can read
+# settings fresh on each call without threading config through the engines.
+# Imported lazily-safe: if config import fails at module load we fall back to a
+# stub that returns an object with no tts_output_device (follow mode).
+try:  # pragma: no cover - trivial import guard
+    from ..config import load_settings  # type: ignore
+except Exception:  # pragma: no cover
+    def load_settings():  # type: ignore
+        class _Empty:
+            tts_output_device = None
+        return _Empty()
+
 
 # ============================================================================
 # Piper TTS Model Configuration
@@ -238,21 +250,67 @@ def _resolve_output_device(spec) -> Optional[int]:
         return None
 
 
-def _get_configured_output_device() -> Optional[int]:
-    """Read cfg.tts_output_device and resolve to an index. Cached after first call."""
-    global _CONFIGURED_OUTPUT_DEVICE_CACHED
+def _resolve_output_device_live() -> Optional[int]:
+    """Resolve the playback output device FRESH on every call — no caching.
+
+    This is what makes both manual device changes AND Windows-default changes
+    apply LIVE (no restart):
+
+      * If ``cfg.tts_output_device`` is set (non-empty) → match THAT name to a
+        sounddevice index via ``audio_devices.match_name_to_sd_index``.
+      * Else (follow mode) → read the CURRENT Windows default output name via
+        ``audio_devices.get_default_output_name`` and match THAT. So unplugging
+        the headphones and switching Windows to the speakers re-routes Jarvis on
+        the very next utterance.
+
+    Fail-open: any miss / error → ``None`` so playback uses PortAudio's own
+    default device.
+
+    Replaces the previous module-cached ``_get_configured_output_device`` whose
+    value was pinned at first call, requiring a restart for changes to take
+    effect.
+    """
     try:
-        return _CONFIGURED_OUTPUT_DEVICE_CACHED
-    except NameError:
-        pass
+        from . import audio_devices
+    except Exception as e:
+        debug_log(f"_resolve_output_device_live: audio_devices import failed ({e!r})", "tts")
+        return None
     try:
-        from ..config import load_settings
         cfg = load_settings()
         spec = getattr(cfg, "tts_output_device", None)
     except Exception:
         spec = None
-    _CONFIGURED_OUTPUT_DEVICE_CACHED = _resolve_output_device(spec)
-    return _CONFIGURED_OUTPUT_DEVICE_CACHED
+
+    try:
+        if spec is not None and str(spec).strip() != "":
+            idx = audio_devices.match_name_to_sd_index(str(spec).strip(), kind="output")
+            if idx is not None:
+                debug_log(f"_resolve_output_device_live: configured '{spec}' → {idx}", "tts")
+            return idx
+        # Follow mode — track the live Windows default output.
+        default_name = audio_devices.get_default_output_name()
+        if not default_name:
+            return None
+        idx = audio_devices.match_name_to_sd_index(default_name, kind="output")
+        if idx is not None:
+            debug_log(
+                f"_resolve_output_device_live: follow default '{default_name}' → {idx}",
+                "tts",
+            )
+        return idx
+    except Exception as e:
+        debug_log(f"_resolve_output_device_live raised: {e!r}", "tts")
+        return None
+
+
+def _get_configured_output_device() -> Optional[int]:
+    """Backward-compatible alias. Now resolves LIVE (no cache) so changes to
+    the configured device or the Windows default take effect without a restart.
+
+    Kept as a thin wrapper because external callers / older code may import this
+    name; the cached module global it used to populate is gone.
+    """
+    return _resolve_output_device_live()
 
 
 def _play_via_sounddevice(
@@ -299,6 +357,11 @@ def _play_via_sounddevice(
         if abs(volume - 1.0) > 1e-3:
             data = data * float(volume)
 
+        # Resolve the target output device FRESH (no cache) so a just-changed
+        # configured device OR the live Windows default applies without a
+        # restart. None → caller wants PortAudio's default.
+        resolved_device = _resolve_output_device_live()
+
         # Try WASAPI exclusive first; fall back to shared on any PortAudio
         # error (most commonly: device already opened exclusively by another
         # process, or the requested format isn't supported in exclusive mode).
@@ -307,7 +370,19 @@ def _play_via_sounddevice(
         extra, wasapi_device = _build_extra_settings()
         used_mode = "shared"
         play_started = False
-        if extra is not None and wasapi_device is not None:
+        # CRITICAL: WASAPI exclusive extra_settings are pinned to the WASAPI
+        # DEFAULT device index. They are only valid for THAT device — passing
+        # them for any other device raises PortAudio -9984. So only take the
+        # exclusive path when the freshly-resolved device IS the WASAPI default
+        # (or when nothing specific was resolved, i.e. "use default", which the
+        # exclusive path already targets). When the user follows / pins a
+        # DIFFERENT device, skip exclusive and play shared on it below.
+        _exclusive_ok = (
+            extra is not None
+            and wasapi_device is not None
+            and (resolved_device is None or resolved_device == wasapi_device)
+        )
+        if _exclusive_ok:
             try:
                 # Exclusive mode requires the device's NATIVE sample rate
                 # (Windows can't insert its mixer to resample). Query the
@@ -374,10 +449,12 @@ def _play_via_sounddevice(
                     pass
 
         if not play_started:
-            # Honor cfg.tts_output_device if set — user can pin which output
-            # device gets the audio (e.g. PD200X speakers vs Realtek headset).
+            # Shared mode on the freshly-resolved device (configured or the
+            # live Windows default). This is also the path taken when the
+            # resolved device is NOT the WASAPI default — shared mode accepts
+            # any device, unlike the exclusive extra_settings above.
             # None = use system default (sd.default.device[1]).
-            shared_device = _get_configured_output_device()
+            shared_device = resolved_device
             if shared_device is not None:
                 sd.play(data, samplerate=int(sr), device=shared_device,
                         latency="low", blocksize=256)
@@ -1894,10 +1971,11 @@ class PiperTTS:
 
             play_position[0] = end
 
-        # Honor cfg.tts_output_device so Piper plays to the SAME device
-        # the user configured (e.g. CORSAIR VOID), not PortAudio's default
-        # output (often the Realtek onboard jack → silence).
-        configured_device = _get_configured_output_device()
+        # Resolve the output device FRESH on every play (no cache): honours a
+        # just-changed cfg.tts_output_device AND, in follow mode, the CURRENT
+        # Windows default output. So unplugging the headphones re-routes Piper
+        # on the next utterance with no restart. None → PortAudio default.
+        configured_device = _resolve_output_device_live()
 
         # WASAPI shared mode rejects sample rates that differ from the
         # device's mix format — e.g. Piper's 22050 Hz on a 48000 Hz CORSAIR
