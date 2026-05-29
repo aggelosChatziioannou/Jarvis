@@ -253,3 +253,66 @@ def chat_with_messages(
         return None
 
     return None
+
+
+def call_vision_model(
+    base_url: str,
+    model: str,
+    prompt: str,
+    images: List[str],
+    timeout_sec: float = 30.0,
+    keep_alive: Optional[str] = None,
+    num_ctx: int = 4096,
+    temperature: Optional[float] = None,
+) -> Optional[str]:
+    """Multimodal call to an Ollama vision model (e.g. moondream).
+
+    Sends a single user message carrying ``images`` (base64-encoded PNG/JPEG
+    strings, per Ollama's ``/api/chat`` multimodal format) and returns the
+    model's text response, or None on error/timeout. This is deliberately
+    separate from ``chat_with_messages``/``call_llm_direct`` so the text chat
+    path is untouched — the vision domain owns its own request shape.
+
+    ``keep_alive`` is forwarded verbatim when set (e.g. "5m" so a bursty
+    vision model self-evicts and returns VRAM to the resident chat model;
+    "0" to evict immediately). When None, Ollama's server default applies.
+    """
+    if not images:
+        debug_log("call_vision_model: no images supplied", "vision")
+        return None
+
+    options: Dict[str, Any] = {"num_ctx": num_ctx}
+    if temperature is not None:
+        options["temperature"] = float(temperature)
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": prompt, "images": list(images)},
+        ],
+        "stream": False,
+        "options": options,
+    }
+    if keep_alive is not None:
+        payload["keep_alive"] = keep_alive
+
+    try:
+        with requests.post(f"{base_url.rstrip('/')}/api/chat", json=payload, timeout=timeout_sec) as resp:
+            resp.raise_for_status()
+            data = resp.json()
+        if isinstance(data, dict):
+            content = extract_text_from_response(data)
+            if isinstance(content, str) and content.strip():
+                return content
+            debug_log(
+                f"call_vision_model: empty content from response keys={list(data.keys())}",
+                "vision",
+            )
+    except requests.exceptions.Timeout:
+        debug_log(f"call_vision_model: timeout after {timeout_sec}s", "vision")
+        return None
+    except Exception as e:
+        debug_log(f"call_vision_model: request failed — {e}", "vision")
+        return None
+
+    return None

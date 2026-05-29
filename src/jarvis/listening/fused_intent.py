@@ -81,8 +81,11 @@ FUSED_INTENT_SCHEMA: dict = {
 }
 
 
-# Hardcoded tool catalogue (~10 entries). KNOWN ISSUE: will rot when the real
-# MCP/tool registry changes. Future work: pass dynamically via cfg/registry.
+# Hardcoded tool catalogue. KNOWN ISSUE: will rot when the real MCP/tool
+# registry changes. Future work: pass dynamically via cfg/registry. The vision
+# entries below use the EXACT builtin tool names (seeScreen, readScreen, …) so
+# the engine's allow-list resolves them against BUILTIN_TOOLS — see
+# src/jarvis/vision/vision.spec.md.
 _TOOL_CATALOGUE = [
     "time.now — get current time. args: {}",
     "time.date — get today's date. args: {}",
@@ -94,6 +97,14 @@ _TOOL_CATALOGUE = [
     "calendar.list — list upcoming events. args: {days?: int}",
     "notes.create — create a note. args: {title: str, body: str}",
     "web.search — web search. args: {query: str}",
+    # Vision & Screen Interaction (JARVIS can see/act on the user's screen)
+    "seeScreen — describe what is currently on the user's screen (windows, apps, UI elements). args: {monitor?: str}",
+    "readScreen — OCR and transcribe the exact text shown on the screen (English/Greek). args: {monitor?: str}",
+    "locateOnScreen — find where a UI element is and return its coordinates, without clicking. args: {target: str}",
+    "clickScreen — click a UI element identified by its visible label/description. args: {target: str}",
+    "typeOnScreen — type text via the keyboard. args: {text: str}",
+    "scrollScreen — scroll the active window up or down. args: {direction: str, amount?: int}",
+    "confirmScreenAction — execute the screen action awaiting confirmation, when the user agrees. args: {}",
 ]
 
 
@@ -168,7 +179,14 @@ class FusedIntentEngine:
             '  - "clarification" if the utterance is ambiguous and needs to be re-asked.\n'
             '- "tools": ordered list. Empty if no tools needed.\n'
             '- "plan": short ordered list of execution steps (max 4). For chat-only replies use ["Reply to user."].\n'
-            '- "fast_path_match": if utterance matches a common pattern (time.now, weather.current, spotify.play, etc.), name it; else null.\n\n'
+            '- "fast_path_match": if utterance matches a common pattern (time.now, weather.current, spotify.play, etc.), name it; else null.\n'
+            "- SCREEN AWARENESS: JARVIS can see the user's screen. When the user asks (in ANY language) "
+            "what you see/observe, to look at / read / describe the screen, or to find / click / type on / "
+            "scroll the screen, you MUST select a screen tool (seeScreen / readScreen / locateOnScreen / "
+            "clickScreen / typeOnScreen / scrollScreen). Treat a bare \"what do you see?\" as a request to "
+            "look at the screen (seeScreen), not casual chat. To click/press/tap something, use clickScreen "
+            "(NOT locateOnScreen); use locateOnScreen ONLY when the user just wants to know where something "
+            "is without pressing it.\n\n"
             f"Available tools (builtins + MCPs):\n{tool_list}\n"
         )
 

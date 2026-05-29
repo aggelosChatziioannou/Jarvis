@@ -20,6 +20,15 @@ from .builtin.refresh_mcp_tools import RefreshMCPToolsTool
 from .builtin.weather import WeatherTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
+from .builtin.vision import (
+    SeeScreenTool,
+    ReadScreenTool,
+    LocateOnScreenTool,
+    ClickScreenTool,
+    TypeOnScreenTool,
+    ScrollScreenTool,
+    ConfirmScreenActionTool,
+)
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -39,6 +48,15 @@ BUILTIN_TOOLS = {
     "getWeather": WeatherTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
+    # Vision & Screen Interaction Engine (see src/jarvis/vision/vision.spec.md).
+    # Gated at runtime by cfg.vision_enabled; all return raw data.
+    "seeScreen": SeeScreenTool(),
+    "readScreen": ReadScreenTool(),
+    "locateOnScreen": LocateOnScreenTool(),
+    "clickScreen": ClickScreenTool(),
+    "typeOnScreen": TypeOnScreenTool(),
+    "scrollScreen": ScrollScreenTool(),
+    "confirmScreenAction": ConfirmScreenActionTool(),
 }
 
 # Global MCP tools cache

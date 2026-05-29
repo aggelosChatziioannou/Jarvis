@@ -1,16 +1,22 @@
-"""Screenshot tool implementation for OCR capture."""
+"""Screenshot tool: capture the primary screen and OCR its text (cross-platform).
 
-from typing import Dict, Any, Optional
-import os
-import tempfile
-import subprocess
-import shutil
+Capture is delegated to the vision engine's mss-based ScreenCapture (in-memory,
+never written to disk) and OCR to the shared Tesseract path in vision.analyzer,
+so this works on Windows/Linux/macOS. The previous implementation shelled out to
+macOS-only ``screencapture`` and silently returned empty text on every other
+platform. Returns raw OCR text; the unified system prompt does the formatting.
+For richer screen interaction (describe / locate / click) use the vision tools.
+"""
+
+from typing import Any, Dict, Optional
+
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
 
+
 class ScreenshotTool(Tool):
-    """Tool for capturing screenshots and performing OCR."""
+    """Capture the primary screen and return its OCR text."""
 
     @property
     def name(self) -> str:
@@ -18,52 +24,28 @@ class ScreenshotTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Capture a selected screen region and OCR the text. Use only if the OCR will materially help."
+        return (
+            "Capture the primary screen and read its visible text via OCR (English and "
+            "Greek). Use only when reading on-screen text will materially help the answer."
+        )
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
+        return {"type": "object", "properties": {}, "required": []}
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
-        """Execute the screenshot tool."""
         context.user_print("📸 Capturing a screenshot for OCR…")
         debug_log("screenshot: capturing OCR...", "screenshot")
-        # Inline OCR capture logic (previously in separate helper)
-        ocr_text: str = ""
-        sc = shutil.which("screencapture")
-        if sc:
-            tmpdir = tempfile.mkdtemp(prefix="jarvis_ocr_")
-            png_path = os.path.join(tmpdir, "shot.png")
-            try:
-                cmd = [sc, "-i", png_path]
-                try:
-                    ret = subprocess.run(cmd)
-                except Exception:
-                    ret = None  # type: ignore
-                if ret and getattr(ret, "returncode", 1) == 0 and os.path.exists(png_path):
-                    tess = shutil.which("tesseract")
-                    if tess:
-                        try:
-                            import pytesseract  # type: ignore
-                            from PIL import Image  # type: ignore
-                            with Image.open(png_path) as im:
-                                text = pytesseract.image_to_string(im)
-                                if text and text.strip():
-                                    ocr_text = text.strip()
-                        except Exception:
-                            pass
-            finally:
-                try:
-                    if os.path.exists(png_path):
-                        os.remove(png_path)
-                    os.rmdir(tmpdir)
-                except Exception:
-                    pass
+        ocr_text = ""
+        try:
+            from ...vision.capture import ScreenCapture
+            from ...vision.analyzer import read_text
+
+            image = ScreenCapture().capture_primary()
+            ocr_text = read_text(image) or ""
+        except Exception as exc:
+            debug_log(f"screenshot: capture/OCR failed — {exc}", "screenshot")
         debug_log(f"screenshot: ocr_chars={len(ocr_text)}", "screenshot")
         context.user_print("✅ Screenshot processed.")
-        # Return raw OCR text as tool result (no LLM processing here)
+        # Raw OCR text only — no LLM processing here.
         return ToolExecutionResult(success=True, reply_text=ocr_text)

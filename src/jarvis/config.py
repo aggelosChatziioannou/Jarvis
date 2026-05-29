@@ -329,6 +329,17 @@ class Settings:
     # language.
     wikipedia_fallback_enabled: bool
 
+    # Vision & Screen Interaction Engine (see src/jarvis/vision/vision.spec.md).
+    # Disabled by default — the tools stay dormant until vision_enabled is True.
+    vision_enabled: bool
+    vision_model: str                 # Ollama vision model for describe + grounding
+    vision_default_mode: str          # observe | assist | auto
+    vision_auto_whitelist: list       # process names allowed to act without confirmation in AUTO
+    vision_auto_blacklist: list       # process names never auto-actioned (banks, password mgrs, browsers)
+    vision_pending_ttl_sec: int       # how long a proposed action waits for confirmation
+    vision_keep_alive: str            # Ollama keep_alive for the vision model (short -> self-evicts)
+    vision_max_width: Optional[int]   # optional capture downscale width (reserved)
+
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
     dictation_hotkey: str
@@ -933,6 +944,16 @@ def get_default_config() -> Dict[str, Any]:
         "brave_search_api_key": "",
         "wikipedia_fallback_enabled": True,
 
+        # Vision & Screen Interaction Engine (off by default)
+        "vision_enabled": False,
+        "vision_model": "qwen2.5vl:3b",
+        "vision_default_mode": "assist",
+        "vision_auto_whitelist": ["notepad.exe", "WindowsTerminal.exe", "explorer.exe", "spotify.exe"],
+        "vision_auto_blacklist": ["chrome.exe", "msedge.exe", "firefox.exe", "1password.exe", "keepass.exe"],
+        "vision_pending_ttl_sec": 120,
+        "vision_keep_alive": "5m",
+        "vision_max_width": None,
+
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
         "dictation_hotkey": _default_dictation_hotkey(),
@@ -1298,6 +1319,17 @@ def load_settings() -> Settings:
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
+    vision_enabled = bool(merged.get("vision_enabled", False))
+    vision_model = str(merged.get("vision_model", "qwen2.5vl:3b") or "qwen2.5vl:3b").strip()
+    vision_default_mode = str(merged.get("vision_default_mode", "assist") or "assist").strip().lower()
+    _vw = merged.get("vision_auto_whitelist", [])
+    vision_auto_whitelist = list(_vw) if isinstance(_vw, list) else []
+    _vb = merged.get("vision_auto_blacklist", [])
+    vision_auto_blacklist = list(_vb) if isinstance(_vb, list) else []
+    vision_pending_ttl_sec = int(merged.get("vision_pending_ttl_sec", 120) or 120)
+    vision_keep_alive = str(merged.get("vision_keep_alive", "5m") or "5m").strip()
+    _vmw = merged.get("vision_max_width")
+    vision_max_width = int(_vmw) if isinstance(_vmw, (int, float)) and _vmw else None
     dictation_enabled = bool(merged.get("dictation_enabled", True))
     dictation_hotkey = str(merged.get("dictation_hotkey", _default_dictation_hotkey())).strip()
     dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
@@ -1497,6 +1529,16 @@ def load_settings() -> Settings:
         web_search_enabled=web_search_enabled,
         brave_search_api_key=brave_search_api_key,
         wikipedia_fallback_enabled=wikipedia_fallback_enabled,
+
+        # Vision
+        vision_enabled=vision_enabled,
+        vision_model=vision_model,
+        vision_default_mode=vision_default_mode,
+        vision_auto_whitelist=vision_auto_whitelist,
+        vision_auto_blacklist=vision_auto_blacklist,
+        vision_pending_ttl_sec=vision_pending_ttl_sec,
+        vision_keep_alive=vision_keep_alive,
+        vision_max_width=vision_max_width,
 
         # Dictation
         dictation_enabled=dictation_enabled,

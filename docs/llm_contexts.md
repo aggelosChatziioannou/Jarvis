@@ -184,6 +184,15 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Weather** ([src/jarvis/tools/builtin/weather.py](src/jarvis/tools/builtin/weather.py), ~line 60) — `ollama_chat_model`, parses location/time/unit from the query.
 - **Nutrition log_meal** ([src/jarvis/tools/builtin/nutrition/log_meal.py](src/jarvis/tools/builtin/nutrition/log_meal.py), lines 48 & 136) — `ollama_chat_model`, extracts nutrients, confirms logging.
 
+## 15. Vision Model (describe + grounding fallback)
+
+- **File**: [src/jarvis/llm.py](src/jarvis/llm.py) `call_vision_model()`; called from [src/jarvis/vision/model_client.py](src/jarvis/vision/model_client.py) (`describe` / `locate`), via the vision tools (`seeScreen`, `clickScreen` fallback, etc.).
+- **Trigger**: only when `cfg.vision_enabled` and a vision tool runs — `seeScreen`/`observe` always; `locateOnScreen`/`clickScreen` **only as a fallback** when Tesseract word-box locate finds no text label. Read/OCR (`readScreen`) is pure Tesseract, **no LLM call**.
+- **Model / gating**: `cfg.vision_model` (default `qwen2.5vl:3b`). Multimodal: a single user message carrying a base64 PNG on `images`, POSTed to `/api/chat`. moondream was rejected in Phase-1 (empty grounding output).
+- **Inputs**: one in-memory screenshot (PIL → base64 PNG, never on disk) + a fixed English instruction (DESCRIBE_PROMPT or the `bbox_2d` LOCATE prompt). Not user-language matching.
+- **Output**: free text — a scene description (consumed by the reply loop to answer "what do you see") or a grounding reply (`{"bbox_2d":[...]}` / `{"x":,"y":}` / prose) parsed to a centre point by `parse_point_or_box`, then converted to absolute desktop coords.
+- **Limits**: `timeout_sec` 30s, `num_ctx` 4096, `keep_alive` = `cfg.vision_keep_alive` (default "5m" so the bursty vision model self-evicts and returns VRAM to the resident chat model). Loaded on-demand. Chat path (`chat_with_messages`/`call_llm_direct`) is untouched.
+
 ---
 
 ## Frequency / Size Summary

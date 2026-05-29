@@ -19,6 +19,13 @@ pycaw>=20240210; sys_platform == "win32"
 comtypes>=1.2.0; sys_platform == "win32"
 pytesseract==0.3.13
 Pillow==10.4.0
+# Vision & Screen Interaction Engine: mss for fast multi-monitor capture
+# (in-memory PIL images, never written to disk); pyautogui for click/type/
+# scroll. pywin32 powers foreground-window/app detection in the AUTO-mode
+# safety gate (win32gui/win32process). Local only, no network.
+mss>=9.0.1
+pyautogui>=0.9.54
+pywin32>=306; sys_platform == "win32"
 # Silero VAD (default) is the primary backend; webrtcvad is the fallback
 # when silero-vad fails to import on the target machine.
 silero-vad>=5.1.2

@@ -166,6 +166,7 @@ Jarvis starts listening automatically — just say "Jarvis" and talk!
 - **Adaptive Tone** - Automatically surgical for code, pragmatic for business, encouraging for wellbeing — no manual mode switching
 - **Smart Tool Selection** - Embedding-based relevance filtering picks only the tools needed per query — add unlimited MCP tools without performance degradation
 - **Built-in Tools** - Screenshot OCR, web search (DuckDuckGo → Brave → Wikipedia fallback chain with auto-fetch), weather, file access, nutrition tracking, location awareness, plus a tool-discovery escape hatch the agent uses to widen its own toolset mid-reply
+- **Vision & Screen Interaction** *(opt-in)* - Ask "what do you see?", "read this" (bilingual OCR), "find/click the X button", "type …" or "scroll down". Tesseract reads text and locates labelled elements; a local vision model (qwen2.5vl) handles descriptions and icon grounding. Three safety modes (Observe / Assist with spoken confirmation / Auto for whitelisted apps); screenshots stay in memory and never touch disk. Off by default (`vision_enabled`); see [docs/VISION_SETUP.md](docs/VISION_SETUP.md)
 - **Knowledge Graph Memory** - Self-organising memory that learns from conversations, auto-splits by topic, and surfaces relevant knowledge automatically
 - **Natural Voice** - Say "Jarvis" anywhere in your sentence, interrupt with "stop", follow up without repeating the wake word
 - **Dictation Mode** - Free, offline alternative to WisprFlow — hold a hotkey, speak, release to paste text into any app
