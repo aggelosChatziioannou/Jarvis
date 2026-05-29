@@ -124,9 +124,10 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Trigger**: after each daily summary (#9). Background.
 - **Model**: `ollama_chat_model`.
 - **Inputs**: summary text + optional date.
-- **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER. The DO-NOT-EXTRACT block hardens two recurring traps: assistant-generated recommendations (would-a-different-assistant-give-the-same-answer? heuristic separates these from external lookups, which DO count as facts) and transient snapshots like the current weather / time of day (described as "moments not facts" so the model stops conflating ephemera with persistent climate / location knowledge).
-- **Output**: list of `(branch_id, fact_text)` tuples → routed into the tagged branch via branch-pinned descent (no cross-branch contamination).
-- **Limits**: `timeout_sec`. Failures → empty list.
+- **System prompt**: inline — asks for JSON array of `{"branch": "USER|DIRECTIVES|WORLD", "fact": "..."}` objects, with a heuristic ("user telling the assistant how to behave → DIRECTIVES; user telling the assistant about themselves → USER; external facts → WORLD"). Unknown branches default to USER. The DO-NOT-EXTRACT block hardens four recurring traps: (1) assistant-generated recommendations (would-a-different-assistant-give-the-same-answer? heuristic separates these from external lookups, which DO count as facts); (2) transient snapshots like the current weather / time of day (described as "moments not facts" so the model stops conflating ephemera with persistent climate / location knowledge); (3) **low-confidence identity or language claims** — never assert who the user is, where a named person is located, or which language the user speaks unless the user stated it plainly (a mistranscribed token is not evidence; a name must not become a place); (4) **transcription artefacts** — STT residue on silence (subtitle credits, channel-subscribe outros, stray filler) is never a fact. A separate **attribution rule** keeps third-party claims sourced ("According to <source>, ...") rather than asserted as bare fact.
+- **Write-time hygiene gate (deterministic belt to the prompt's braces)**: after the LLM returns candidate facts and before routing, each fact is dropped if `looks_like_hallucination()` (the shared STT blocklist in [src/jarvis/listening/hallucinations.py](src/jarvis/listening/hallucinations.py)) matches, or if `_looks_like_transient_fact()` detects a live-reading SHAPE (numeric temperature, clock time, or a weather/time word adjacent to a "currently/right now"-style marker). The shapes are data formats, not human-language word lists, so the language-agnostic rule holds (a number + degree sign is a reading in any language). Per-fact, so a mixed batch keeps its legitimate facts — never an all-or-nothing wipe. The drop count is logged.
+- **Output**: list of `(branch_id, fact_text)` tuples (surviving the gate) → routed into the tagged branch via branch-pinned descent (no cross-branch contamination).
+- **Limits**: `timeout_sec`. Failures → empty list. Temperature 0 — rule-following classification, not creative generation.
 
 ## 11. Knowledge Graph Best-Child Picker
 
@@ -146,6 +147,17 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **System prompt**: defines an ordered rule set — contradiction/reversal drops the old version, near-duplicate phrasings collapse to one, repeated daily activities consolidate into patterns, independent attributes coexist (visible contradictions are NOT silently dropped), common-knowledge facts are pruned. Demands a bare `{"facts": [...]}` JSON object. Parser tries direct `json.loads` first, then a scoped regex (no greedy `\{.*\}`) before giving up.
 - **Output**: `MergeResult(success: bool, incorporated_indices: list[int])`. The revised fact list is written back as the node's full `data`; `incorporated_indices` tells the orchestrator which inputs survived as new lines (under NFKC + casefold matching) so consolidated-out facts aren't reported as "newly stored". Subsumes per-flush supersession, near-duplicate dedupe, and ongoing consolidation in a single call. Because the latest prompt rewrites the whole node, updated conventions propagate to old data without a separate migration step.
 - **Limits**: 20s timeout. **Hallucination guard**: rewrites with more than `len(existing) + len(new) + 2` lines are rejected as runaway output. Fail-open on any error, parse failure, oversized rewrite, or empty rewrite → caller falls back to plain `append_to_node` for each new fact so they still land (a contradiction is recoverable; a silent wipe or hallucinated bloat is not).
+
+## 11c. Knowledge Graph Fact Scrub (review-gated cleanup)
+
+- **File**: [src/jarvis/memory/graph_ops.py](src/jarvis/memory/graph_ops.py) — `_judge_facts()` (called by `scrub_graph_facts()`; system prompt at `_SCRUB_JUDGE_SYSTEM_PROMPT`).
+- **Trigger**: **user-triggered only**, never on the write path. `POST /api/graph/scrub-facts` (propose) on the FastAPI control server runs one verdict call per non-empty branch node (User / Directives / World). The mirror op `apply_graph_scrub()` (`?apply=true`) does NOT call the LLM — it just removes the user-confirmed lines.
+- **Model**: `ollama_chat_model`. Temperature 0 — rule-following audit.
+- **Inputs**: one branch node's `data` split one-fact-per-line, numbered, wrapped in the `<<<BEGIN/END UNTRUSTED WEB EXTRACT>>>` fence so stored facts (prior LLM output) are treated as data, not instructions.
+- **System prompt**: `_SCRUB_JUDGE_SYSTEM_PROMPT` — asks for a per-fact `{"fact", "drop": bool, "reason"}` JSON array flagging the same garbage classes the write-time gate guards plus the ones a regex can't catch: transcription artefacts, hallucinations, entity-confusion, low-confidence identity/language, transient-as-fact, generic trivia. "When unsure, KEEP" — a wrongly-dropped fact is lost, a wrongly-kept one is removable next time.
+- **Output**: `{"proposals": [{branch, fact, drop, reason}], "applied": False}`. **Proposal only — the graph is never mutated by this call.** Verdicts are matched back to real stored lines via NFKC + casefold folding, so the model cannot propose deleting a fact that was never stored. The local user reviews the proposals; only confirmed deletions reach `apply_graph_scrub()`.
+- **Privacy**: the propose response carries raw fact text (it is the local user's review surface). The apply path streams NDJSON **counts only** (`{type, total, processed, removed}` / class-name-only `error`), locked behind a whitelist test, so the streaming UI cannot exfiltrate memory content. Mirrors the diary scrub (#9 sweep) contract.
+- **Limits**: `timeout_sec` (30s default). **Fail-open per branch**: a branch whose verdict fails (LLM down, unparseable JSON) contributes no proposals and the walk continues; a scrub that can't get a verdict proposes nothing, never guesses a deletion.
 
 ## 12. Task-list Planner (pre-flight decomposition, gates the whole turn)
 
@@ -190,6 +202,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 10 | Graph extraction | ~1/session | No (background) | LARGE |
 | 11 | Graph best-child | 0-N | No (background) | SMALL (via router chain) |
 | 11b | Graph node merge | 0-N (per node, batched) | No (background) | SMALL (via router chain) |
+| 11c | Graph fact scrub (propose) | 0-3 (per branch) | user-triggered only | LARGE |
 | 12 | Planner (plan_query) | 1 | yes (planner_enabled) | LARGE/SMALL (tracks chat model) |
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |

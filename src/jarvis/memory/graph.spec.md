@@ -170,6 +170,35 @@ Cold start: each fact lands directly on its tagged branch root (User / Directive
 
 LLM failure at any step is non-fatal — the diary update still succeeds, and the graph simply misses that cycle.
 
+### Write-Time Hygiene Gate
+
+The extractor (`extract_graph_memories` in `graph_ops.py`) hardens the **extract + classify** step (2 above) with two layers — the prompt is the braces, a deterministic filter is the belt. Both run before any fact is routed.
+
+**Prompt rules (the braces).** The extractor `system_prompt` carries an explicit DO-NOT-EXTRACT block. Beyond the long-standing bans (assistant recommendations, transient weather/time snapshots, common knowledge, vague statements, meta-interaction), it adds three rules that exist because specific field incidents poisoned the graph:
+
+1. **Low-confidence identity or language claims** — never assert who the user is, where a named person is located, or which language the user speaks unless the user stated it plainly. A mistranscribed or ambiguous token is not evidence: never infer "the user speaks <language>" from a stray foreign-looking word, and never turn a person's name into a place ("<person> is located in ..."). When unsure, drop — a missing fact is recoverable, a wrong identity poisons every future reply.
+2. **Transcription artefacts** — speech-to-text residue on silence (subtitle credits, channel-subscribe outros, stray filler) is never a fact.
+3. **Third-party attribution** — a claim sourced to someone the user named (a friend said, an article claimed) keeps its attribution ("According to <source>, ...") rather than being asserted as bare fact, so an unverified claim is not later recalled as something the assistant confirmed.
+
+**Deterministic filter (the belt).** After the LLM yields candidate facts and before they are routed, each fact is dropped when either:
+
+- `looks_like_hallucination(fact_text)` matches the **shared** STT hallucination blocklist (`src/jarvis/listening/hallucinations.py`) — the same exact-match + substring set used to reject Whisper hallucinations at the audio boundary, reused here so a hallucination that leaked through STT into a summary cannot become an enduring fact; or
+- `_looks_like_transient_fact(fact_text)` detects a live-reading **shape**: a numeric temperature (`12°C`, `22 degrees`), a clock time (`3:45 PM`, `15:30`), or a weather/time word adjacent to a "currently / right now / experiencing" snapshot marker. These are data formats, not human-language word lists, so the language-agnostic rule holds — a number followed by a degree sign is a reading in any language. A durable climate statement without a reading ("Ioannina has cold, snowy winters") is preserved.
+
+The filter is **per-fact**: a mixed batch keeps its legitimate facts rather than being wiped wholesale, and the drop count is logged. Temperature is pinned to 0 so the classification is deterministic.
+
+This is the graph's own second line of defence, independent of the diary summariser's hygiene (`summariser.spec.md`): the summariser keeps the diary clean for all consumers, this gate protects the graph specifically against garbage that slipped past the summariser or only manifests at extraction time.
+
+### Review-Gated Fact Scrub
+
+The write-time gate stops new garbage; facts stored **before** the gate existed — or subtle ones a deterministic filter can't catch (entity-confusion, hallucinated identities, generic trivia) — are cleaned by a user-triggered, **review-gated** scrub that mirrors the diary deflection sweep (`summariser.spec.md` → LLM Rewrite Sweep). Two stages, both in `graph_ops.py`:
+
+**Propose — `scrub_graph_facts(store, ollama_base_url, ollama_chat_model, timeout_sec=30.0)`.** Walks the User / Directives / World branch nodes, splits each node's `data` one-fact-per-line, and asks the chat model (`_judge_facts` → `_SCRUB_JUDGE_SYSTEM_PROMPT`, temperature 0) for a per-fact verdict. The facts are wrapped in the same `<<<BEGIN/END UNTRUSTED WEB EXTRACT>>>` fence the diary scrub uses, so stored facts (prior LLM output) are treated as data, not instructions. Returns `{"proposals": [{branch, fact, drop, reason}], "applied": False}`. **Nothing is mutated.** Each returned verdict is matched back to a real stored line via the same NFKC + casefold folding the dedupe path uses, so the model cannot propose deleting a fact that was never stored. The prompt instructs "when unsure, KEEP" — a wrongly-dropped fact is lost, a wrongly-kept one is removable next time. **Fail-open per branch**: a branch whose verdict fails (LLM down, unparseable JSON) contributes no proposals and the walk continues; a scrub that can't get a verdict proposes nothing, never guesses.
+
+**Apply — `apply_graph_scrub(store, approved_facts: list[dict]) -> dict`.** Takes the user-confirmed subset of proposals (`{branch, fact}` dicts) and removes exactly those lines from each branch node's `data` via `update_node`, preserving all other lines verbatim. Groups by branch so each node is rewritten at most once, and leaves a node byte-identical (no `updated_at` re-stamp) when nothing matched. Returns **counts only** (`{"removed": n}`) — never raw fact text. **No LLM call.** Matching uses the same Unicode folding, so casing/whitespace drift between the proposal and the stored line still removes the right line; an approved fact whose branch node is missing or whose text no longer matches is skipped, not fatal.
+
+**Privacy contract.** Raw fact text appears **only** in the propose response — the surface the local user reads to decide what to delete. The apply path streams counts/booleans only. Nothing is ever deleted automatically: the user reviews proposed deletions and confirms.
+
 ### Automatic Reads (via enrichment in `engine.py`)
 
 At the start of each reply cycle, the reply engine enriches the system prompt with graph context:
@@ -230,6 +259,7 @@ The graph explorer appears as the **Knowledge** tab in the memory viewer, positi
 | GET | `/api/graph/stats` | Node count and total data tokens (`total_tokens = 0` means the graph holds no knowledge) |
 | POST | `/api/graph/import-diary` | Import all diary summaries into graph (streaming NDJSON) |
 | POST | `/api/graph/consolidate-all` | Self-consolidate every populated node (streaming NDJSON) — runs the merge LLM with no new facts on each node so updated conventions and supersession rules apply to historical data |
+| POST | `/api/graph/scrub-facts` | Review-gated fact cleanup on the FastAPI control server (`api_server.py`). Default (propose) returns deletion proposals as JSON for the local user to review; `?apply=true` (with a body of confirmed `{branch, fact}` facts) removes only those lines and streams NDJSON **counts only**. Nothing is deleted without confirmation. See "Review-Gated Fact Scrub" above |
 
 ### Import from Diary
 
