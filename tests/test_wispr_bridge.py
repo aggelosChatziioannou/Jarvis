@@ -481,3 +481,82 @@ class TestMicDeviceResolution:
             bridge.stop()
         except Exception:
             pass
+
+
+# ===========================================================================
+# W7 — live mic reconnect on Core Audio device change
+# ===========================================================================
+
+@pytest.mark.unit
+class TestMicReconnect:
+    """``reconnect()`` re-resolves the wake mic and reopens the input stream
+    ONLY when the resolved sounddevice index changes. Driven by the Core Audio
+    device watcher so an unplugged mic that returns (or a removed mic) is picked
+    up without a daemon restart. Fail-open: never raises."""
+
+    def test_reopens_stream_when_device_changes(self):
+        import jarvis.listening.wispr_bridge as wb
+        from unittest.mock import MagicMock, patch
+
+        bridge = _make_bridge()
+        bridge._started = True
+        bridge.device = 5
+        old_stream = MagicMock()
+        bridge.audio_stream = old_stream
+        bridge._resolve_mic_device = lambda: 7  # the chosen mic now maps to 7
+
+        new_stream = MagicMock()
+        with patch.object(wb.sd, "InputStream", return_value=new_stream) as p_stream:
+            changed = bridge.reconnect()
+
+        assert changed is True
+        assert p_stream.call_args.kwargs.get("device") == 7
+        new_stream.start.assert_called_once()
+        # Old stream retired only AFTER the new one is live.
+        old_stream.stop.assert_called_once()
+        old_stream.close.assert_called_once()
+        assert bridge.device == 7
+        assert bridge.audio_stream is new_stream
+
+    def test_noop_when_device_unchanged(self):
+        import jarvis.listening.wispr_bridge as wb
+        from unittest.mock import MagicMock, patch
+
+        bridge = _make_bridge()
+        bridge._started = True
+        bridge.device = 5
+        bridge.audio_stream = MagicMock()
+        bridge._resolve_mic_device = lambda: 5  # same index
+
+        with patch.object(wb.sd, "InputStream") as p_stream:
+            changed = bridge.reconnect()
+
+        assert changed is False
+        p_stream.assert_not_called()  # no churn when nothing changed
+        assert bridge.device == 5
+
+    def test_noop_when_not_started(self):
+        bridge = _make_bridge()
+        bridge._started = False
+        bridge._resolve_mic_device = lambda: 7
+        assert bridge.reconnect() is False
+
+    def test_fail_open_keeps_old_stream_when_reopen_raises(self):
+        import jarvis.listening.wispr_bridge as wb
+        from unittest.mock import MagicMock, patch
+
+        bridge = _make_bridge()
+        bridge._started = True
+        bridge.device = 5
+        old_stream = MagicMock()
+        bridge.audio_stream = old_stream
+        bridge._resolve_mic_device = lambda: 9
+
+        with patch.object(wb.sd, "InputStream", side_effect=OSError("device busy")):
+            changed = bridge.reconnect()
+
+        assert changed is False
+        # Reopen failed -> old stream left intact (NOT closed), bridge keeps running.
+        old_stream.close.assert_not_called()
+        assert bridge.device == 5
+        assert bridge.audio_stream is old_stream

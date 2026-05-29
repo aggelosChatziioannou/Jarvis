@@ -277,6 +277,10 @@ class WisprBridge:
         # Started flag (prevents double-start)
         self._started = False
 
+        # Serialises reconnect() so a burst of device-change events can't race
+        # the stream open/close against itself.
+        self._reconnect_lock = threading.Lock()
+
         atexit.register(self._cleanup_atexit_wrapper)
 
     # ----------------------------------------------------------------------
@@ -491,6 +495,66 @@ class WisprBridge:
 
         self._started = True
         return True
+
+    def reconnect(self) -> bool:
+        """Re-resolve the wake mic and reopen the input stream if it changed.
+
+        Called by the Core Audio device watcher (debounced) when Windows reports
+        a device change, so a chosen mic that was unplugged is picked up again
+        when it returns, and a removed mic falls back to the PortAudio default.
+        No-op (returns False) when the bridge has not started, or when the
+        resolved sounddevice index is unchanged and a stream is already open.
+
+        Opens the NEW stream before retiring the old one, so if the reopen
+        fails the existing stream keeps running. Fail-open: never raises; on any
+        error the existing stream is left intact and the bridge keeps running.
+        """
+        if not self._started:
+            return False
+        with self._reconnect_lock:
+            try:
+                new_device = self._resolve_mic_device()
+            except Exception as e:  # pragma: no cover - defensive
+                debug_log(f"reconnect: resolve raised ({e!r})", "voice")
+                return False
+            if new_device == self.device and self.audio_stream is not None:
+                return False  # selection unchanged and still open — nothing to do
+
+            debug_log(f"reconnect: wake mic {self.device!r} -> {new_device!r}", "voice")
+            old = self.audio_stream
+            try:
+                new_stream = sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=AUDIO_BLOCK_SIZE,
+                    device=new_device,
+                    callback=self._audio_callback,
+                )
+                new_stream.start()
+            except Exception as e:
+                debug_log(
+                    f"reconnect: reopen failed ({e!r}); keeping existing stream",
+                    "voice",
+                )
+                return False
+
+            # New stream is live — swap it in, then retire the old one.
+            self.device = new_device
+            self.audio_stream = new_stream
+            if old is not None:
+                try:
+                    old.stop()
+                except Exception:
+                    pass
+                try:
+                    old.close()
+                except Exception:
+                    pass
+            debug_log(
+                f"reconnect: wake mic reopened on device {new_device!r}", "voice"
+            )
+            return True
 
     def pause(self) -> None:
         """Suspend wake-word detection (used by MUTE from the control bus).

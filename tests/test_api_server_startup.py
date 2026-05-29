@@ -208,3 +208,24 @@ def test_start_in_background_records_uvicorn_crash(monkeypatch) -> None:
     assert err is not None and "boom" in str(err), (
         f"expected recorded crash to mention 'boom', got: {err!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# notify_devices_changed — live device-list refresh signal to the UI
+# ---------------------------------------------------------------------------
+
+
+def test_notify_devices_changed_bumps_and_publishes(monkeypatch) -> None:
+    """Each call bumps a monotonic counter and broadcasts it as devices_changed
+    on the voice-state socket, so the React Audio tab re-fetches the device
+    list the moment a device is plugged in or removed."""
+    from jarvis import api_server
+
+    seen = []
+    monkeypatch.setattr(api_server, "publish_state", lambda **kw: seen.append(kw))
+
+    first = api_server.notify_devices_changed()
+    second = api_server.notify_devices_changed()
+
+    assert second == first + 1  # monotonic
+    assert seen == [{"devices_changed": first}, {"devices_changed": second}]

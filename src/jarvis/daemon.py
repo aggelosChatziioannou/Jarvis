@@ -531,10 +531,40 @@ def main() -> None:
     # Initialize voice listening (only if dependencies available)
     print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
     voice_thread: Optional[threading.Thread] = None
+    device_watcher = None
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
     _set_active_listener(voice_thread)
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+
+    # Live audio device-change watcher (Core Audio IMMNotificationClient). On any
+    # add/remove/state/default change it (a) signals the UI to re-fetch the
+    # device list and (b) asks the listener to reconnect its wake mic. Fail-open:
+    # if pycaw/COM is unavailable the watcher delivers no events and the UI's
+    # periodic poll + per-play TTS re-resolution still adapt. Wrapped so it can
+    # never break daemon startup.
+    try:
+        from .output.device_watcher import DeviceWatcher
+        from . import api_server as _api_server_for_watch
+
+        def _on_audio_devices_changed() -> None:
+            try:
+                _api_server_for_watch.notify_devices_changed()
+            except Exception as _e:
+                debug_log(f"device watcher: UI notify failed ({_e!r})", "audio")
+            try:
+                voice_thread.reconnect_audio()
+            except Exception as _e:
+                debug_log(f"device watcher: mic reconnect failed ({_e!r})", "audio")
+
+        device_watcher = DeviceWatcher(on_change=_on_audio_devices_changed)
+        if device_watcher.start():
+            print("🔌 Audio device watcher active (live hot-plug detection)", flush=True)
+        else:
+            debug_log("audio device watcher inactive (pycaw/COM unavailable)", "audio")
+    except Exception as _e:
+        debug_log(f"audio device watcher setup failed (non-fatal): {_e!r}", "audio")
+        device_watcher = None
 
     # Initialize dictation engine (hold-to-dictate)
     dictation = None
@@ -654,6 +684,15 @@ def main() -> None:
             debug_log("stopping dictation engine...", "jarvis")
             dictation.stop()
             debug_log("dictation engine stopped", "jarvis")
+
+        # Stop the device watcher before the listener so a late device-change
+        # callback can't race the wake-mic teardown.
+        if device_watcher is not None:
+            try:
+                device_watcher.stop()
+                debug_log("audio device watcher stopped", "jarvis")
+            except Exception as _e:
+                debug_log(f"audio device watcher stop error: {_e!r}", "jarvis")
 
         if voice_thread is not None:
             debug_log("stopping voice thread...", "jarvis")

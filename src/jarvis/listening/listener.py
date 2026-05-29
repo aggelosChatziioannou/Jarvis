@@ -737,6 +737,23 @@ class VoiceListener(threading.Thread):
             except Exception as e:
                 debug_log(f"WisprBridge stop error: {e}", "voice")
 
+    def reconnect_audio(self) -> bool:
+        """Re-resolve + reopen the wake mic after a Core Audio device change.
+
+        Routed from the device watcher's debounced callback. Delegates to the
+        Wispr bridge (the only backend that owns a wake-mic stream); a no-op in
+        whisper mode. Fail-open: never raises. Returns True only if a stream was
+        actually reopened.
+        """
+        bridge = self._wispr_bridge
+        if bridge is None:
+            return False
+        try:
+            return bool(bridge.reconnect())
+        except Exception as e:  # pragma: no cover - defensive
+            debug_log(f"reconnect_audio: bridge.reconnect raised ({e!r})", "voice")
+            return False
+
     def _consume_manual_finalize(self) -> bool:
         """Atomically read-and-clear the manual-finalize handshake.
 

@@ -86,6 +86,26 @@ def publish_state(**fields: Any) -> None:
     _broadcast_to_subscribers(_state_subscribers, _state_subscribers_lock, dict(_voice_state))
 
 
+_devices_changed_seq = 0
+_devices_changed_lock = threading.Lock()
+
+
+def notify_devices_changed() -> int:
+    """Signal the UI that the audio device list changed (live, from the watcher).
+
+    Bumps a monotonic counter and broadcasts it as ``devices_changed`` on the
+    voice-state socket, so the React Audio tab re-fetches ``/api/audio/devices``
+    the moment a device is plugged in or removed. Returns the new sequence
+    value. Safe to call from any thread.
+    """
+    global _devices_changed_seq
+    with _devices_changed_lock:
+        _devices_changed_seq += 1
+        seq = _devices_changed_seq
+    publish_state(devices_changed=seq)
+    return seq
+
+
 def _broadcast_to_subscribers(
     subs: List[asyncio.Queue],
     lock: threading.Lock,
