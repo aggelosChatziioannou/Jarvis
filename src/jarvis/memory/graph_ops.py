@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Iterator, NamedTuple, Optional
 
 from ..debug import debug_log
@@ -961,6 +962,49 @@ def _extract_facts_object(response: str) -> Optional[dict]:
     return None
 
 
+def _normalised_line_set(text: str) -> set:
+    return {normalise_fact(line) for line in (text or "").split("\n") if line.strip()}
+
+
+def _single_dropped_line(old_text: str, new_text: str) -> Optional[str]:
+    """The one line present in old but not new (under fact-normalisation), else None."""
+    new_set = _normalised_line_set(new_text)
+    dropped = [
+        line for line in (old_text or "").split("\n")
+        if line.strip() and normalise_fact(line) not in new_set
+    ]
+    return dropped[0].strip() if len(dropped) == 1 else None
+
+
+def _record_history(store, node_id, *, old_text, new_text, change_reason) -> None:
+    """Record a supersession audit row and bump the node's version.
+
+    Fires only when the fact SET actually changed (reorder / whitespace-only
+    rewrites are no-ops). The version bump is intrinsic to the node; the audit
+    row is best-effort via the optional ``store.history_sink`` and never gates
+    the merge succeeding.
+    """
+    if _normalised_line_set(old_text) == _normalised_line_set(new_text):
+        return
+    new_version = store.bump_version(node_id)
+    sink = getattr(store, "history_sink", None)
+    if sink is None:
+        return
+    try:
+        sink(
+            node_id=node_id,
+            branch=store._resolve_branch(node_id),
+            old_text=old_text,
+            new_text=new_text,
+            previous_value=_single_dropped_line(old_text, new_text),
+            change_reason=change_reason,
+            version=new_version,
+            ts_utc=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as exc:
+        debug_log(f"memory_history sink failed (non-fatal): {type(exc).__name__}", "memory")
+
+
 def merge_node_data(
     store: GraphMemoryStore,
     node_id: str,
@@ -971,6 +1015,7 @@ def merge_node_data(
     thinking: bool = False,
     picker_model: Optional[str] = None,
     node: Optional[MemoryNode] = None,
+    change_reason: str = "merge_supersede",
 ) -> MergeResult:
     """Merge ``new_facts`` into ``node_id``'s data via one LLM rewrite.
 
@@ -1103,6 +1148,9 @@ def merge_node_data(
             incorporated_indices.append(idx)
 
     new_data = "\n".join(cleaned)
+    # Additive audit side-write BEFORE the data write; the merge's own output
+    # (new_data) is unchanged by this hook. No-op rewrites record nothing.
+    _record_history(store, node_id, old_text=node.data or "", new_text=new_data, change_reason=change_reason)
     store.update_node(node_id, data=new_data)
     return MergeResult(success=True, incorporated_indices=incorporated_indices)
 

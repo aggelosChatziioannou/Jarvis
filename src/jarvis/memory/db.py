@@ -60,6 +60,22 @@ CREATE TRIGGER IF NOT EXISTS summaries_au AFTER UPDATE ON conversation_summaries
   INSERT INTO summaries_fts(summaries_fts, rowid, summary, topics) VALUES('delete', old.id, old.summary, old.topics);
   INSERT INTO summaries_fts(rowid, summary, topics) VALUES (new.id, new.summary, new.topics);
 END;
+
+-- Memory change-history: audit trail of graph node supersession (versioning).
+-- Lives in the diary DB (not the graph store) so history outlives node deletion.
+CREATE TABLE IF NOT EXISTS memory_history (
+  id             INTEGER PRIMARY KEY,
+  node_id        TEXT NOT NULL,
+  branch         TEXT,
+  old_text       TEXT,
+  new_text       TEXT,
+  previous_value TEXT,
+  change_reason  TEXT NOT NULL,
+  version        INTEGER NOT NULL,
+  ts_utc         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memhist_node ON memory_history(node_id);
+CREATE INDEX IF NOT EXISTS idx_memhist_ts ON memory_history(ts_utc DESC);
 """
 
 _VSS_SCHEMA_SQL = """
@@ -313,6 +329,33 @@ class Database:
                     micros_json,
                     confidence,
                 ),
+            )
+            self.conn.commit()
+            return int(cur.lastrowid)
+
+    # --- Memory change-history API ---
+    def append_memory_history(
+        self,
+        *,
+        node_id: str,
+        old_text: Optional[str],
+        new_text: Optional[str],
+        change_reason: str,
+        version: int,
+        ts_utc: str,
+        branch: Optional[str] = None,
+        previous_value: Optional[str] = None,
+    ) -> int:
+        """Record one graph-node supersession. Used as GraphMemoryStore.history_sink."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO memory_history
+                    (node_id, branch, old_text, new_text, previous_value, change_reason, version, ts_utc)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (node_id, branch, old_text, new_text, previous_value, change_reason, version, ts_utc),
             )
             self.conn.commit()
             return int(cur.lastrowid)

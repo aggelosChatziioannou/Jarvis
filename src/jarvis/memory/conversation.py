@@ -1763,6 +1763,10 @@ def update_diary_from_dialogue_memory(
                 from .graph_ops import update_graph_from_dialogue
 
                 graph_store = GraphMemoryStore(db.db_path)
+                # Record supersession history to the diary DB (both stores are
+                # alive here). Absence elsewhere is fine — the audit is never a
+                # gate on the merge succeeding.
+                graph_store.history_sink = db.append_memory_history
                 # Retrieve the summary we just stored to use for extraction
                 today = datetime.now(timezone.utc).date().isoformat()
                 existing = db.get_conversation_summary(today, source_app)
