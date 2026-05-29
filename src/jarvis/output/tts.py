@@ -22,13 +22,15 @@ from ..debug import debug_log, info_log, log_state_transition
 # Module-scope so the live output-device resolver (and its tests) can read
 # settings fresh on each call without threading config through the engines.
 # Imported lazily-safe: if config import fails at module load we fall back to a
-# stub that returns an object with no tts_output_device (follow mode).
+# stub with empty audio-selection keys, so the resolver fails open to the OS
+# default device (no remembered selection to honour).
 try:  # pragma: no cover - trivial import guard
     from ..config import load_settings  # type: ignore
 except Exception:  # pragma: no cover
     def load_settings():  # type: ignore
         class _Empty:
-            tts_output_device = None
+            audio_output_endpoint_id = ""
+            audio_output_name = ""
         return _Empty()
 
 
@@ -294,22 +296,21 @@ def _resolve_output_device(spec) -> Optional[int]:
 def _resolve_output_device_live() -> Optional[int]:
     """Resolve the playback output device FRESH on every call — no caching.
 
-    This is what makes both manual device changes AND Windows-default changes
-    apply LIVE (no restart):
+    Resolves the PERSISTED audio selection (by stable endpoint id, friendly
+    name as fallback) to a sounddevice index via
+    ``audio_devices.resolve_endpoint_to_sd_index(cfg.audio_output_endpoint_id,
+    cfg.audio_output_name, kind="output")``. Resolving fresh per call is what
+    makes a just-saved selection apply LIVE (no restart) and lets playback
+    re-attach automatically when the chosen device is unplugged then replugged.
 
-      * If ``cfg.tts_output_device`` is set (non-empty) → match THAT name to a
-        sounddevice index via ``audio_devices.match_name_to_sd_index``.
-      * Else (follow mode) → read the CURRENT Windows default output name via
-        ``audio_devices.get_default_output_name`` and match THAT. So unplugging
-        the headphones and switching Windows to the speakers re-routes Jarvis on
-        the very next utterance.
+    There is deliberately NO "follow the Windows default" branch: the selection
+    is purely remembered (the redesign removed follow-default, which was
+    unstable for users whose Windows default is not their real speaker). When
+    the selected device is currently absent the resolver returns ``None`` and
+    logs once; the caller then fails open to PortAudio's own default device so
+    there is still sound until the device reappears.
 
-    Fail-open: any miss / error → ``None`` so playback uses PortAudio's own
-    default device.
-
-    Replaces the previous module-cached ``_get_configured_output_device`` whose
-    value was pinned at first call, requiring a restart for changes to take
-    effect.
+    Fail-open: any miss / error → ``None`` so playback uses the OS default.
     """
     try:
         from . import audio_devices
@@ -318,24 +319,29 @@ def _resolve_output_device_live() -> Optional[int]:
         return None
     try:
         cfg = load_settings()
-        spec = getattr(cfg, "tts_output_device", None)
+        endpoint_id = getattr(cfg, "audio_output_endpoint_id", "") or ""
+        name = getattr(cfg, "audio_output_name", "") or ""
     except Exception:
-        spec = None
+        endpoint_id = ""
+        name = ""
 
     try:
-        if spec is not None and str(spec).strip() != "":
-            idx = audio_devices.match_name_to_sd_index(str(spec).strip(), kind="output")
-            if idx is not None:
-                debug_log(f"_resolve_output_device_live: configured '{spec}' → {idx}", "tts")
-            return idx
-        # Follow mode — track the live Windows default output.
-        default_name = audio_devices.get_default_output_name()
-        if not default_name:
-            return None
-        idx = audio_devices.match_name_to_sd_index(default_name, kind="output")
+        idx = audio_devices.resolve_endpoint_to_sd_index(
+            endpoint_id, name, kind="output"
+        )
         if idx is not None:
             debug_log(
-                f"_resolve_output_device_live: follow default '{default_name}' → {idx}",
+                f"_resolve_output_device_live: id={endpoint_id!r} "
+                f"name={name!r} -> sd index {idx}",
+                "tts",
+            )
+        else:
+            # Selected device absent (or nothing selected). Log once here; the
+            # play path falls open to the OS default so audio still plays until
+            # the chosen device returns.
+            debug_log(
+                "_resolve_output_device_live: output device disconnected "
+                f"(id={endpoint_id!r}, name={name!r}) — falling open to default",
                 "tts",
             )
         return idx
@@ -1994,10 +2000,11 @@ class PiperTTS:
 
             play_position[0] = end
 
-        # Resolve the output device FRESH on every play (no cache): honours a
-        # just-changed cfg.tts_output_device AND, in follow mode, the CURRENT
-        # Windows default output. So unplugging the headphones re-routes Piper
-        # on the next utterance with no restart. None → PortAudio default.
+        # Resolve the output device FRESH on every play (no cache): honours the
+        # persisted endpoint-id selection so a just-saved device applies with no
+        # restart, and Piper re-attaches when an unplugged device returns.
+        # None → the selected device is absent (or none chosen), so fail open to
+        # the PortAudio default and keep audio flowing until it reappears.
         configured_device = _resolve_output_device_live()
 
         # WASAPI shared mode rejects sample rates that differ from the
