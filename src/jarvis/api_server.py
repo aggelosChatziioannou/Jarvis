@@ -24,7 +24,7 @@ from typing import Any, Deque, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
@@ -309,6 +309,118 @@ def clear_memory() -> Dict[str, bool]:
     """Best-effort clear — depends on the schema. Logged for now."""
     publish_log("warning", "Memory clear requested via API (not fully wired)")
     return {"ok": True}
+
+
+# ---------- Graph-fact scrub (review-gated) ----------
+#
+# Mirrors the diary deflection scrub's contract (NDJSON-streaming on the
+# apply path, counts-only on every streamed event) but for the knowledge
+# graph. Two stages behind ONE endpoint, switched by the ``apply`` query
+# flag:
+#   • propose (default): runs ``scrub_graph_facts`` and returns the per-
+#     fact deletion proposals as plain JSON. Raw fact text is allowed in
+#     THIS response only — it is the review surface the LOCAL user reads
+#     to decide what to delete. Nothing is mutated.
+#   • apply (``?apply=true``): runs ``apply_graph_scrub`` on the user-
+#     confirmed subset and STREAMS NDJSON progress carrying COUNTS ONLY —
+#     never raw fact text — so the streaming UI cannot become a data-
+#     exfiltration channel. Privacy first.
+#
+# The store/settings resolution is factored into two helpers so tests can
+# stub them without opening the live SQLite graph.
+
+
+def _resolve_graph_store():
+    """Open the knowledge-graph store at the configured DB path.
+
+    Read-mostly: never triggers the legacy-shape migration (that is the
+    daemon start-up path's job — see graph.spec.md). Kept as a module-
+    level function so tests can monkeypatch it.
+    """
+    from .memory.graph import GraphMemoryStore
+
+    settings = _load_settings_safe()
+    return GraphMemoryStore(settings.db_path)
+
+
+def _load_settings_safe():
+    """Resolve runtime settings for the graph-scrub endpoint.
+
+    Thin wrapper around ``load_settings`` so tests can monkeypatch the
+    whole resolution in one place.
+    """
+    from .config import load_settings
+
+    return load_settings()
+
+
+class GraphScrubApply(BaseModel):
+    # The user-confirmed subset of proposals to delete. Each item is a
+    # ``{"branch", "fact"}`` dict echoed back from the propose response.
+    approved: List[Dict[str, Any]] = []
+
+
+@app.post("/api/graph/scrub-facts")
+def graph_scrub_facts(apply: bool = False, body: Optional[GraphScrubApply] = None):
+    """Propose (default) or apply (``?apply=true``) graph-fact deletions.
+
+    Propose returns ``{"proposals": [...], "applied": false}`` as JSON —
+    raw fact text included, since this is the local user's review surface.
+    Apply streams NDJSON (``start`` → ``complete``) with counts only.
+
+    Both paths fail open: the underlying ops swallow per-branch LLM
+    failures, and the apply stream surfaces only an exception *class name*
+    on a hard error so a corrupted fact's content cannot leak via a
+    stringified exception.
+    """
+    from .memory import graph_ops
+
+    if not apply:
+        # ── Propose: review-gated, no mutation. Plain JSON (the local
+        # user reads the raw facts here to decide what to delete).
+        try:
+            settings = _load_settings_safe()
+            store = _resolve_graph_store()
+            result = graph_ops.scrub_graph_facts(
+                store,
+                settings.ollama_base_url,
+                settings.ollama_chat_model,
+            )
+        except Exception as e:
+            debug_log(f"graph scrub propose failed: {type(e).__name__}", "memory")
+            # Fail-open: an empty proposal set is a safe "nothing to do".
+            return {"proposals": [], "applied": False}
+        return result
+
+    # ── Apply: stream NDJSON counts only. The raw approved facts arrive in
+    # the request body (already reviewed by the user); the RESPONSE stream
+    # carries only counts so it cannot echo memory content to the browser.
+    approved = list(body.approved) if body is not None else []
+
+    def generate():
+        try:
+            total = len(approved)
+            yield json.dumps({"type": "start", "total": total}) + "\n"
+
+            store = _resolve_graph_store()
+            result = graph_ops.apply_graph_scrub(store, approved)
+
+            yield json.dumps({
+                "type": "complete",
+                "processed": total,
+                "removed": int(result.get("removed", 0)),
+            }) + "\n"
+        except Exception as e:
+            # Surface only the class name to the streaming UI so an
+            # approved fact's content cannot leak via the exception message.
+            debug_log(f"graph scrub apply failed: {type(e).__name__}", "memory")
+            yield json.dumps({"type": "error", "message": type(e).__name__}) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------- Fast paths ----------
