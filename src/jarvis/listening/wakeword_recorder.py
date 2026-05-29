@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 import wave
 from pathlib import Path
@@ -102,6 +103,12 @@ def record_segment(seconds: float = DEFAULT_SECONDS, *, device=None, sd=None) ->
 
 
 def _main() -> None:
+    # Windows consoles default to cp1252; force UTF-8 so the emoji prompts below
+    # don't crash with UnicodeEncodeError when run outside the daemon.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     p = argparse.ArgumentParser(
         description="Record custom 'Hey Jarvis' wake-word training data")
     p.add_argument("--label", required=True,
