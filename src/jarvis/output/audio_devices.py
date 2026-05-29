@@ -132,6 +132,168 @@ def _active_friendly_names() -> Optional[list[str]]:
         return None
 
 
+def _default_endpoint_id(getter) -> Optional[str]:
+    """Return the endpoint id of a pycaw default-endpoint getter, or None.
+
+    ``getter`` is ``AudioUtilities.GetSpeakers`` or ``GetMicrophone``. The
+    object they return may be a wrapped ``AudioDevice`` (``.id``) or, for
+    ``GetMicrophone``, a raw IMMDevice (``.GetId()``). Try both. Fail-open to
+    ``None`` so a missing default never breaks the listing.
+    """
+    try:
+        dev = getter()
+    except Exception:
+        return None
+    if dev is None:
+        return None
+    dev_id = getattr(dev, "id", None)
+    if dev_id:
+        return str(dev_id)
+    try:
+        raw = dev.GetId()
+        return str(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _enumerate_endpoints(data_flow_value: int):
+    """Yield ``(id, name)`` for ACTIVE Core Audio endpoints of one flow.
+
+    ``data_flow_value`` is ``EDataFlow.eRender.value`` (0, outputs) or
+    ``EDataFlow.eCapture.value`` (1, inputs). Uses
+    ``AudioUtilities.GetAllDevices(data_flow=..., device_state=ACTIVE)`` so the
+    render/capture split + the Active filter are done by Core Audio itself
+    (the same enumerator that backs the live device list).
+
+    Raises on pycaw failure — the public caller decides the fail-open shape.
+    """
+    from pycaw.utils import AudioUtilities
+    from pycaw.constants import AudioDeviceState, DEVICE_STATE
+
+    active_mask = DEVICE_STATE.ACTIVE.value
+    out: list[tuple[str, str]] = []
+    for dev in AudioUtilities.GetAllDevices(
+        data_flow=data_flow_value, device_state=active_mask
+    ):
+        try:
+            # Belt-and-braces: the enumerator already filtered to ACTIVE, but
+            # re-check so a fake/edge case that ignores the mask still drops
+            # inactive endpoints.
+            if getattr(dev, "state", None) != AudioDeviceState.Active:
+                continue
+            dev_id = getattr(dev, "id", None)
+            fname = getattr(dev, "FriendlyName", None)
+            if dev_id and fname:
+                out.append((str(dev_id), str(fname)))
+        except Exception:
+            continue
+    return out
+
+
+def list_devices() -> dict:
+    """Enumerate live input/output devices with STABLE endpoint ids.
+
+    Returns::
+
+        {
+          "inputs":  [{"id", "name", "is_default", "available"}, ...],  # capture
+          "outputs": [{"id", "name", "is_default", "available"}, ...],  # render
+        }
+
+    Source of truth = pycaw Windows Core Audio (render = outputs, capture =
+    inputs), Active endpoints only, each carrying the stable endpoint **id**
+    (survives restarts/reconnects, unlike friendly names which collide for
+    identical devices). ``is_default`` matches ``GetSpeakers().id`` /
+    ``GetMicrophone()`` id; ``available`` is True for Active endpoints. Live:
+    reflects hot-plug without re-initialising PortAudio.
+
+    Fail-open: if pycaw is unavailable or raises, returns a sounddevice-derived
+    list with BLANK ids (the UI still shows the user's devices; resolution then
+    leans on the saved name). Privacy: pycaw reads local Core Audio only.
+    """
+    try:
+        from pycaw.constants import EDataFlow  # noqa: F401 (import guard)
+    except Exception as e:
+        debug_log(f"list_devices: pycaw unavailable ({e!r}); sd fallback", "audio")
+        return _list_devices_sounddevice_fallback()
+
+    try:
+        from pycaw.constants import EDataFlow
+
+        render = _enumerate_endpoints(EDataFlow.eRender.value)
+        capture = _enumerate_endpoints(EDataFlow.eCapture.value)
+    except Exception as e:
+        debug_log(f"list_devices: enumeration raised ({e!r}); sd fallback", "audio")
+        return _list_devices_sounddevice_fallback()
+
+    default_out_id = _default_endpoint_id(_get_speakers)
+    default_in_id = _default_endpoint_id(_get_microphone)
+
+    def _shape(pairs, default_id):
+        return [
+            {
+                "id": dev_id,
+                "name": name,
+                "is_default": bool(default_id) and dev_id == default_id,
+                "available": True,  # only Active endpoints reach here
+            }
+            for dev_id, name in pairs
+        ]
+
+    result = {
+        "inputs": _shape(capture, default_in_id),
+        "outputs": _shape(render, default_out_id),
+    }
+    debug_log(
+        f"list_devices: {len(result['outputs'])} outputs, "
+        f"{len(result['inputs'])} inputs (Core Audio)",
+        "audio",
+    )
+    return result
+
+
+def _get_speakers():
+    from pycaw.utils import AudioUtilities
+
+    return AudioUtilities.GetSpeakers()
+
+
+def _get_microphone():
+    from pycaw.utils import AudioUtilities
+
+    return AudioUtilities.GetMicrophone()
+
+
+def _list_devices_sounddevice_fallback() -> dict:
+    """Fail-open device list derived from sounddevice, with BLANK endpoint ids.
+
+    Used when pycaw is unavailable. Ids are empty strings (no Core Audio), so
+    selection resolution falls back to the saved friendly name. De-duping is
+    left to the consumer; this just guarantees the user still sees devices.
+    """
+    if sd is None:
+        return {"inputs": [], "outputs": []}
+    try:
+        devices = list(sd.query_devices())
+    except Exception as e:
+        debug_log(f"list_devices fallback: query_devices raised ({e!r})", "audio")
+        return {"inputs": [], "outputs": []}
+
+    def _items(predicate) -> list[dict]:
+        return [
+            {
+                "id": "",
+                "name": str(d.get("name", "")),
+                "is_default": False,
+                "available": True,
+            }
+            for d in devices
+            if predicate(d)
+        ]
+
+    return {"inputs": _items(_is_input), "outputs": _items(_is_output)}
+
+
 def _matches_any_active(sd_name: str, active_norm: list[str]) -> bool:
     """True if ``sd_name`` corresponds to any pycaw Active friendly name.
 

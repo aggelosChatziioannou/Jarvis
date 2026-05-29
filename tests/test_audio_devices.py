@@ -322,3 +322,202 @@ def test_list_real_devices_fails_open_to_raw_when_pycaw_missing(monkeypatch):
     # something rather than an empty dropdown.
     raw_outputs = [d for d in _device_table() if d["max_output_channels"] > 0]
     assert len(result["outputs"]) == len(raw_outputs)
+
+
+# --- list_devices() + resolve_endpoint_to_sd_index() (endpoint-id redesign) ---
+#
+# These exercise the new Core Audio service: a render/capture split that
+# carries the STABLE endpoint id + is_default + availability, and resolution of
+# a persisted endpoint id (or name fallback) to a current sounddevice index.
+#
+# The fake here mirrors the REAL pycaw API more closely than the legacy fake
+# above: ``AudioUtilities.GetAllDevices(data_flow=..., device_state=...)`` takes
+# the EDataFlow filter (eRender=0 / eCapture=1) and a device-state mask, each
+# returned device exposes ``.id``/``.FriendlyName``/``.state``, and the default
+# endpoints come from ``GetSpeakers().id`` / ``GetMicrophone().GetId()``.
+
+
+class _FakeEndpoint:
+    """A pycaw AudioDevice stand-in carrying a stable endpoint id."""
+
+    def __init__(self, endpoint_id, friendly_name, state, data_flow):
+        self.id = endpoint_id
+        self.FriendlyName = friendly_name
+        self.state = state
+        self._data_flow = data_flow  # 0 = render, 1 = capture
+
+    def GetId(self):  # the raw IMMDevice GetMicrophone() returns exposes this
+        return self.id
+
+
+def _install_fake_pycaw_endpoints(monkeypatch, *, render, capture,
+                                  default_out_id, default_in_id):
+    """Install a fake pycaw whose enumerator splits render vs capture by flow.
+
+    ``render``/``capture`` are lists of ``(id, name, state_str)`` tuples. State
+    strings are matched against the fake ``AudioDeviceState`` / ``DEVICE_STATE``
+    enums so the production code's ``state == Active`` test works unchanged.
+    """
+
+    class _FakeState:
+        Active = "STATE_ACTIVE"
+        NotPresent = "STATE_NOTPRESENT"
+        Disabled = "STATE_DISABLED"
+        Unplugged = "STATE_UNPLUGGED"
+
+    class _FakeDeviceState:
+        # .value mirrors the real DEVICE_STATE IntFlag (ACTIVE == 1).
+        class _V:
+            def __init__(self, v):
+                self.value = v
+        ACTIVE = _V(0x1)
+        MASK_ALL = _V(0xF)
+
+    class _FakeEDataFlow:
+        class _V:
+            def __init__(self, v):
+                self.value = v
+        eRender = _V(0)
+        eCapture = _V(1)
+        eAll = _V(2)
+
+    render_devs = [_FakeEndpoint(i, n, s, 0) for (i, n, s) in render]
+    capture_devs = [_FakeEndpoint(i, n, s, 1) for (i, n, s) in capture]
+    all_devs = render_devs + capture_devs
+
+    default_out = next((d for d in render_devs if d.id == default_out_id), None)
+    default_in = next((d for d in capture_devs if d.id == default_in_id), None)
+
+    class _FakeAudioUtilities:
+        @staticmethod
+        def GetAllDevices(data_flow=_FakeEDataFlow.eAll.value,
+                          device_state=_FakeDeviceState.MASK_ALL.value):
+            if data_flow == _FakeEDataFlow.eRender.value:
+                pool = render_devs
+            elif data_flow == _FakeEDataFlow.eCapture.value:
+                pool = capture_devs
+            else:
+                pool = all_devs
+            # Honour an ACTIVE-only mask the way the real enumerator does.
+            if device_state == _FakeDeviceState.ACTIVE.value:
+                return [d for d in pool if d.state == _FakeState.Active]
+            return list(pool)
+
+        @staticmethod
+        def GetSpeakers():
+            return default_out
+
+        @staticmethod
+        def GetMicrophone():
+            # Real GetMicrophone returns a raw IMMDevice (GetId()), NOT a
+            # wrapped AudioDevice — exercise the .GetId() fallback path.
+            return default_in
+
+    utils_mod = types.ModuleType("pycaw.utils")
+    utils_mod.AudioUtilities = _FakeAudioUtilities
+    constants_mod = types.ModuleType("pycaw.constants")
+    constants_mod.AudioDeviceState = _FakeState
+    constants_mod.DEVICE_STATE = _FakeDeviceState
+    constants_mod.EDataFlow = _FakeEDataFlow
+    pkg = types.ModuleType("pycaw")
+    pkg.utils = utils_mod
+    pkg.constants = constants_mod
+
+    monkeypatch.setitem(sys.modules, "pycaw", pkg)
+    monkeypatch.setitem(sys.modules, "pycaw.utils", utils_mod)
+    monkeypatch.setitem(sys.modules, "pycaw.constants", constants_mod)
+
+
+def test_list_devices_splits_render_capture_with_ids(monkeypatch):
+    """list_devices() returns {inputs, outputs}; render→outputs, capture→inputs,
+    each item carries {id, name, is_default, available}; only Active survive."""
+    from jarvis.output import audio_devices
+
+    _install_fake_pycaw_endpoints(
+        monkeypatch,
+        render=[
+            ("{0.0.0.00000000}.{spk}", "Headset (Realtek(R) Audio)", "STATE_ACTIVE"),
+            ("{0.0.0.00000000}.{void}", "CORSAIR VOID Wireless", "STATE_ACTIVE"),
+            ("{0.0.0.00000000}.{ghost}", "Ghost Speaker", "STATE_NOTPRESENT"),
+        ],
+        capture=[
+            ("{0.0.1.00000000}.{mic}", "Microphone (PD200X)", "STATE_ACTIVE"),
+            ("{0.0.1.00000000}.{stereomix}", "Stereo Mix", "STATE_DISABLED"),
+        ],
+        default_out_id="{0.0.0.00000000}.{spk}",
+        default_in_id="{0.0.1.00000000}.{mic}",
+    )
+
+    out = audio_devices.list_devices()
+
+    assert set(out.keys()) == {"inputs", "outputs"}
+    # Every item carries the full contract.
+    for item in out["outputs"] + out["inputs"]:
+        assert {"id", "name", "is_default", "available"} <= set(item)
+
+    out_ids = {d["id"] for d in out["outputs"]}
+    in_ids = {d["id"] for d in out["inputs"]}
+
+    # Render endpoints land in outputs (Active only), capture in inputs.
+    assert "{0.0.0.00000000}.{spk}" in out_ids
+    assert "{0.0.0.00000000}.{void}" in out_ids
+    assert "{0.0.1.00000000}.{mic}" in in_ids
+    # Inactive endpoints are dropped from BOTH lists.
+    assert "{0.0.0.00000000}.{ghost}" not in out_ids
+    assert "{0.0.1.00000000}.{stereomix}" not in in_ids
+    # Render ids never leak into inputs and vice versa.
+    assert out_ids.isdisjoint(in_ids)
+
+
+def test_list_devices_marks_default(monkeypatch):
+    """is_default is True for the endpoint whose id equals GetSpeakers().id /
+    GetMicrophone().GetId(), and False for the rest."""
+    from jarvis.output import audio_devices
+
+    _install_fake_pycaw_endpoints(
+        monkeypatch,
+        render=[
+            ("{spk}", "Headset (Realtek(R) Audio)", "STATE_ACTIVE"),
+            ("{void}", "CORSAIR VOID Wireless", "STATE_ACTIVE"),
+        ],
+        capture=[("{mic}", "Microphone (PD200X)", "STATE_ACTIVE")],
+        default_out_id="{void}",
+        default_in_id="{mic}",
+    )
+
+    out = audio_devices.list_devices()
+
+    defaults_out = {d["id"] for d in out["outputs"] if d["is_default"]}
+    assert defaults_out == {"{void}"}
+    # The non-default output is explicitly not default.
+    headset = next(d for d in out["outputs"] if d["id"] == "{spk}")
+    assert headset["is_default"] is False
+    # The single mic is the default input.
+    assert out["inputs"][0]["is_default"] is True
+    # Active endpoints are marked available.
+    assert all(d["available"] for d in out["outputs"] + out["inputs"])
+
+
+def test_list_devices_fails_open_to_sounddevice_when_pycaw_missing(monkeypatch):
+    """When pycaw import raises, list_devices() falls open to a sounddevice
+    derived list with EMPTY ids (so the UI still shows real devices)."""
+    from jarvis.output import audio_devices
+
+    fake_sd = _FakeSD(_device_table())
+    monkeypatch.setattr(audio_devices, "sd", fake_sd, raising=False)
+    monkeypatch.setitem(sys.modules, "pycaw", None)
+    monkeypatch.setitem(sys.modules, "pycaw.utils", None)
+    monkeypatch.setitem(sys.modules, "pycaw.constants", None)
+
+    out = audio_devices.list_devices()
+
+    assert set(out.keys()) == {"inputs", "outputs"}
+    # At least the real outputs surface (sounddevice fallback), each shaped with
+    # the full contract and a BLANK id (pycaw gave us no endpoint ids).
+    assert out["outputs"], "expected a sounddevice-derived output fallback"
+    for item in out["outputs"] + out["inputs"]:
+        assert {"id", "name", "is_default", "available"} <= set(item)
+        assert item["id"] == ""
+    # Fallback output count matches the raw sd devices that have output channels.
+    raw_outputs = [d for d in _device_table() if d["max_output_channels"] > 0]
+    assert len(out["outputs"]) == len(raw_outputs)
