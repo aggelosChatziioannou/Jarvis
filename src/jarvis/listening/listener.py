@@ -19,6 +19,11 @@ from datetime import datetime
 
 from rapidfuzz import fuzz
 from .echo_detection import EchoDetector
+from .hallucinations import (
+    HALLUCINATION_EXACT,
+    HALLUCINATION_SUBSTRINGS,
+    looks_like_hallucination,
+)
 from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, find_wake_word_position
 from .transcript_buffer import TranscriptBuffer
@@ -2736,108 +2741,22 @@ class VoiceListener(threading.Thread):
         except Exception:
             return False
 
-    # Whole-utterance whisper hallucinations: matched ONLY when the entire
-    # transcript (after punctuation strip) equals one of these. We use
-    # exact-match here because words like "you" / "thanks" / "bye"
-    # appear in normal speech and we must not blacklist them globally.
-    _HALLUCINATION_EXACT = frozenset({
-        "thank you",
-        "thanks",
-        "you",
-        "bye",
-        "bye bye",
-        "goodbye",
-        "subscribe",
-        # Greek lone-word silence outputs
-        "ευχαριστώ",
-        "ευχαριστω",
-        "ευχαριστώ πολύ",
-        "ευχαριστω πολυ",
-        "γεια σας",
-        "καλή συνέχεια",
-        "καλη συνεχεια",
-        # Calm-Whisper (Interspeech 2025) identified the "crazy heads"
-        # (decoder attention heads #1, #6, #11) that account for >75% of
-        # Whisper's non-speech hallucinations. The most common outputs are
-        # English filler / outro words. Drop them only when they appear as
-        # the ENTIRE utterance (length ≤ 3 words after punctuation strip);
-        # an embedded "okay" inside a real sentence is still legitimate.
-        "so",
-        "okay",
-        "ok",
-        "good",
-        "take care",
-        "alright",
-        "all right",
-        "um",
-        "uh",
-        "hmm",
-        "mm",
-        "mhm",
-        # Pure punctuation / whitespace
-        ".", "..", "...", "?", "!",
-    })
-
-    # Substring blacklist: any utterance containing one of these is rejected.
-    # These are distinctive enough that legitimate speech never contains them.
-    _HALLUCINATION_SUBSTRINGS = (
-        "thank you for watching",
-        "thanks for watching",
-        "like and subscribe",
-        "please subscribe",
-        "don't forget to subscribe",
-        "subtitles by the amara.org community",
-        "subtitles by amara.org",
-        "subtitles by",
-        "transcription by",
-        "transcribed by",
-        "captions by",
-        "amara.org community",
-        "amara.org",
-        "see you in the next",
-        "see you next time",
-        # Sound-event markers
-        "♪",
-        "[music]",
-        "[applause]",
-        "[laughter]",
-        "[silence]",
-        # Our own initial_prompt echoes
-        "the user mixes english and greek",
-        # Greek YouTube-subtitle residues
-        # AUTHORWAVE is a Greek subtitling collective whose stamp Whisper
-        # learned during training; it leaks onto silence regardless of input.
-        "υπότιτλοι authorwave",
-        "authorwave",
-        "ευχαριστώ που με παρακολουθήσατε",
-        "ευχαριστω που με παρακολουθησατε",
-        "εγγραφείτε στο κανάλι",
-        "εγγραφειτε στο καναλι",
-        "μην ξεχάσετε να κάνετε εγγραφή",
-    )
+    # Whisper-hallucination blocklist now lives in the shared
+    # ``listening/hallucinations`` module so the memory write-path can drop
+    # the same residues at storage time without importing the listener.
+    # Re-exposed as class attributes for backward compatibility (tests and
+    # any external reader that read them off ``VoiceListener``).
+    _HALLUCINATION_EXACT = HALLUCINATION_EXACT
+    _HALLUCINATION_SUBSTRINGS = HALLUCINATION_SUBSTRINGS
 
     def _is_youtube_hallucination(self, text: str) -> bool:
         """Reject Whisper's known silence/echo hallucinations.
 
-        Triggers when:
-          - The utterance contains ≤1 alphanumeric character (just punctuation).
-          - The whole utterance exactly matches a known noise word/phrase.
-          - The utterance contains any distinctive YouTube-subtitle substring.
+        Thin delegate to ``looks_like_hallucination`` in the shared
+        ``listening/hallucinations`` module — kept as a method so existing
+        call sites (and the unbound-method tests) stay unchanged.
         """
-        if not text:
-            return False
-        stripped = text.strip()
-        # Pure punctuation / whitespace
-        bare = re.sub(r"[^\wͰ-Ͽἀ-῿]", "", stripped, flags=re.UNICODE)
-        if len(bare) <= 1:
-            return True
-        norm = stripped.lower().rstrip("!.?,;: \t\n")
-        if norm in self._HALLUCINATION_EXACT:
-            return True
-        for phrase in self._HALLUCINATION_SUBSTRINGS:
-            if phrase in norm:
-                return True
-        return False
+        return looks_like_hallucination(text)
 
     def _dump_utterance_wav(self, audio) -> None:
         """Save a VAD-gated audio segment to a WAV file for offline inspection.
