@@ -63,3 +63,22 @@ Today the audio Output offers "(Follow Windows default)", which follows whatever
 - Approach A (live `IMMNotificationClient`) chosen by the user.
 - Persist by endpoint id (research-backed) with friendly name as display + fallback.
 - Remove follow-default entirely; first run seeds from OS default once.
+
+## Update (2026-05-29): host-API preference for OPENING streams
+
+Field testing exposed that WASAPI is the wrong host API to *open* streams on,
+even though it is fine for *display* names:
+- the wake mic must run at **16 kHz**, which WASAPI shared **rejects** on a
+  48 kHz endpoint (`PaErrorCode -9997`), so the Wispr bridge failed to start;
+- WASAPI **output** plays **silently** from inside the long-running daemon
+  process (a clean standalone process plays the same endpoint fine) - likely a
+  COM-apartment interaction;
+- the wireless Corsair sleeping/waking **shifts** PortAudio indices, and WASAPI
+  is the most index/rate-fragile host API.
+
+Decision: keep `_hostapi_score` (WASAPI-first) for **display de-dup**, but the
+**open path** (`match_name_to_sd_index`, used by both TTS playback and the wake
+mic) now uses `_playback_hostapi_score`: **DirectSound > MME > WASAPI > WDM-KS**.
+DirectSound/MME resample transparently and are COM-robust. The slightly higher
+latency is irrelevant for a voice assistant; "audible and never crashes" beats
+"low-latency but silent".

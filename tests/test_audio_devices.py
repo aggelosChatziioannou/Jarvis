@@ -31,6 +31,7 @@ import pytest
 # Host API indices used by the fake device table.
 _HA_WASAPI = 0
 _HA_MME = 1
+_HA_DS = 2  # Windows DirectSound
 
 
 class _FakeSD:
@@ -45,7 +46,11 @@ class _FakeSD:
         return self._devices[device]
 
     def query_hostapis(self, index=None):
-        apis = [{"name": "Windows WASAPI"}, {"name": "MME"}]
+        apis = [
+            {"name": "Windows WASAPI"},
+            {"name": "MME"},
+            {"name": "Windows DirectSound"},
+        ]
         if index is None:
             return apis
         return apis[index]
@@ -240,8 +245,11 @@ def test_match_name_to_sd_index_matches_truncated_name(monkeypatch):
     assert idx == 3
 
 
-def test_match_name_prefers_wasapi_over_mme(monkeypatch):
-    """When the same name exists on WASAPI and MME, WASAPI index wins."""
+def test_match_name_prefers_resampling_hostapi_over_wasapi(monkeypatch):
+    """For OPENING a stream we must NOT prefer WASAPI: it is rate-rigid (rejects
+    the 16 kHz wake mic, PaErrorCode -9997) and has proven silent for output from
+    inside the daemon. Here Headset exists on WASAPI (idx 2) and MME (idx 8); the
+    resampling/robust MME variant must win for playback resolution."""
     from jarvis.output import audio_devices
 
     fake_sd = _FakeSD(_device_table())
@@ -250,8 +258,30 @@ def test_match_name_prefers_wasapi_over_mme(monkeypatch):
     idx = audio_devices.match_name_to_sd_index(
         "Headset (Realtek(R) Audio)", kind="output"
     )
-    # WASAPI Headset is index 2; MME duplicate is index 8.
-    assert idx == 2
+    # MME duplicate is index 8; the WASAPI variant (idx 2) must NOT win now.
+    assert idx == 8
+
+
+def test_match_name_prefers_directsound_over_wasapi(monkeypatch):
+    """DirectSound (resampling + COM-robust) is the top-ranked open-path host
+    API, beating both WASAPI and MME."""
+    from jarvis.output import audio_devices
+
+    devices = [
+        {"name": "Headset (Realtek(R) Audio)", "max_input_channels": 0,
+         "max_output_channels": 2, "hostapi": _HA_WASAPI},   # idx 0
+        {"name": "Headset (Realtek(R) Audio)", "max_input_channels": 0,
+         "max_output_channels": 2, "hostapi": _HA_MME},      # idx 1
+        {"name": "Headset (Realtek(R) Audio)", "max_input_channels": 0,
+         "max_output_channels": 2, "hostapi": _HA_DS},       # idx 2 — preferred
+    ]
+    fake_sd = _FakeSD(devices)
+    monkeypatch.setattr(audio_devices, "sd", fake_sd, raising=False)
+
+    idx = audio_devices.match_name_to_sd_index(
+        "Headset (Realtek(R) Audio)", kind="output"
+    )
+    assert idx == 2  # the DirectSound variant wins
 
 
 def test_match_name_respects_kind(monkeypatch):
@@ -567,8 +597,9 @@ def test_resolve_endpoint_falls_back_to_name_when_id_unknown(monkeypatch):
     idx = audio_devices.resolve_endpoint_to_sd_index(
         "{not-present-id}", "Headset (Realtek(R) Audio)", kind="output"
     )
-    # Name fallback finds the WASAPI Headset output at index 2.
-    assert idx == 2
+    # Name fallback finds the Headset output; the open path now prefers the
+    # resampling MME variant (idx 8) over the rate-rigid WASAPI one (idx 2).
+    assert idx == 8
 
 
 def test_resolve_endpoint_returns_none_when_absent(monkeypatch):

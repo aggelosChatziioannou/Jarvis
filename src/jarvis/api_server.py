@@ -574,10 +574,10 @@ def test_tone() -> Dict[str, bool]:
         # config (not the cached helper) so a just-saved change is reflected.
         device = None
         try:
-            from .output.tts import _resolve_output_device
-            spec = load_config().get("tts_output_device")
-            if spec not in (None, "", "null"):
-                device = _resolve_output_device(spec)
+            # Resolve the SAME persisted endpoint-id selection the TTS path uses
+            # (the old tts_output_device key is dead after the audio redesign).
+            from .output.tts import _resolve_output_device_live
+            device = _resolve_output_device_live()
         except Exception:
             device = None
 
@@ -595,7 +595,15 @@ def test_tone() -> Dict[str, bool]:
             sd.play(tone, sr, device=device)
         except Exception:
             sd.play(tone, 22050)  # last resort: system default
-        publish_log("info", f"Test tone played (880 Hz, device={device})")
+        try:
+            _di = sd.query_devices(device) if device is not None else None
+            _dn = (
+                f"{_di['name']} [{sd.query_hostapis(_di['hostapi'])['name']}]"
+                if _di else "(PortAudio default)"
+            )
+        except Exception:
+            _dn = "?"
+        publish_log("info", f"Test tone played (880 Hz, device={device} {_dn})")
         return {"ok": True}
     except Exception as e:
         publish_log("error", f"Test tone failed: {e}")

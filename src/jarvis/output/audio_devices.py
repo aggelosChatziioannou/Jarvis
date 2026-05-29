@@ -70,6 +70,38 @@ def _hostapi_score(sd_module, hostapi_index) -> int:
     return 0
 
 
+def _playback_hostapi_score(sd_module, hostapi_index) -> int:
+    """Rank host APIs for OPENING a stream (capture or playback).
+
+    Distinct from :func:`_hostapi_score` (which ranks for DISPLAY de-dup and
+    prefers WASAPI for its descriptive truncated names). For actually opening a
+    device we prefer host APIs that RESAMPLE transparently and are robust to the
+    long-running daemon's process/COM state:
+
+      * the wake mic must run at 16 kHz, which WASAPI shared REJECTS on a 48 kHz
+        device (PaErrorCode -9997 "Invalid sample rate"); DirectSound and MME
+        resample, so they open fine;
+      * WASAPI output has proven SILENT from inside the daemon process (while a
+        clean standalone process plays the very same device audibly), whereas
+        DirectSound plays reliably.
+
+    Order: DirectSound > MME > WASAPI > WDM-KS/other. The latency cost over
+    WASAPI is irrelevant for a voice assistant, and "audible + never crashes"
+    beats "low-latency but silent / dead".
+    """
+    try:
+        name = str(sd_module.query_hostapis(hostapi_index)["name"]).lower()
+    except Exception:
+        return 0
+    if "directsound" in name:
+        return 3
+    if "mme" in name:
+        return 2
+    if "wasapi" in name:
+        return 1
+    return 0  # WDM-KS and anything exotic: last resort
+
+
 def _is_output(dev: dict) -> bool:
     return int(dev.get("max_output_channels", 0) or 0) > 0
 
@@ -434,8 +466,9 @@ def match_name_to_sd_index(name: Optional[str], *, kind: str = "output") -> Opti
     flow are considered. Matching normalises (casefold + strip) and is tolerant
     of WASAPI truncation: a candidate matches if the needle is contained in the
     sounddevice name OR the sounddevice name is contained in the needle. When
-    several candidates match, the WASAPI host-API variant wins (then the
-    lowest index, deterministically).
+    several candidates match, the resampling/robust host-API variant wins
+    (DirectSound > MME > WASAPI > WDM-KS; see :func:`_playback_hostapi_score`),
+    then the lowest index, deterministically.
 
     Fail-open: returns ``None`` if ``name`` is empty, sounddevice is
     unavailable, nothing matches, or anything raises — the caller then uses
@@ -461,14 +494,21 @@ def match_name_to_sd_index(name: Optional[str], *, kind: str = "output") -> Opti
         if not sd_norm:
             continue
         if needle in sd_norm or sd_norm in needle:
-            candidates.append((_hostapi_score(sd, d.get("hostapi")), i))
+            candidates.append((_playback_hostapi_score(sd, d.get("hostapi")), i))
 
     if not candidates:
         debug_log(f"match_name_to_sd_index: no {kind} match for {name!r}", "audio")
         return None
-    # Highest host-API score first, then lowest index for determinism.
+    # Highest open-path host-API score first (DirectSound/MME over WASAPI — see
+    # _playback_hostapi_score), then lowest index for determinism.
     candidates.sort(key=lambda t: (-t[0], t[1]))
-    return candidates[0][1]
+    chosen = candidates[0][1]
+    debug_log(
+        f"match_name_to_sd_index: {name!r} ({kind}) -> sd index {chosen} "
+        f"from {len(candidates)} candidate(s)",
+        "audio",
+    )
+    return chosen
 
 
 def _name_for_endpoint_id(endpoint_id: Optional[str], *, kind: str) -> Optional[str]:
