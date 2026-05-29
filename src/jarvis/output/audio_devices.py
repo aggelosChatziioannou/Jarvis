@@ -469,3 +469,79 @@ def match_name_to_sd_index(name: Optional[str], *, kind: str = "output") -> Opti
     # Highest host-API score first, then lowest index for determinism.
     candidates.sort(key=lambda t: (-t[0], t[1]))
     return candidates[0][1]
+
+
+def _name_for_endpoint_id(endpoint_id: Optional[str], *, kind: str) -> Optional[str]:
+    """Look up the CURRENT friendly name of a persisted endpoint id.
+
+    Consults the live :func:`list_devices` listing for the matching flow.
+    Returns ``None`` if the id is empty, absent from the live list, or anything
+    raises (pycaw unavailable) — the caller then falls back to the saved name.
+    """
+    if not endpoint_id:
+        return None
+    try:
+        listed = list_devices()
+    except Exception:
+        return None
+    bucket = listed.get("inputs" if kind == "input" else "outputs", [])
+    for dev in bucket:
+        if dev.get("id") and dev.get("id") == endpoint_id:
+            name = dev.get("name")
+            return str(name) if name else None
+    return None
+
+
+def resolve_endpoint_to_sd_index(
+    endpoint_id: Optional[str],
+    name: Optional[str] = None,
+    *,
+    kind: str = "output",
+) -> Optional[int]:
+    """Resolve a persisted audio selection to a current sounddevice index.
+
+    Resolution order:
+      1. ``endpoint_id`` (preferred, stable): look up its CURRENT friendly name
+         via :func:`list_devices`, then match that to a sounddevice index.
+      2. ``name`` (fallback): the friendly name saved alongside the id, used
+         when the id is unknown to the live list (e.g. an older config that
+         never recorded an id, or a device that came back under a fresh id).
+
+    ``kind`` is ``"output"`` (default) or ``"input"`` — only that flow is
+    considered. Matching reuses :func:`match_name_to_sd_index` (truncation-
+    tolerant, WASAPI-preferred).
+
+    Returns ``None`` when the device is currently absent (neither id nor name
+    matches) — the caller treats this as "disconnected" and reconnects when the
+    device reappears. Fail-open: never raises.
+    """
+    try:
+        current_name = _name_for_endpoint_id(endpoint_id, kind=kind)
+        if current_name:
+            idx = match_name_to_sd_index(current_name, kind=kind)
+            if idx is not None:
+                debug_log(
+                    f"resolve_endpoint: id {endpoint_id!r} -> {current_name!r} "
+                    f"-> sd index {idx} ({kind})",
+                    "audio",
+                )
+                return idx
+        # Fall back to the saved friendly name.
+        if name:
+            idx = match_name_to_sd_index(name, kind=kind)
+            if idx is not None:
+                debug_log(
+                    f"resolve_endpoint: name fallback {name!r} -> sd index "
+                    f"{idx} ({kind})",
+                    "audio",
+                )
+                return idx
+        debug_log(
+            f"resolve_endpoint: {kind} device absent "
+            f"(id={endpoint_id!r}, name={name!r})",
+            "audio",
+        )
+        return None
+    except Exception as e:  # pragma: no cover - defensive fail-open
+        debug_log(f"resolve_endpoint: raised ({e!r})", "audio")
+        return None

@@ -521,3 +521,91 @@ def test_list_devices_fails_open_to_sounddevice_when_pycaw_missing(monkeypatch):
     # Fallback output count matches the raw sd devices that have output channels.
     raw_outputs = [d for d in _device_table() if d["max_output_channels"] > 0]
     assert len(out["outputs"]) == len(raw_outputs)
+
+
+def test_resolve_endpoint_to_sd_index_by_id(monkeypatch):
+    """A persisted endpoint id resolves via its CURRENT friendly name (from
+    list_devices) to the matching sounddevice index, truncation-tolerant."""
+    from jarvis.output import audio_devices
+
+    fake_sd = _FakeSD(_device_table())
+    monkeypatch.setattr(audio_devices, "sd", fake_sd, raising=False)
+    # pycaw maps the endpoint id -> the FULL friendly name "...Microphone)".
+    _install_fake_pycaw_endpoints(
+        monkeypatch,
+        render=[("{pd200x}", "PD200X (2- FIFINE Microphone)", "STATE_ACTIVE")],
+        capture=[("{pd200x-in}", "PD200X (2- FIFINE Microphone)", "STATE_ACTIVE")],
+        default_out_id="{pd200x}",
+        default_in_id="{pd200x-in}",
+    )
+
+    # Output flow: the full pycaw name resolves to the truncated sd OUTPUT entry
+    # "PD200X (2- FIFINE Microph" at index 3.
+    idx = audio_devices.resolve_endpoint_to_sd_index(
+        "{pd200x}", "ignored saved name", kind="output"
+    )
+    assert idx == 3
+
+
+def test_resolve_endpoint_falls_back_to_name_when_id_unknown(monkeypatch):
+    """When the endpoint id is not in the current device list, resolution falls
+    back to the saved friendly name."""
+    from jarvis.output import audio_devices
+
+    fake_sd = _FakeSD(_device_table())
+    monkeypatch.setattr(audio_devices, "sd", fake_sd, raising=False)
+    # The persisted id is absent from the live list (device unplugged then a
+    # different one present), so id lookup misses and we use the saved name.
+    _install_fake_pycaw_endpoints(
+        monkeypatch,
+        render=[("{some-other}", "Some Other Speaker", "STATE_ACTIVE")],
+        capture=[],
+        default_out_id="{some-other}",
+        default_in_id="",
+    )
+
+    idx = audio_devices.resolve_endpoint_to_sd_index(
+        "{not-present-id}", "Headset (Realtek(R) Audio)", kind="output"
+    )
+    # Name fallback finds the WASAPI Headset output at index 2.
+    assert idx == 2
+
+
+def test_resolve_endpoint_returns_none_when_absent(monkeypatch):
+    """A device that matches neither id nor name resolves to None (caller treats
+    it as disconnected)."""
+    from jarvis.output import audio_devices
+
+    fake_sd = _FakeSD(_device_table())
+    monkeypatch.setattr(audio_devices, "sd", fake_sd, raising=False)
+    _install_fake_pycaw_endpoints(
+        monkeypatch,
+        render=[("{some-other}", "Some Other Speaker", "STATE_ACTIVE")],
+        capture=[],
+        default_out_id="{some-other}",
+        default_in_id="",
+    )
+
+    assert audio_devices.resolve_endpoint_to_sd_index(
+        "{gone}", "No Such Device", kind="output"
+    ) is None
+    # Empty id + empty name -> None too.
+    assert audio_devices.resolve_endpoint_to_sd_index("", "", kind="output") is None
+
+
+def test_resolve_endpoint_name_fallback_without_pycaw(monkeypatch):
+    """Even with pycaw unavailable, a saved name still resolves via sounddevice
+    (the id->name lookup just yields nothing, name fallback carries it)."""
+    from jarvis.output import audio_devices
+
+    fake_sd = _FakeSD(_device_table())
+    monkeypatch.setattr(audio_devices, "sd", fake_sd, raising=False)
+    monkeypatch.setitem(sys.modules, "pycaw", None)
+    monkeypatch.setitem(sys.modules, "pycaw.utils", None)
+    monkeypatch.setitem(sys.modules, "pycaw.constants", None)
+
+    idx = audio_devices.resolve_endpoint_to_sd_index(
+        "{any-id}", "CORSAIR VOID Wireless", kind="input"
+    )
+    # Input flow: CORSAIR VOID input is index 6.
+    assert idx == 6
