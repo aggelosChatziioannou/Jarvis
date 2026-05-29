@@ -529,17 +529,18 @@ def list_llm_models() -> List[Dict[str, Any]]:
 
 @app.get("/api/audio/devices")
 def list_audio_devices() -> Dict[str, Any]:
-    # Delegate to the real-device cleaner so the settings UI only ever shows
-    # genuinely-available endpoints (no Sound Mapper / Stereo Mix / Primary
-    # Driver / disconnected / host-API duplicates). Keeps the same JSON shape
-    # the UI expects: {inputs, outputs, current_in, current_out}. Imported as
-    # a module (not by-name) so the function stays monkeypatchable in tests.
+    # Delegate to the Core Audio device service so the settings UI gets the
+    # id-carrying device list: {inputs, outputs} where each entry is
+    # {id, name, is_default, available}. Persisting + resolving by the stable
+    # endpoint id (not friendly name) is what makes the selection survive
+    # restarts/reconnects. Imported as a module (not by-name) so the function
+    # stays monkeypatchable in tests.
     try:
         from .output import audio_devices
-        return audio_devices.list_real_devices()
+        return audio_devices.list_devices()
     except Exception as e:
         debug_log(f"api: audio devices failed: {e}", "api")
-        return {"inputs": [], "outputs": [], "current_in": None, "current_out": None}
+        return {"inputs": [], "outputs": []}
 
 
 @app.post("/api/audio/test-tone")

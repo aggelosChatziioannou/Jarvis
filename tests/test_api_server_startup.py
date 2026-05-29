@@ -77,47 +77,103 @@ def test_start_in_background_returns_false_when_port_busy(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /api/audio/devices — delegates to the real-device cleaner
+# /api/audio/devices — delegates to the endpoint-id device list
 # ---------------------------------------------------------------------------
 
 
-def test_audio_devices_endpoint_returns_filtered_shape(monkeypatch) -> None:
-    """The endpoint must return the cleaned list_real_devices() result, keeping
-    the {inputs, outputs, current_in, current_out} shape the UI expects."""
+def test_audio_devices_endpoint_returns_endpoint_id_shape(monkeypatch) -> None:
+    """The endpoint returns ``audio_devices.list_devices()`` unchanged: the
+    id-carrying {inputs, outputs} shape where each entry is
+    {id, name, is_default, available}."""
     from jarvis import api_server
     from jarvis.output import audio_devices
 
-    cleaned = {
-        "inputs": [{"index": 18, "name": "Microphone (PD200X Podcast Microphone)"}],
-        "outputs": [
-            {"index": 15, "name": "Headset (Realtek(R) Audio)"},
-            {"index": 16, "name": "Speakers (PD200X Podcast Microphone)"},
+    listed = {
+        "inputs": [
+            {
+                "id": "{0.0.1.00000000}.{mic-guid}",
+                "name": "Microphone (PD200X Podcast Microphone)",
+                "is_default": True,
+                "available": True,
+            }
         ],
-        "current_in": 18,
-        "current_out": 15,
+        "outputs": [
+            {
+                "id": "{0.0.0.00000000}.{spk-guid}",
+                "name": "Speakers (PD200X Podcast Microphone)",
+                "is_default": False,
+                "available": True,
+            },
+            {
+                "id": "{0.0.0.00000000}.{headset-guid}",
+                "name": "Headset (Realtek(R) Audio)",
+                "is_default": True,
+                "available": True,
+            },
+        ],
     }
-    monkeypatch.setattr(audio_devices, "list_real_devices", lambda: cleaned)
+    monkeypatch.setattr(audio_devices, "list_devices", lambda: listed)
 
     result = api_server.list_audio_devices()
 
-    # Endpoint passes the cleaned data straight through — no junk re-introduced.
-    assert result == cleaned
+    # Endpoint passes the id-carrying list straight through.
+    assert result == listed
+    # Every entry carries the four redesign fields.
+    for bucket in ("inputs", "outputs"):
+        for dev in result[bucket]:
+            assert {"id", "name", "is_default", "available"} <= set(dev)
 
 
 def test_audio_devices_endpoint_fails_open_to_empty(monkeypatch) -> None:
-    """If the cleaner raises, the endpoint returns the safe empty shape rather
-    than 500-ing the settings UI."""
+    """If list_devices raises, the endpoint returns the safe empty shape
+    ({inputs: [], outputs: []}) rather than 500-ing the settings UI."""
     from jarvis import api_server
     from jarvis.output import audio_devices
 
     def _boom():
         raise RuntimeError("portaudio exploded")
 
-    monkeypatch.setattr(audio_devices, "list_real_devices", _boom)
+    monkeypatch.setattr(audio_devices, "list_devices", _boom)
 
     result = api_server.list_audio_devices()
 
-    assert result == {"inputs": [], "outputs": [], "current_in": None, "current_out": None}
+    assert result == {"inputs": [], "outputs": []}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/config — persists the four audio_* selection keys
+# ---------------------------------------------------------------------------
+
+
+def test_config_patch_persists_audio_selection_keys(monkeypatch, tmp_path) -> None:
+    """Saving the audio selection writes all four audio_* keys to the config
+    file (endpoint id + friendly name for both input and output)."""
+    import json
+    from jarvis import api_server
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"existing_key": "keep-me"}), encoding="utf-8")
+    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+    updates = {
+        "audio_output_endpoint_id": "{0.0.0.00000000}.{spk-guid}",
+        "audio_output_name": "Speakers (PD200X Podcast Microphone)",
+        "audio_input_endpoint_id": "{0.0.1.00000000}.{mic-guid}",
+        "audio_input_name": "Microphone (PD200X Podcast Microphone)",
+    }
+    returned = api_server.patch_config(api_server.ConfigPatch(updates=updates))
+
+    # Response reflects the merged config.
+    for key, value in updates.items():
+        assert returned[key] == value
+    # Unrelated existing keys are preserved.
+    assert returned["existing_key"] == "keep-me"
+
+    # And the values are actually persisted to disk.
+    on_disk = json.loads(cfg_path.read_text(encoding="utf-8"))
+    for key, value in updates.items():
+        assert on_disk[key] == value
+    assert on_disk["existing_key"] == "keep-me"
 
 
 def test_start_in_background_records_uvicorn_crash(monkeypatch) -> None:
