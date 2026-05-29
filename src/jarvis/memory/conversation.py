@@ -147,7 +147,8 @@ def rewrite_all_diary_summaries(
 
     Regenerates the row's vector embedding inline when both
     ``ollama_base_url`` and ``ollama_embed_model`` are provided and the
-    DB has VSS enabled. Embedding regeneration is *best-effort*: if the
+    DB has any vector store available (sqlite-vss OR the fallback
+    python/FAISS store). Embedding regeneration is *best-effort*: if the
     embedding service fails we still keep the cleaned summary, since the
     FTS index stays consistent via SQLite triggers regardless.
 
@@ -168,7 +169,7 @@ def rewrite_all_diary_summaries(
 
     Mirrors ``optimise_diary_topics`` for shape and privacy guarantees.
     """
-    can_reembed = bool(ollama_base_url and ollama_embed_model and db.is_vss_enabled)
+    can_reembed = bool(ollama_base_url and ollama_embed_model and db.has_vector_store)
 
     rows = db.get_all_conversation_summaries()
     for row in rows:
@@ -463,7 +464,7 @@ def optimise_diary_topics(
         return
 
     # Apply the mapping to each row.
-    can_reembed = bool(ollama_base_url and ollama_embed_model and db.is_vss_enabled)
+    can_reembed = bool(ollama_base_url and ollama_embed_model and db.has_vector_store)
     for row in rows:
         date_utc = row["date_utc"]
         original_topics = row["topics"] or ""
@@ -1345,6 +1346,61 @@ def update_daily_conversation_summary(
 
     except Exception:
         return None
+
+
+def backfill_summary_embeddings(
+    db: Database,
+    ollama_base_url: str,
+    ollama_embed_model: str,
+    timeout_sec: float = 15.0,
+) -> int:
+    """Embed every conversation summary that has no vector in the active store.
+
+    One-off repair for installs where summaries were written while the
+    embedding write was wrongly gated on ``is_vss_enabled`` (so the fallback
+    python/FAISS store stayed empty and semantic recall returned nothing).
+
+    Embeds ``summary + " " + topics`` per row via ``get_embedding`` and stores
+    it with ``db.upsert_summary_embedding``. Fail-open per row: an embedding
+    that fails (service down, empty response) leaves that row missing and the
+    sweep continues. Returns the number of rows actually embedded.
+    """
+    if not (ollama_base_url and ollama_embed_model and db.has_vector_store):
+        return 0
+
+    missing = db.summary_ids_without_embedding()
+    if not missing:
+        return 0
+
+    # Map id -> row once, so we read the summary text without a per-id query.
+    rows_by_id = {int(r["id"]): r for r in db.get_all_conversation_summaries()}
+
+    embedded = 0
+    for summary_id in missing:
+        row = rows_by_id.get(summary_id)
+        if row is None:
+            continue
+        summary_text = (row["summary"] or "").strip()
+        topics_text = (row["topics"] or "").strip()
+        if not summary_text and not topics_text:
+            continue
+        text_for_embedding = f"{summary_text} {topics_text}".strip()
+        try:
+            vec = get_embedding(text_for_embedding, ollama_base_url, ollama_embed_model, timeout_sec=timeout_sec)
+        except Exception as e:
+            debug_log(f"backfill embedding failed for summary {summary_id}: {type(e).__name__}", "memory")
+            continue
+        if vec is None:
+            continue
+        try:
+            db.upsert_summary_embedding(summary_id, vec)
+            embedded += 1
+        except Exception as e:
+            debug_log(f"backfill store failed for summary {summary_id}: {type(e).__name__}", "memory")
+            continue
+
+    debug_log(f"\U0001f9e0 backfilled {embedded} summary embedding(s)", "memory")
+    return embedded
 
 
 def search_conversation_memory_by_keywords(

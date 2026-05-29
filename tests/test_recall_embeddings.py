@@ -82,3 +82,56 @@ def test_summary_write_populates_vector_store(tmp_path, monkeypatch):
         "the written summary must be vector-searchable on the python store path"
     )
     db.close()
+
+
+def test_backfill_embeds_existing_summaries(tmp_path, monkeypatch):
+    """A backfill must embed summaries that were written without a vector,
+    on the fallback store path, and leave none missing afterwards."""
+    db = Database(str(tmp_path / "t.db"), sqlite_vss_path=None)
+    assert db.is_vss_enabled is False
+
+    sid = db.upsert_conversation_summary(
+        date_utc="2026-05-29",
+        summary="Angelos lives in Ioannina",
+        topics="user",
+        source_app="test",
+    )
+    # No embedding yet:
+    assert db.summary_ids_without_embedding() == [sid]
+
+    monkeypatch.setattr(
+        conv, "get_embedding",
+        lambda text, base, model, timeout_sec=15.0: [0.03] * 768,
+    )
+    n = conv.backfill_summary_embeddings(db, "http://x", "nomic-embed-text")
+    assert n == 1
+    assert db.summary_ids_without_embedding() == []
+
+    # And the backfilled vector is actually retrievable:
+    hits = db.search_summaries_by_vector([0.03] * 768, top_k=3)
+    assert any(h["summary_id"] == sid for h in hits)
+    db.close()
+
+
+def test_backfill_is_fail_open_per_row(tmp_path, monkeypatch):
+    """A row whose embedding fails must not abort the sweep; the helper returns
+    the count actually embedded and leaves the failed row still missing."""
+    db = Database(str(tmp_path / "t.db"), sqlite_vss_path=None)
+    good = db.upsert_conversation_summary(
+        date_utc="2026-05-28", summary="The user lives in Ioannina", topics="user", source_app="test",
+    )
+    bad = db.upsert_conversation_summary(
+        date_utc="2026-05-29", summary="boom", topics="x", source_app="test",
+    )
+
+    def fake_embed(text, base, model, timeout_sec=15.0):
+        if "boom" in text:
+            return None  # embedding service returned nothing for this row
+        return [0.04] * 768
+
+    monkeypatch.setattr(conv, "get_embedding", fake_embed)
+    n = conv.backfill_summary_embeddings(db, "http://x", "nomic-embed-text")
+    assert n == 1  # only the good row embedded
+    assert db.summary_ids_without_embedding() == [bad]
+    assert good not in db.summary_ids_without_embedding()
+    db.close()

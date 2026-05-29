@@ -442,6 +442,48 @@ class Database:
         else:
             return None
 
+    def _embedded_summary_ids(self) -> set[int]:
+        """Summary ids that already have a stored vector in the ACTIVE store.
+
+        sqlite-vss: read ``summary_vec``. Fallback store: read the store's
+        summary_id keyed mapping (``vectors`` for the python store,
+        ``summary_id_to_index`` for the FAISS store). Fail open to an empty
+        set so a read error never makes the backfill think everything is done.
+        """
+        if self.is_vss_enabled:
+            try:
+                with self._lock:
+                    cur = self.conn.cursor()
+                    rows = cur.execute("SELECT summary_id FROM summary_vec").fetchall()
+                return {int(r["summary_id"]) for r in rows}
+            except Exception:
+                return set()
+        store = self._python_vector_store
+        if store is None:
+            return set()
+        mapping = getattr(store, "vectors", None)
+        if mapping is None:
+            mapping = getattr(store, "summary_id_to_index", None)
+        try:
+            return {int(k) for k in mapping.keys()} if mapping is not None else set()
+        except Exception:
+            return set()
+
+    def summary_ids_without_embedding(self) -> list[int]:
+        """Ids of conversation summaries that have no vector in the active store,
+        oldest first. Drives the embedding backfill. Returns an empty list when
+        no store is configured (nothing can be embedded)."""
+        if not self.has_vector_store:
+            return []
+        with self._lock:
+            cur = self.conn.cursor()
+            rows = cur.execute(
+                "SELECT id FROM conversation_summaries ORDER BY date_utc ASC, id ASC"
+            ).fetchall()
+        all_ids = [int(r["id"]) for r in rows]
+        embedded = self._embedded_summary_ids()
+        return [sid for sid in all_ids if sid not in embedded]
+
     def search_summaries_by_vector(self, vec: Sequence[float], top_k: int = 10) -> list[dict]:
         """Pure vector search over stored summary embeddings.
 
