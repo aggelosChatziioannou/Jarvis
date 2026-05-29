@@ -193,6 +193,10 @@ class WisprBridge:
             cfg, "wispr_wake_model", DEFAULT_WAKE_MODEL)
         self.wake_threshold = float(getattr(
             cfg, "wispr_wake_threshold", DEFAULT_WAKE_THRESHOLD))
+        # Software gain applied to the wake-detection copy of the audio ONLY
+        # (never the dictation/transcript path), so a weak/distant "Hey Jarvis"
+        # is amplified into openWakeWord's useful range. 1.0 = no change.
+        self.wake_gain = float(getattr(cfg, "wispr_wake_gain", 1.0))
         self.silence_ms = int(getattr(
             cfg, "wispr_silence_ms", DEFAULT_SILENCE_MS))
         self.min_dictation_sec = float(getattr(
@@ -1216,7 +1220,12 @@ class WisprBridge:
             self._wake_buf.clear()
             return
 
-        pcm = np.clip(audio_f32 * 32767.0, -32768, 32767).astype(np.int16)
+        # Apply the wake-only software gain, then clip safely to int16. This
+        # boosts a distant/quiet utterance for the detector without touching the
+        # VAD/transcript audio (which still uses the raw float buffer).
+        pcm = np.clip(
+            audio_f32 * 32767.0 * self.wake_gain, -32768, 32767
+        ).astype(np.int16)
         self._wake_buf.extend(pcm.tolist())
 
         while len(self._wake_buf) >= WAKE_FRAME_SIZE:

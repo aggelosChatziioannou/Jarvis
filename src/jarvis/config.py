@@ -169,6 +169,7 @@ class Settings:
     # Wispr Flow bridge settings (only used when stt_backend == "wispr")
     wispr_wake_model: str          # openWakeWord model name (default "hey_jarvis_v0.1")
     wispr_wake_threshold: float    # Detection confidence threshold 0.0-1.0 (default 0.1)
+    wispr_wake_gain: float         # Software gain on the wake-detection audio ONLY (default 1.0)
     wispr_silence_ms: int          # Silero VAD silence ms for PTT release (default 800)
     wispr_min_dictation_sec: float # Suppress early VAD release for this many seconds (default 2.0)
     wispr_max_dictation_sec: int   # Hard timeout for dictation (default 30)
@@ -727,6 +728,7 @@ def get_default_config() -> Dict[str, Any]:
         "stt_backend": "whisper",
         "wispr_wake_model": "hey_jarvis_v0.1",
         "wispr_wake_threshold": 0.1,
+        "wispr_wake_gain": 1.0,
         "wispr_silence_ms": 800,
         "wispr_min_dictation_sec": 2.0,
         "wispr_max_dictation_sec": 30,
@@ -1067,6 +1069,10 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         wispr_wake_threshold = 0.1
     try:
+        wispr_wake_gain = float(merged.get("wispr_wake_gain", 1.0))
+    except (TypeError, ValueError):
+        wispr_wake_gain = 1.0
+    try:
         wispr_silence_ms = int(merged.get("wispr_silence_ms", 800))
     except (TypeError, ValueError):
         wispr_silence_ms = 800
@@ -1399,6 +1405,7 @@ def load_settings() -> Settings:
         stt_backend=stt_backend,
         wispr_wake_model=wispr_wake_model,
         wispr_wake_threshold=wispr_wake_threshold,
+        wispr_wake_gain=wispr_wake_gain,
         wispr_silence_ms=wispr_silence_ms,
         wispr_min_dictation_sec=wispr_min_dictation_sec,
         wispr_max_dictation_sec=wispr_max_dictation_sec,

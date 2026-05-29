@@ -252,6 +252,38 @@ class TestAudioDeviceSelectionConfig:
             assert getattr(settings, key) == ""
 
 
+class TestWakeGainConfig:
+    """wispr_wake_gain: software gain on the wake-detection audio only.
+
+    Defaults to 1.0 (no change) so existing setups are unaffected; a higher
+    value amplifies a weak/distant 'Hey Jarvis' into openWakeWord's range.
+    """
+
+    def test_default_is_unity(self):
+        config = get_default_config()
+        assert config.get("wispr_wake_gain") == 1.0
+
+    def test_round_trips_through_settings(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"wispr_wake_gain": 3.5}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        assert load_settings().wispr_wake_gain == 3.5
+
+    def test_invalid_value_falls_back_to_unity(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"wispr_wake_gain": "loud"}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        assert load_settings().wispr_wake_gain == 1.0
+
+
 class TestModelConsistency:
     """Tests for overall model configuration consistency."""
 

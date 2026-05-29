@@ -560,3 +560,53 @@ class TestMicReconnect:
         old_stream.close.assert_not_called()
         assert bridge.device == 5
         assert bridge.audio_stream is old_stream
+
+
+# ===========================================================================
+# W8 — software wake gain (far-field sensitivity)
+# ===========================================================================
+
+@pytest.mark.unit
+class TestWakeGain:
+    """`wispr_wake_gain` amplifies ONLY the wake-detection copy of the audio
+    (so a distant/quiet 'Hey Jarvis' reaches openWakeWord's useful range),
+    clipped safely to int16, and never touches the VAD/transcript path."""
+
+    class _RecordingWakeModel:
+        def __init__(self):
+            self.frames = []
+
+        def predict(self, frame):
+            import numpy as np
+            self.frames.append(np.asarray(frame).copy())
+            return {"hey_jarvis": 0.0}  # below threshold -> no trigger side effects
+
+    def test_gain_scales_only_the_detector_audio(self):
+        import numpy as np
+        bridge = _make_bridge(wispr_wake_gain=4.0)
+        bridge.wake_model = self._RecordingWakeModel()
+        bridge._state = State.IDLE
+        bridge._paused = False
+        bridge._wake_cooldown = 0
+
+        # 0.1 * 32767 * 4 ~= 13107; without gain it would be ~3277.
+        bridge._process_wake(np.full(1280, 0.1, dtype=np.float32))
+
+        assert bridge.wake_model.frames, "wake model should receive a frame"
+        peak = int(np.abs(bridge.wake_model.frames[0]).max())
+        assert 12000 < peak < 14000  # gain applied, not the un-gained ~3277
+        # The VAD/transcript path is a separate buffer the gain never touches.
+        assert len(bridge._vad_buf) == 0
+
+    def test_gain_clips_safely_to_int16(self):
+        import numpy as np
+        bridge = _make_bridge(wispr_wake_gain=10.0)
+        bridge.wake_model = self._RecordingWakeModel()
+        bridge._state = State.IDLE
+        bridge._paused = False
+        bridge._wake_cooldown = 0
+
+        # 0.5 * 32767 * 10 hugely overshoots int16 -> must clip, not wrap.
+        bridge._process_wake(np.full(1280, 0.5, dtype=np.float32))
+        peak = int(np.abs(bridge.wake_model.frames[0]).max())
+        assert peak <= 32767
