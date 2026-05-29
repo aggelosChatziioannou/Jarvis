@@ -143,6 +143,17 @@ class Settings:
     sample_rate: int
     voice_min_energy: float
 
+    # Audio Device Selection (explicit, remembered by STABLE endpoint id)
+    # The user's chosen output (speaker) + input (wake-word mic) are persisted
+    # by Windows Core Audio endpoint id (preferred, survives reconnects) with
+    # the friendly name kept alongside as a display label + resolution
+    # fallback. Empty string = "not selected" (no OS-default follow). See
+    # docs/superpowers/specs/2026-05-29-audio-device-redesign-design.md.
+    audio_output_endpoint_id: str
+    audio_output_name: str
+    audio_input_endpoint_id: str
+    audio_input_name: str
+
     # Voice Collection & Timing
     voice_block_seconds: float
     voice_collect_seconds: float
@@ -537,6 +548,35 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
         cfg_json["_config_version"] = 6
         modified = True
 
+    # Migration v7: forward the legacy name-based audio device keys into the
+    # new endpoint-id selection scheme. The old keys held only a name-ish
+    # string (`tts_output_device` for the speaker, `wispr_mic_device` for the
+    # wake mic); copy any NON-EMPTY legacy value into the matching
+    # `audio_*_name` key so the user's prior choice survives. The matching
+    # `*_endpoint_id` is left blank on purpose: resolve_endpoint_to_sd_index
+    # falls back to the name and the id is re-learned on next selection. We do
+    # NOT seed from the OS default here (that is Phase 2) and we never clobber
+    # an already-present new-key value.
+    if migration_version < 7:
+        def _forward(legacy_key: str, new_name_key: str, label: str) -> None:
+            if cfg_json.get(new_name_key):
+                return  # already chosen / partially migrated — leave it
+            legacy_val = cfg_json.get(legacy_key)
+            if legacy_val in (None, "", "null"):
+                return  # nothing to carry forward
+            cfg_json[new_name_key] = str(legacy_val)
+            print(
+                f"📢 Carried forward {label} device "
+                f"\"{legacy_val}\" to the new endpoint-id selection "
+                f"(name fallback resolves it).",
+                flush=True,
+            )
+
+        _forward("tts_output_device", "audio_output_name", "audio output")
+        _forward("wispr_mic_device", "audio_input_name", "audio input")
+        cfg_json["_config_version"] = 7
+        modified = True
+
     # Save migrated config
     if modified:
         if _save_json(cfg_path, cfg_json):
@@ -656,6 +696,14 @@ def get_default_config() -> Dict[str, Any]:
         "voice_device": None,
         "sample_rate": 16000,
         "voice_min_energy": 0.02,
+
+        # Audio Device Selection (explicit + remembered by endpoint id).
+        # All empty by default = "not selected". Phase 2 seeds the OS default
+        # once on first run; this layer never silently follows the OS default.
+        "audio_output_endpoint_id": "",
+        "audio_output_name": "",
+        "audio_input_endpoint_id": "",
+        "audio_input_name": "",
 
         # Voice Collection & Timing
         "voice_block_seconds": 4.0,
@@ -989,6 +1037,20 @@ def load_settings() -> Settings:
 
     voice_device_val = merged.get("voice_device")
     voice_device = None if voice_device_val in (None, "", "default", "system") else str(voice_device_val)
+
+    # Audio device selection (endpoint-id scheme). Normalise each to a string;
+    # empty / null collapses to "" so downstream code treats "" uniformly as
+    # "not selected" (never None).
+    def _audio_str(key: str) -> str:
+        val = merged.get(key, "")
+        if val in (None, "", "null"):
+            return ""
+        return str(val)
+
+    audio_output_endpoint_id = _audio_str("audio_output_endpoint_id")
+    audio_output_name = _audio_str("audio_output_name")
+    audio_input_endpoint_id = _audio_str("audio_input_endpoint_id")
+    audio_input_name = _audio_str("audio_input_name")
     voice_block_seconds = float(merged.get("voice_block_seconds", 4.0))
     voice_collect_seconds = float(merged.get("voice_collect_seconds", 2.5))
     voice_max_collect_seconds = float(merged.get("voice_max_collect_seconds", 60.0))
@@ -1316,6 +1378,12 @@ def load_settings() -> Settings:
         voice_device=voice_device,
         sample_rate=sample_rate,
         voice_min_energy=voice_min_energy,
+
+        # Audio Device Selection (endpoint-id scheme)
+        audio_output_endpoint_id=audio_output_endpoint_id,
+        audio_output_name=audio_output_name,
+        audio_input_endpoint_id=audio_input_endpoint_id,
+        audio_input_name=audio_input_name,
 
         # Voice Collection & Timing
         voice_block_seconds=voice_block_seconds,

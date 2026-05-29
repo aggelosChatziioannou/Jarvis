@@ -191,6 +191,67 @@ class TestMemoryInjectionWindowConfig:
         assert settings.memory_injection_max_turns == 6
 
 
+class TestAudioDeviceSelectionConfig:
+    """Defaults + round-trip for the endpoint-id audio selection keys.
+
+    Phase 1 of the audio-device redesign: the user's chosen input/output are
+    persisted by STABLE endpoint id (preferred) with the friendly name kept
+    alongside as a display label + resolution fallback. All four default to
+    the empty string ("not selected"); the OS-default seed happens later
+    (Phase 2), never here.
+    """
+
+    _KEYS = (
+        "audio_output_endpoint_id",
+        "audio_output_name",
+        "audio_input_endpoint_id",
+        "audio_input_name",
+    )
+
+    def test_defaults_present_and_empty(self):
+        config = get_default_config()
+        for key in self._KEYS:
+            assert key in config, f"missing default for {key}"
+            assert config[key] == "", f"{key} should default to empty string"
+
+    def test_keys_round_trip_through_settings(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(
+            _json.dumps(
+                {
+                    "audio_output_endpoint_id": "{0.0.0.00000000}.{spk}",
+                    "audio_output_name": "Headset (Realtek(R) Audio)",
+                    "audio_input_endpoint_id": "{0.0.1.00000000}.{mic}",
+                    "audio_input_name": "Microphone (PD200X)",
+                }
+            )
+        )
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.audio_output_endpoint_id == "{0.0.0.00000000}.{spk}"
+        assert settings.audio_output_name == "Headset (Realtek(R) Audio)"
+        assert settings.audio_input_endpoint_id == "{0.0.1.00000000}.{mic}"
+        assert settings.audio_input_name == "Microphone (PD200X)"
+
+    def test_unset_keys_resolve_to_empty_string(self, tmp_path, monkeypatch):
+        """A config with none of the keys set yields empty strings, never None,
+        so downstream resolution can treat '' uniformly as 'not selected'."""
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"tts_enabled": True}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        for key in self._KEYS:
+            assert getattr(settings, key) == ""
+
+
 class TestModelConsistency:
     """Tests for overall model configuration consistency."""
 
