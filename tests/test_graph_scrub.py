@@ -123,3 +123,78 @@ def test_scrub_skips_empty_branch_nodes():
     assert judged == []
     assert result["proposals"] == []
     assert result["applied"] is False
+
+
+# ── Task 8: apply_graph_scrub (apply-on-confirm) ──────────────────────
+
+
+def test_apply_removes_only_approved_facts():
+    store = FakeStore({BRANCH_USER: "The user lives in Ioannina\nThe user speaks Welsh"})
+    res = go.apply_graph_scrub(
+        store, [{"branch": BRANCH_USER, "fact": "The user speaks Welsh"}]
+    )
+    assert "Welsh" not in store._b[BRANCH_USER]
+    assert "Ioannina" in store._b[BRANCH_USER]  # untouched fact preserved
+    assert res["removed"] == 1  # counts-only
+
+
+def test_apply_returns_counts_only_no_raw_text():
+    """The apply return value must never echo raw fact text — the streaming
+    layer surfaces it, and that channel is counts-only.
+    """
+    store = FakeStore({BRANCH_USER: "The user lives in Ioannina\nThe user speaks Welsh"})
+    res = go.apply_graph_scrub(
+        store, [{"branch": BRANCH_USER, "fact": "The user speaks Welsh"}]
+    )
+    blob = repr(res).lower()
+    assert "welsh" not in blob
+    assert "ioannina" not in blob
+    assert set(res.keys()) <= {"removed"}
+
+
+def test_apply_preserves_other_lines_across_branches():
+    store = FakeStore(
+        {
+            BRANCH_USER: "Fact A\nFact B\nFact C",
+            BRANCH_WORLD: "World 1\nWorld 2",
+        }
+    )
+    res = go.apply_graph_scrub(
+        store,
+        [
+            {"branch": BRANCH_USER, "fact": "Fact B"},
+            {"branch": BRANCH_WORLD, "fact": "World 1"},
+        ],
+    )
+    assert store._b[BRANCH_USER] == "Fact A\nFact C"
+    assert store._b[BRANCH_WORLD] == "World 2"
+    assert res["removed"] == 2
+
+
+def test_apply_empty_approved_list_is_noop():
+    store = FakeStore({BRANCH_USER: "Fact A\nFact B"})
+    res = go.apply_graph_scrub(store, [])
+    assert res["removed"] == 0
+    assert store.updates == []
+    assert store._b[BRANCH_USER] == "Fact A\nFact B"
+
+
+def test_apply_unknown_fact_removes_nothing():
+    """An approved fact that no longer exists on the node removes nothing and
+    is not counted — the node is left untouched.
+    """
+    store = FakeStore({BRANCH_USER: "Fact A\nFact B"})
+    res = go.apply_graph_scrub(
+        store, [{"branch": BRANCH_USER, "fact": "Fact that is not present"}]
+    )
+    assert res["removed"] == 0
+    assert store._b[BRANCH_USER] == "Fact A\nFact B"
+
+
+def test_apply_fails_open_on_missing_branch_node():
+    """An approved fact for a branch with no node is skipped, not fatal."""
+    store = FakeStore({BRANCH_USER: "Fact A"})
+    res = go.apply_graph_scrub(
+        store, [{"branch": "nonexistent", "fact": "whatever"}]
+    )
+    assert res["removed"] == 0

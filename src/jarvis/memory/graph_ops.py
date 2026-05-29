@@ -591,6 +591,82 @@ def scrub_graph_facts(
     return {"proposals": proposals, "applied": False}
 
 
+def apply_graph_scrub(
+    store: GraphMemoryStore,
+    approved_facts: list[dict],
+) -> dict:
+    """Remove user-approved facts from their branch nodes.
+
+    ``approved_facts`` is a list of ``{"branch", "fact"}`` dicts — exactly
+    the subset of ``scrub_graph_facts`` proposals the local user confirmed
+    for deletion. For each one, the matching line is removed from the
+    branch node's ``data`` (all other lines preserved verbatim) via
+    ``store.update_node``.
+
+    Returns counts ONLY (``{"removed": n}``) — never raw fact text — so a
+    streaming caller can report progress without leaking memory content.
+    Privacy first: the raw facts appear only in the propose response the
+    local user already reviewed.
+
+    Fail-open: an approved fact whose branch node is missing, or whose
+    text no longer matches a stored line, is skipped (not counted), and
+    the rest still apply. Matching uses Unicode folding so casing /
+    whitespace drift between the proposal and the stored line still
+    removes the right line.
+    """
+    # Group approvals by branch so each node is rewritten at most once.
+    by_branch: dict[str, list[str]] = {}
+    for item in approved_facts:
+        if not isinstance(item, dict):
+            continue
+        branch = item.get("branch")
+        fact = item.get("fact")
+        if not branch or not fact:
+            continue
+        by_branch.setdefault(branch, []).append(fact)
+
+    removed = 0
+    for branch, facts_to_drop in by_branch.items():
+        node = store.get_node(branch)
+        if node is None:
+            debug_log(
+                f"graph scrub apply: branch node {branch!r} missing, skipping",
+                "memory",
+            )
+            continue
+
+        drop_keys = {normalise_fact(f) for f in facts_to_drop if f and f.strip()}
+        if not drop_keys:
+            continue
+
+        lines = (node.data or "").split("\n")
+        kept: list[str] = []
+        node_removed = 0
+        for line in lines:
+            if line.strip() and normalise_fact(line) in drop_keys:
+                node_removed += 1
+                continue
+            kept.append(line)
+
+        if node_removed == 0:
+            # Nothing on this node matched an approved fact — leave it
+            # byte-identical rather than rewriting (and re-stamping
+            # updated_at) for a no-op.
+            continue
+
+        new_data = "\n".join(kept).strip("\n")
+        store.update_node(branch, data=new_data)
+        removed += node_removed
+        debug_log(
+            f"graph scrub apply: removed {node_removed} fact(s) from "
+            f"branch {branch!r}",
+            "memory",
+        )
+
+    debug_log(f"graph scrub apply: removed {removed} fact(s) total", "memory")
+    return {"removed": removed}
+
+
 # ── Best-node traversal ───────────────────────────────────────────────
 
 
