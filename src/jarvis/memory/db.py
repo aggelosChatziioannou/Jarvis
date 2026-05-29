@@ -434,6 +434,43 @@ class Database:
         else:
             return None
 
+    def search_summaries_by_vector(self, vec: Sequence[float], top_k: int = 10) -> list[dict]:
+        """Pure vector search over stored summary embeddings.
+
+        Returns ``[{"summary_id": int, "distance": float}, ...]`` ordered by
+        ascending distance (closest first). Works on both the sqlite-vss path
+        and the fallback python/FAISS store path, so the same call exercises
+        whichever store the live install actually uses.
+
+        Empty store, missing vectors, or any backend error fail open to an
+        empty list — recall is best-effort and must never raise into a reply.
+        """
+        if self.is_vss_enabled:
+            try:
+                with self._lock:
+                    cur = self.conn.cursor()
+                    rows = cur.execute(
+                        """
+                        SELECT sv.summary_id AS summary_id, v.distance AS distance
+                        FROM vss_search(embeddings, 'vec', ?)
+                        JOIN summary_vec sv ON sv.emb_id = rowid
+                        ORDER BY distance
+                        LIMIT ?
+                        """,
+                        (sqlite3.Binary(self._pack_vector(vec)), int(top_k)),
+                    ).fetchall()
+                return [{"summary_id": int(r["summary_id"]), "distance": float(r["distance"])} for r in rows]
+            except Exception:
+                return []
+        elif self._python_vector_store:
+            try:
+                results = self._python_vector_store.search(list(vec), top_k=int(top_k))
+            except Exception:
+                return []
+            return [{"summary_id": int(sid), "distance": float(dist)} for sid, dist in results]
+        else:
+            return []
+
     def close(self) -> None:
         try:
             with self._lock:
