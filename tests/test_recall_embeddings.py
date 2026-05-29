@@ -46,3 +46,39 @@ def test_python_vector_store_roundtrip(tmp_path):
     hits = db.search_summaries_by_vector(emb, top_k=3)
     assert any(h["summary_id"] == summary_id for h in hits), "stored vector must be searchable"
     db.close()
+
+
+def test_summary_write_populates_vector_store(tmp_path, monkeypatch):
+    """Writing a summary with an embed model configured must store a vector,
+    even when sqlite-vss is unavailable (the fallback store path)."""
+    db = Database(str(tmp_path / "t.db"), sqlite_vss_path=None)
+    assert db.is_vss_enabled is False
+
+    # Keep the test off the network: deterministic summary + deterministic embed.
+    monkeypatch.setattr(
+        conv, "generate_conversation_summary",
+        lambda *a, **k: ("The user lives in Ioannina.", "user, location"),
+    )
+    monkeypatch.setattr(
+        conv, "get_embedding",
+        lambda text, base, model, timeout_sec=15.0: [0.02] * 768,
+    )
+
+    summary_id = conv.update_daily_conversation_summary(
+        db,
+        new_chunks=["User: I live in Ioannina", "Assistant: Noted."],
+        ollama_base_url="http://x",
+        ollama_chat_model="gemma4:e2b",
+        ollama_embed_model="nomic-embed-text",
+        source_app="test",
+    )
+    assert summary_id is not None, "the write must succeed and return a summary id"
+
+    rows = db.get_all_conversation_summaries()
+    assert rows, "a summary row must exist"
+
+    hits = db.search_summaries_by_vector([0.02] * 768, top_k=3)
+    assert any(h["summary_id"] == summary_id for h in hits), (
+        "the written summary must be vector-searchable on the python store path"
+    )
+    db.close()

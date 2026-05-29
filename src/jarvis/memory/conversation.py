@@ -1329,8 +1329,12 @@ def update_daily_conversation_summary(
             source_app=source_app,
         )
 
-        # Generate and store embedding for semantic search
-        if db.is_vss_enabled:
+        # Generate and store embedding for semantic search.
+        # Embed on ANY available vector store (sqlite-vss OR the fallback
+        # python/FAISS store). Gating on is_vss_enabled here was the bug that
+        # left the fallback store empty on installs without sqlite-vss, so
+        # semantic recall returned nothing.
+        if ollama_embed_model and db.has_vector_store:
             # Combine summary and topics for embedding
             text_for_embedding = f"{summary} {topics}"
             vec = get_embedding(text_for_embedding, ollama_base_url, ollama_embed_model, timeout_sec=15.0)  # Use shorter timeout for embeddings

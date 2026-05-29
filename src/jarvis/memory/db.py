@@ -413,6 +413,14 @@ class Database:
             ).fetchall()
             return rows
 
+    @property
+    def has_vector_store(self) -> bool:
+        """True when *some* vector store is available to embed/search against,
+        whether sqlite-vss or the fallback python/FAISS store. Callers should
+        gate embedding writes on this, NOT on ``is_vss_enabled`` alone, or the
+        fallback store path silently never gets populated."""
+        return bool(self.is_vss_enabled or self._python_vector_store is not None)
+
     def upsert_summary_embedding(self, summary_id: int, vec: Sequence[float]) -> Optional[int]:
         """Store or update embedding for a conversation summary."""
         if self.is_vss_enabled:
