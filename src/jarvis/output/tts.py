@@ -66,6 +66,47 @@ _JARVIS_STATE_TO_REACT_VOCAB = {
 }
 
 
+def _publish_tts_react_state(state) -> None:
+    """Publish the current TTS phase to the React HUD (WebSocket) and the
+    cross-process state file, WITHOUT importing desktop_app.face_widget or
+    touching any QObject (importing PyQt6 from the daemon's TTS worker thread
+    deadlocks on Python's import lock — the reason this was rewritten away from
+    the face_widget path).
+
+    Accepts a JarvisState enum OR a plain string ('synthesizing', 'speaking',
+    'idle', ...). Used by BOTH the Piper and Chatterbox engines so neither can
+    drift back to the broken path.
+    """
+    state_value = state.value if hasattr(state, "value") else str(state)
+    debug_log(f"_publish_tts_state: {state_value}", "tts")
+
+    # Idle guard: only fall back to idle if we are still mid-TTS
+    # (speaking/synthesizing). If a follow-up already set LISTENING or the
+    # reply engine set THINKING, leave that state alone — don't clobber it
+    # with a late idle from a finishing TTS utterance.
+    if state_value == "idle":
+        try:
+            with open(_JARVIS_STATE_FILE) as _f:
+                _current = _f.read().strip()
+            if _current and _current not in ("speaking", "synthesizing"):
+                debug_log(f"_publish_tts_state: skip idle (current={_current})", "tts")
+                return
+        except Exception:
+            pass  # no readable state file -> fail open and write idle
+
+    try:
+        with open(_JARVIS_STATE_FILE, "w") as f:
+            f.write(state_value)
+    except Exception as e:
+        debug_log(f"state file write failed: {e!r}", "tts")
+    try:
+        from jarvis import api_server
+        react_state = _JARVIS_STATE_TO_REACT_VOCAB.get(state_value, "idle")
+        api_server.publish_state(state=react_state)
+    except Exception as e:
+        debug_log(f"api_server publish_state failed: {e!r}", "tts")
+
+
 def _list_output_devices() -> None:
     """Print available output devices once, so the user can verify routing."""
     try:
@@ -1518,25 +1559,7 @@ class ChatterboxTTS:
         import lock deadlocks in that scenario. The diagnostic prints below
         will fire even on cold start, so any future hang is visible.
         """
-        state_value = state.value if hasattr(state, "value") else str(state)
-        debug_log(f"_publish_tts_state: {state_value}", "tts")
-
-        # 1. File-based IPC (cross-process). Uses the module-level constant
-        #    — no face_widget import, no PyQt6 init in this thread.
-        try:
-            with open(_JARVIS_STATE_FILE, "w") as f:
-                f.write(state_value)
-        except Exception as e:
-            debug_log(f"state file write failed: {e!r}", "tts")
-
-        # 2. React UI WebSocket via api_server. Non-blocking — schedules a
-        #    call_soon_threadsafe on uvicorn's loop.
-        try:
-            from jarvis import api_server
-            react_state = _JARVIS_STATE_TO_REACT_VOCAB.get(state_value, "idle")
-            api_server.publish_state(state=react_state)
-        except Exception as e:
-            debug_log(f"api_server publish_state failed: {e!r}", "tts")
+        _publish_tts_react_state(state)
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:
@@ -2075,28 +2098,11 @@ class PiperTTS:
         return (True, interrupted)
 
     def _publish_tts_state(self, state: "JarvisState") -> None:
-        """Publish the current TTS phase to the face widget and React UI."""
-        try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            if state == JarvisState.SYNTHESIZING:
-                debug_log("setting face state to SYNTHESIZING (piper)", "tts")
-                state_manager.set_state(JarvisState.SYNTHESIZING)
-            elif state == JarvisState.SPEAKING:
-                debug_log("setting face state to SPEAKING (piper)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
-            elif state == JarvisState.IDLE:
-                # Transition back to IDLE only if we are still in SPEAKING or SYNTHESIZING.
-                # If the user already started a follow-up (state == LISTENING) or
-                # the reply engine is working (state == THINKING), leave it alone.
-                current = state_manager.state
-                if current in (JarvisState.SPEAKING, JarvisState.SYNTHESIZING):
-                    debug_log("setting face state to IDLE (piper)", "tts")
-                    state_manager.set_state(JarvisState.IDLE)
-        except ImportError:
-            debug_log("face widget not available (ImportError) (piper)", "tts")
-        except Exception as e:
-            debug_log(f"failed to set face state (piper): {e}", "tts")
+        """Publish the current TTS phase to the React HUD via the shared
+        QObject-free helper. (Previously this used the desktop_app.face_widget
+        path with an enum-vs-string comparison, so Piper never reached the HUD
+        and the widget stuck on PROCESSING.)"""
+        _publish_tts_react_state(state)
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:
