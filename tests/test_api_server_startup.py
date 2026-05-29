@@ -76,6 +76,50 @@ def test_start_in_background_returns_false_when_port_busy(monkeypatch) -> None:
         busy_socket.close()
 
 
+# ---------------------------------------------------------------------------
+# /api/audio/devices — delegates to the real-device cleaner
+# ---------------------------------------------------------------------------
+
+
+def test_audio_devices_endpoint_returns_filtered_shape(monkeypatch) -> None:
+    """The endpoint must return the cleaned list_real_devices() result, keeping
+    the {inputs, outputs, current_in, current_out} shape the UI expects."""
+    from jarvis import api_server
+    from jarvis.output import audio_devices
+
+    cleaned = {
+        "inputs": [{"index": 18, "name": "Microphone (PD200X Podcast Microphone)"}],
+        "outputs": [
+            {"index": 15, "name": "Headset (Realtek(R) Audio)"},
+            {"index": 16, "name": "Speakers (PD200X Podcast Microphone)"},
+        ],
+        "current_in": 18,
+        "current_out": 15,
+    }
+    monkeypatch.setattr(audio_devices, "list_real_devices", lambda: cleaned)
+
+    result = api_server.list_audio_devices()
+
+    # Endpoint passes the cleaned data straight through — no junk re-introduced.
+    assert result == cleaned
+
+
+def test_audio_devices_endpoint_fails_open_to_empty(monkeypatch) -> None:
+    """If the cleaner raises, the endpoint returns the safe empty shape rather
+    than 500-ing the settings UI."""
+    from jarvis import api_server
+    from jarvis.output import audio_devices
+
+    def _boom():
+        raise RuntimeError("portaudio exploded")
+
+    monkeypatch.setattr(audio_devices, "list_real_devices", _boom)
+
+    result = api_server.list_audio_devices()
+
+    assert result == {"inputs": [], "outputs": [], "current_in": None, "current_out": None}
+
+
 def test_start_in_background_records_uvicorn_crash(monkeypatch) -> None:
     """If the uvicorn thread's run() raises, the error must be retrievable."""
     from jarvis import api_server

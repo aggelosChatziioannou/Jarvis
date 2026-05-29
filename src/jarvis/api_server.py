@@ -529,18 +529,14 @@ def list_llm_models() -> List[Dict[str, Any]]:
 
 @app.get("/api/audio/devices")
 def list_audio_devices() -> Dict[str, Any]:
+    # Delegate to the real-device cleaner so the settings UI only ever shows
+    # genuinely-available endpoints (no Sound Mapper / Stereo Mix / Primary
+    # Driver / disconnected / host-API duplicates). Keeps the same JSON shape
+    # the UI expects: {inputs, outputs, current_in, current_out}. Imported as
+    # a module (not by-name) so the function stays monkeypatchable in tests.
     try:
-        import sounddevice as sd
-        devices = sd.query_devices()
-        inputs = [{"index": i, "name": d["name"]} for i, d in enumerate(devices) if d.get("max_input_channels", 0) > 0]
-        outputs = [{"index": i, "name": d["name"]} for i, d in enumerate(devices) if d.get("max_output_channels", 0) > 0]
-        default_in, default_out = sd.default.device
-        return {
-            "inputs": inputs,
-            "outputs": outputs,
-            "current_in": int(default_in) if default_in is not None else None,
-            "current_out": int(default_out) if default_out is not None else None,
-        }
+        from .output import audio_devices
+        return audio_devices.list_real_devices()
     except Exception as e:
         debug_log(f"api: audio devices failed: {e}", "api")
         return {"inputs": [], "outputs": [], "current_in": None, "current_out": None}
