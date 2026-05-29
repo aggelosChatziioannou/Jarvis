@@ -12,6 +12,7 @@ Coverage:
   W3  thread-safe speaking flag (lock guards set_speaking / dispatch read)
   W4  on_dictation_end(captured: bool) contract
   W5  instant barge-in interrupt on speech onset during TTS
+  W6  wake mic resolved from the persisted endpoint id (input flow)
 """
 
 import threading
@@ -344,3 +345,139 @@ class TestBargeInInterrupt:
         assert fired == [True]
         with bridge._state_lock:
             assert bridge._state == State.DICTATING
+
+
+# ===========================================================================
+# W6 — wake mic resolved from the persisted endpoint id
+# ===========================================================================
+
+@pytest.mark.unit
+class TestMicDeviceResolution:
+    """The bridge's wake mic comes from the persisted audio-input selection
+    (``audio_input_endpoint_id`` + ``audio_input_name``) resolved to a
+    sounddevice index via ``audio_devices.resolve_endpoint_to_sd_index(...,
+    kind="input")``. ``wispr_mic_device`` is only a final fallback when the new
+    keys are empty. An absent device resolves to None (no crash, reconnect
+    later) rather than falling through to the legacy key."""
+
+    def test_resolves_mic_from_persisted_endpoint_id(self):
+        from unittest.mock import patch
+
+        bridge = _make_bridge(
+            audio_input_endpoint_id="{0.0.1.00000000}.{mic-guid}",
+            audio_input_name="Microphone (PD200X Podcast Microphone)",
+            wispr_mic_device="legacy-name-should-be-ignored",
+        )
+
+        with patch(
+            "jarvis.output.audio_devices.resolve_endpoint_to_sd_index",
+            return_value=18,
+        ) as p_resolve:
+            idx = bridge._resolve_mic_device()
+
+        assert idx == 18
+        p_resolve.assert_called_once()
+        call = p_resolve.call_args
+        id_arg = call.args[0] if call.args else call.kwargs.get("endpoint_id")
+        name_arg = call.args[1] if len(call.args) > 1 else call.kwargs.get("name")
+        assert id_arg == "{0.0.1.00000000}.{mic-guid}"
+        assert name_arg == "Microphone (PD200X Podcast Microphone)"
+        assert call.kwargs.get("kind") == "input"
+
+    def test_absent_device_resolves_to_none_not_legacy_fallback(self):
+        """When the new keys are set but the device is currently absent
+        (resolve -> None), the bridge yields None (treated as no-device,
+        ready to reconnect) and does NOT fall back to ``wispr_mic_device``."""
+        from unittest.mock import patch
+
+        bridge = _make_bridge(
+            audio_input_endpoint_id="{ep-gone}",
+            audio_input_name="Vanished Mic",
+            wispr_mic_device="legacy-name-should-be-ignored",
+        )
+
+        with patch(
+            "jarvis.output.audio_devices.resolve_endpoint_to_sd_index",
+            return_value=None,
+        ):
+            idx = bridge._resolve_mic_device()
+
+        assert idx is None
+
+    def test_falls_back_to_legacy_key_only_when_new_keys_empty(self):
+        """With both new keys empty, the legacy ``wispr_mic_device`` value is
+        used (matched to an index via the input flow), preserving old configs
+        that never recorded an endpoint id."""
+        from unittest.mock import patch
+
+        bridge = _make_bridge(
+            audio_input_endpoint_id="",
+            audio_input_name="",
+            wispr_mic_device="PD200X",
+        )
+
+        with patch(
+            "jarvis.output.audio_devices.resolve_endpoint_to_sd_index",
+        ) as p_resolve, patch(
+            "jarvis.output.audio_devices.match_name_to_sd_index",
+            return_value=7,
+        ) as p_match:
+            idx = bridge._resolve_mic_device()
+
+        # New-key resolver not consulted (nothing persisted there); legacy
+        # name matched on the input flow instead.
+        assert idx == 7
+        p_resolve.assert_not_called()
+        assert p_match.call_args.kwargs.get("kind") == "input"
+
+    def test_no_selection_anywhere_resolves_to_none(self):
+        """No new keys and no legacy key -> None (PortAudio default mic)."""
+        bridge = _make_bridge(
+            audio_input_endpoint_id="",
+            audio_input_name="",
+        )
+        # wispr_mic_device absent on cfg -> getattr default None.
+        assert bridge._resolve_mic_device() is None
+
+    def test_start_does_not_crash_when_device_absent(self):
+        """If the selected mic is absent at start(), the bridge must not crash:
+        it logs and treats it as no-device (ready to reconnect). We stub the
+        heavy model loads + the audio stream so only the device-resolution +
+        stream-open guard is exercised."""
+        from unittest.mock import MagicMock, patch
+        import jarvis.listening.wispr_bridge as wb
+
+        bridge = _make_bridge(
+            audio_input_endpoint_id="{ep-gone}",
+            audio_input_name="Vanished Mic",
+        )
+
+        # openWakeWord + Silero are imported/loaded inside start(); make them
+        # cheap no-ops so the test never touches the network or real models.
+        fake_oww = MagicMock()
+        fake_oww.model.Model.return_value = MagicMock()
+        fake_oww.utils.download_models.return_value = None
+
+        with patch(
+            "jarvis.output.audio_devices.resolve_endpoint_to_sd_index",
+            return_value=None,
+        ), patch.dict(
+            "sys.modules",
+            {"openwakeword": fake_oww, "openwakeword.model": fake_oww.model},
+        ), patch.object(
+            wb.torch.hub, "load",
+            return_value=(MagicMock(), [None, None, None, lambda *a, **k: MagicMock()]),
+        ), patch.object(wb.sd, "InputStream") as p_stream:
+            # Should return without raising even though the device is absent.
+            result = bridge.start()
+
+        # No-device path: the bridge does not crash. Either it opened a stream
+        # against the OS default (device=None) or it skipped opening entirely —
+        # in both cases it must not raise and must not pin a bogus index.
+        if p_stream.called:
+            assert p_stream.call_args.kwargs.get("device") is None
+        assert result in (True, False)  # no exception is the contract
+        try:
+            bridge.stop()
+        except Exception:
+            pass

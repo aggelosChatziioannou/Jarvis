@@ -205,7 +205,12 @@ class WisprBridge:
             cfg, "wispr_hot_window_sec", DEFAULT_HOT_WINDOW_SEC))
         self.suppress_autotype = bool(getattr(
             cfg, "wispr_suppress_autotype", DEFAULT_SUPPRESS_AUTOTYPE))
-        self.device = getattr(cfg, "wispr_mic_device", DEFAULT_MIC_DEVICE)
+        # Wake mic = the persisted audio-input selection (by stable endpoint id,
+        # friendly name as fallback) resolved to a sounddevice index. Resolved
+        # here for construction and AGAIN in start()/reconnect so a device that
+        # (re)appears later is picked up. None = currently absent or unset, in
+        # which case the stream falls open to the PortAudio default mic.
+        self.device = self._resolve_mic_device()
 
         # Clipboard watching is required (it's how we get the transcript).
         # If pyperclip isn't installed we still run — but the transcript
@@ -273,6 +278,81 @@ class WisprBridge:
         self._started = False
 
         atexit.register(self._cleanup_atexit_wrapper)
+
+    # ----------------------------------------------------------------------
+    # Mic device resolution
+    # ----------------------------------------------------------------------
+
+    def _resolve_mic_device(self) -> Optional[Any]:
+        """Resolve the wake mic to a sounddevice index from the persisted
+        audio-input selection.
+
+        Resolution order:
+          1. ``cfg.audio_input_endpoint_id`` / ``cfg.audio_input_name`` (the new
+             redesign keys) -> ``audio_devices.resolve_endpoint_to_sd_index(...,
+             kind="input")``. When EITHER key is set we use ONLY this path: a
+             ``None`` result means the chosen device is currently absent, so we
+             return ``None`` (treated as no-device, ready to reconnect when it
+             returns) rather than silently dropping back to the legacy device.
+          2. ``cfg.wispr_mic_device`` (legacy key) is a FINAL fallback, used
+             only when both new keys are empty, matched to an index on the input
+             flow. Preserves old configs that never recorded an endpoint id.
+
+        Returns ``None`` when nothing is selected or the selection is absent;
+        the caller opens the stream against PortAudio's default mic in that
+        case. Fail-open: any error -> ``None``.
+        """
+        try:
+            from ..output import audio_devices
+        except Exception as e:  # pragma: no cover - defensive import guard
+            debug_log(
+                f"_resolve_mic_device: audio_devices import failed ({e!r})",
+                "voice",
+            )
+            return None
+
+        endpoint_id = getattr(self.cfg, "audio_input_endpoint_id", "") or ""
+        name = getattr(self.cfg, "audio_input_name", "") or ""
+
+        try:
+            if endpoint_id or name:
+                idx = audio_devices.resolve_endpoint_to_sd_index(
+                    endpoint_id, name, kind="input"
+                )
+                if idx is None:
+                    debug_log(
+                        "_resolve_mic_device: input device disconnected "
+                        f"(id={endpoint_id!r}, name={name!r}) — no-device, "
+                        "will reconnect when it returns",
+                        "voice",
+                    )
+                else:
+                    debug_log(
+                        f"_resolve_mic_device: id={endpoint_id!r} "
+                        f"name={name!r} -> sd index {idx}",
+                        "voice",
+                    )
+                return idx
+
+            # No new-key selection — fall back to the legacy device value.
+            legacy = getattr(self.cfg, "wispr_mic_device", DEFAULT_MIC_DEVICE)
+            if legacy is None or (isinstance(legacy, str) and legacy.strip() == ""):
+                return None
+            # Numeric legacy value -> use directly as an index.
+            if isinstance(legacy, int) or (
+                isinstance(legacy, str) and legacy.lstrip("-").isdigit()
+            ):
+                return int(legacy)
+            idx = audio_devices.match_name_to_sd_index(str(legacy), kind="input")
+            debug_log(
+                f"_resolve_mic_device: legacy wispr_mic_device={legacy!r} "
+                f"-> sd index {idx}",
+                "voice",
+            )
+            return idx
+        except Exception as e:  # pragma: no cover - defensive fail-open
+            debug_log(f"_resolve_mic_device raised: {e!r}", "voice")
+            return None
 
     # ----------------------------------------------------------------------
     # Public API
@@ -382,6 +462,12 @@ class WisprBridge:
         self._key_thread.start()
 
         # ---- Open audio stream -------------------------------------------
+        # Re-resolve the mic fresh at start() so a device that (re)appeared
+        # after construction is picked up. None -> the selected device is
+        # currently absent (or unset); we open on the PortAudio default mic so
+        # the bridge still runs and reconnects when the chosen device returns,
+        # rather than crashing.
+        self.device = self._resolve_mic_device()
         print("[IDLE] Listening for 'Hey Jarvis'...", flush=True)
         try:
             self.audio_stream = sd.InputStream(
@@ -397,8 +483,8 @@ class WisprBridge:
             print(f"[ERROR] Failed to open audio input stream: {e}",
                   file=sys.stderr, flush=True)
             print(
-                "[HINT] Check microphone permissions and device index "
-                "(wispr_mic_device in config).",
+                "[HINT] Check microphone permissions and the selected input "
+                "device (Audio I/O settings).",
                 file=sys.stderr, flush=True,
             )
             return False
