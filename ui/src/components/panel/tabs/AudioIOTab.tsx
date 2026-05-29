@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Volume2, Mic, Speaker } from 'lucide-react';
 import { api, type AudioDevices } from '@/lib/api';
 import { SaveBar } from './WakeWordTab';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 /**
  * Audio I/O. Device pickers are NAME-based — they save the device name to the
@@ -60,24 +61,15 @@ export default function AudioIOTab() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 700 }}>
       <SectionCard icon={<Mic size={18} />} title="Input (Microphone)">
         <FormRow label="Microphone">
-          <select
+          <DeviceSelect
             value={micName}
-            onChange={(e) => {
-              setMicName(e.target.value);
+            onChange={(v) => {
+              setMicName(v);
               setDirty(true);
             }}
-            style={selectStyle}
-          >
-            <option value="">(System Default)</option>
-            {inputs.map((d) => (
-              <option key={d.name} value={d.name}>
-                {d.name}
-              </option>
-            ))}
-            {micName && !inputs.some((d) => d.name === micName) && (
-              <option value={micName}>{micName} (not detected)</option>
-            )}
-          </select>
+            options={inputs}
+            defaultLabel="(System Default)"
+          />
         </FormRow>
         <p style={hintStyle}>Where Jarvis listens for "Hey Jarvis".</p>
       </SectionCard>
@@ -85,24 +77,15 @@ export default function AudioIOTab() {
       <SectionCard icon={<Speaker size={18} />} title="Output (Speaker)">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <FormRow label="Speaker">
-            <select
+            <DeviceSelect
               value={outName}
-              onChange={(e) => {
-                setOutName(e.target.value);
+              onChange={(v) => {
+                setOutName(v);
                 setDirty(true);
               }}
-              style={selectStyle}
-            >
-              <option value="">(Follow Windows default)</option>
-              {outputs.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-              {outName && !outputs.some((d) => d.name === outName) && (
-                <option value={outName}>{outName} (not detected)</option>
-              )}
-            </select>
+              options={outputs}
+              defaultLabel="(Follow Windows default)"
+            />
           </FormRow>
           <p style={hintStyle}>Where Jarvis speaks. Save first, then test below.</p>
           <FormRow label="">
@@ -145,6 +128,49 @@ export default function AudioIOTab() {
 
       <SaveBar dirty={dirty} onSave={save} savedAt={savedAt} />
     </div>
+  );
+}
+
+const DEFAULT_DEVICE = '__default__';
+
+/**
+ * Themed device picker built on the shadcn/Radix Select so the open option
+ * list uses the app's dark+cyan popover tokens instead of the grey native
+ * dropdown. Radix forbids an empty-string value, so the "default" choice is
+ * carried internally as DEFAULT_DEVICE and mapped back to '' for the config.
+ */
+function DeviceSelect({
+  value,
+  onChange,
+  options,
+  defaultLabel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { index: number; name: string }[];
+  defaultLabel: string;
+}) {
+  const known = options.some((d) => d.name === value);
+  return (
+    <Select
+      value={value === '' ? DEFAULT_DEVICE : value}
+      onValueChange={(v) => onChange(v === DEFAULT_DEVICE ? '' : v)}
+    >
+      <SelectTrigger style={selectStyle} aria-label="device">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={DEFAULT_DEVICE}>{defaultLabel}</SelectItem>
+        {options.map((d) => (
+          <SelectItem key={d.name} value={d.name}>
+            {d.name}
+          </SelectItem>
+        ))}
+        {value !== '' && !known && (
+          <SelectItem value={value}>{value} (not detected)</SelectItem>
+        )}
+      </SelectContent>
+    </Select>
   );
 }
 
