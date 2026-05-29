@@ -168,12 +168,67 @@ def test_stop_closes_the_stream_and_returns_quickly(monkeypatch):
     tp.stop_tune()
     elapsed = time.time() - t0
 
-    # Only the tune thread closes the stream; stop_tune must NOT abort
-    # from the caller's thread — that races with close() on macOS.
+    # stop_tune now closes the stream DIRECTLY for immediate silence (so the
+    # pad can't linger under / after the reply when the thread's wake races
+    # with TTS opening its stream). It must still NOT abort — abort from the
+    # caller races with close() on macOS.
     assert stream.closed
     assert not stream.aborted
     assert elapsed < 1.0
     assert not tp.is_playing()
+
+
+def test_restart_after_stop_is_clean(monkeypatch):
+    """After stop the player resets fully (no leaked stream ref) and starts
+    again cleanly. Guards the 'second tune overlaps the first' leak that left
+    the processing pad audible after the reply."""
+    created = _install_fake_sounddevice(monkeypatch)
+    tp = TunePlayer(enabled=True)
+    tp.start_tune()
+    for _ in range(100):
+        s = created.get("stream")
+        if s is not None and s.started:
+            break
+        time.sleep(0.01)
+
+    tp.stop_tune()
+    assert tp._thread is None
+    assert tp._stream is None
+    assert not tp.is_playing()
+
+    # A fresh start must still work (the _is_playing guard must not wedge it).
+    tp.start_tune()
+    try:
+        for _ in range(100):
+            if tp.is_playing():
+                break
+            time.sleep(0.01)
+        assert tp.is_playing()
+    finally:
+        tp.stop_tune()
+
+
+def test_start_skipped_while_already_playing(monkeypatch):
+    """A second start while a tune is already playing is a no-op, even if a
+    prior stop had nulled _thread on a slow join — the _is_playing guard
+    prevents two overlapping tunes."""
+    _install_fake_sounddevice(monkeypatch)
+    tp = TunePlayer(enabled=True)
+    tp.start_tune()
+    try:
+        for _ in range(100):
+            if tp.is_playing():
+                break
+            time.sleep(0.01)
+        assert tp.is_playing()
+        # Simulate a slow-join leak: _thread nulled but the tune still playing.
+        leaked = tp._thread
+        tp._thread = None
+        tp.start_tune()  # must be ignored because _is_playing is still set
+        assert tp._thread is None
+        tp._thread = leaked  # restore so stop_tune joins it cleanly
+    finally:
+        tp.stop_tune()
 
 
 def test_fallback_when_sounddevice_unavailable(monkeypatch):

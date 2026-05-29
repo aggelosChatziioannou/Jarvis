@@ -2123,6 +2123,10 @@ class VoiceListener(threading.Thread):
                     self.activate_hot_window()
 
                 def _fp_playback_started() -> None:
+                    # Silence the thinking pad the instant audio engages (it is
+                    # also stopped before synthesis); guards against the pad
+                    # lingering under / after the reply.
+                    self._stop_thinking_tune()
                     # Mirror the main-path: set Wispr speaking flag so stop
                     # keywords interrupt instead of routing through cascade.
                     self._set_bridge_speaking(True)
@@ -2202,6 +2206,10 @@ class VoiceListener(threading.Thread):
             debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
 
             def _on_playback_started() -> None:
+                # Silence the thinking pad the instant audio engages (also
+                # stopped before synthesis); guards against it lingering under /
+                # after the reply.
+                self._stop_thinking_tune()
                 # Reset the echo detector's tts_start_time to NOW — i.e. the
                 # moment pygame engaged audio. The synthesis-to-play gap is
                 # 5-7s and was throwing the echo segment-offset off by the

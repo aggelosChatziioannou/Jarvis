@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..debug import debug_log
+from ..debug import debug_log, info_log
 
 
 def _generate_thinking_pad_samples() -> tuple[np.ndarray, int]:
@@ -159,36 +159,52 @@ class TunePlayer:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._is_playing = threading.Event()
+        self._stream = None  # live OutputStream, so stop_tune() can close it
 
     def start_tune(self) -> None:
-        if not self.enabled or self._thread is not None:
+        # Guard on _is_playing too: a prior stop whose join timed out may have
+        # nulled _thread while its audio thread is still running. Without this,
+        # a second tune could start and overlap — heard as the processing sound
+        # continuing under / after the reply.
+        if not self.enabled or self._thread is not None or self._is_playing.is_set():
             return
 
-        debug_log("thinking tune: start", category="tune")
+        info_log("thinking tune: start", "🎵")
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._play_tune, daemon=True)
         self._thread.start()
 
     def stop_tune(self) -> None:
-        """Stop the tune immediately, releasing the audio device.
+        """Stop the tune immediately and release the audio device.
 
-        We deliberately do NOT call ``stream.abort()`` from this thread —
-        only the tune thread (`_play_tune`'s finally block) touches the
-        stream. Calling abort() here and then close() over there races on
-        macOS: PortAudio/CoreAudio emits a spurious
-        ``||PaMacCore (AUHAL)|| Error … err=''!obj''`` on every stop
-        because the AudioObject is being torn down twice. Setting the
-        stop event is enough — `stream.close()` discards pending buffers
-        as if abort() had been called.
+        Sets the stop event AND closes the live stream directly, so the pad
+        goes silent the instant this is called. We do NOT rely solely on the
+        tune thread waking from its ``_stop_event.wait()`` and closing in its
+        finally block: that wake can race with TTS opening its OWN output
+        stream, which left the processing pad audible underneath / after the
+        reply (the bug). The thread's finally also closes the stream; the
+        double close is harmless (guarded). On macOS a double tear-down may log
+        a spurious PaMacCore error, which is caught and cosmetic.
         """
-        if self._thread is None:
+        if self._thread is None and not self._is_playing.is_set():
             return
 
-        debug_log("thinking tune: stop", category="tune")
+        info_log("thinking tune: stop", "🎵")
         self._stop_event.set()
-        self._thread.join(timeout=1.0)
+        # Immediate silence: close the live stream from here, don't wait for
+        # the audio thread to get scheduled.
+        stream = self._stream
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception as exc:
+                debug_log(f"thinking tune: stop close failed: {exc!r}", category="tune")
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=1.5)
         self._thread = None
         self._is_playing.clear()
+        self._stream = None
 
     def is_playing(self) -> bool:
         return self._is_playing.is_set()
@@ -245,6 +261,7 @@ class TunePlayer:
                 self._play_fallback_tune()
                 return
 
+            self._stream = stream  # exposed so stop_tune() can close it directly
             try:
                 stream.start()
                 # Hand off to the OS audio thread. Wake when stop is
@@ -259,6 +276,7 @@ class TunePlayer:
                     debug_log(f"thinking tune: stream close failed: {exc!r}", category="tune")
         finally:
             self._is_playing.clear()
+            self._stream = None
 
     def _play_fallback_tune(self) -> None:
         """Fallback for environments without a usable audio output."""
