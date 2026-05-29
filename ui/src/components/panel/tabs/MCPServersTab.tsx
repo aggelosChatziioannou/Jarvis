@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Cloud, Music, Mail, Calendar, FileText, Globe, AppWindow, Settings } from 'lucide-react';
+import { Cloud, Music, Mail, Calendar, FileText, Globe, AppWindow } from 'lucide-react';
 import ToggleSwitch from '../shared/ToggleSwitch';
 import { api, type MCPInfo } from '@/lib/api';
 
@@ -39,6 +39,10 @@ export default function MCPServersTab() {
 
   return (
     <div>
+      <p style={{ fontSize: 12, color: '#5A7182', margin: '0 0 16px', maxWidth: 640, lineHeight: 1.5 }}>
+        Each service gives Jarvis an ability. Turn one off to disable it — e.g. switch off
+        Spotify to stop music commands, or Gmail to stop email reading. Changes apply on the next restart.
+      </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
         {servers.map((server) => (
           <ServerCard
@@ -85,47 +89,27 @@ function ServerCard({ server, onToggle }: { server: MCPInfo; onToggle: () => voi
 
       <p style={{ fontSize: 12, color: '#5A7182', margin: 0 }}>{server.description}</p>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: server.status === 'connected' ? '#34d399' : '#f87171',
-              boxShadow:
-                server.status === 'connected'
-                  ? '0 0 6px rgba(52, 211, 153, 0.5)'
-                  : '0 0 6px rgba(248, 113, 113, 0.3)',
-            }}
-          />
-          <span
-            style={{
-              fontSize: 11,
-              color: server.status === 'connected' ? '#34d399' : '#f87171',
-            }}
-          >
-            {server.status === 'connected' ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-        <button
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 'auto' }}>
+        <div
           style={{
-            padding: '4px 10px',
-            borderRadius: 6,
-            border: '1px solid rgba(34, 211, 238, 0.15)',
-            background: 'transparent',
-            color: '#7dd3fc',
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: server.status === 'connected' ? '#34d399' : '#f87171',
+            boxShadow:
+              server.status === 'connected'
+                ? '0 0 6px rgba(52, 211, 153, 0.5)'
+                : '0 0 6px rgba(248, 113, 113, 0.3)',
+          }}
+        />
+        <span
+          style={{
             fontSize: 11,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            transition: 'all 0.2s',
+            color: server.status === 'connected' ? '#34d399' : '#f87171',
           }}
         >
-          <Settings size={12} />
-          Configure
-        </button>
+          {server.status === 'connected' ? 'On' : 'Off'}
+        </span>
       </div>
     </div>
   );

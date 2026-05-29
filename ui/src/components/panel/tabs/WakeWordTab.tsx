@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { X, Plus, Ear, Save } from 'lucide-react';
-import ToggleSwitch from '../shared/ToggleSwitch';
 import { api } from '@/lib/api';
 
+/**
+ * Wake Word settings. Two practical controls:
+ *  - Aliases: extra phrases that wake Jarvis (Greek + English variants).
+ *  - Wake sensitivity: how easily "Hey Jarvis" triggers (wispr_wake_threshold).
+ * (The old Porcupine engine section was removed — Jarvis now uses openWakeWord,
+ * so those knobs did nothing.)
+ */
 export default function WakeWordTab() {
   const [aliases, setAliases] = useState<string[]>([]);
   const [newAlias, setNewAlias] = useState('');
-  const [porcupineEnabled, setPorcupineEnabled] = useState(false);
-  const [sensitivity, setSensitivity] = useState(0.5);
-  const [accessKey, setAccessKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
+  const [threshold, setThreshold] = useState(0.1); // wispr_wake_threshold
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -17,18 +20,16 @@ export default function WakeWordTab() {
     api
       .getConfig()
       .then((cfg) => {
-        const a = (cfg.wake_aliases as string[]) || [];
-        setAliases(a);
-        setPorcupineEnabled(Boolean(cfg.porcupine_enabled));
-        setSensitivity(Number(cfg.porcupine_sensitivity ?? 0.5));
-        setAccessKey(String(cfg.porcupine_access_key ?? ''));
+        setAliases((cfg.wake_aliases as string[]) || []);
+        setThreshold(Number(cfg.wispr_wake_threshold ?? 0.1));
       })
       .catch(() => {});
   }, []);
 
   const addAlias = () => {
-    if (newAlias.trim() && !aliases.includes(newAlias.trim())) {
-      setAliases([...aliases, newAlias.trim()]);
+    const v = newAlias.trim();
+    if (v && !aliases.includes(v)) {
+      setAliases([...aliases, v]);
       setNewAlias('');
       setDirty(true);
     }
@@ -42,41 +43,26 @@ export default function WakeWordTab() {
   const save = async () => {
     await api.patchConfig({
       wake_aliases: aliases,
-      porcupine_enabled: porcupineEnabled,
-      porcupine_sensitivity: sensitivity,
-      porcupine_access_key: accessKey,
+      wispr_wake_threshold: threshold,
     });
     setDirty(false);
     setSavedAt(Date.now());
   };
 
+  // Slider: low threshold = triggers easily; high = needs a clear "Jarvis".
+  const pct = ((threshold - 0.05) / (0.9 - 0.05)) * 100;
+  const sens = threshold <= 0.15 ? 'Easy to trigger' : threshold >= 0.5 ? 'Strict' : 'Balanced';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 600 }}>
       {/* Aliases */}
-      <div
-        style={{
-          background: 'rgba(8, 14, 28, 0.4)',
-          border: '1px solid rgba(34, 211, 238, 0.08)',
-          borderRadius: 12,
-          padding: 20,
-        }}
-      >
+      <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
           <Ear size={16} color="#22d3ee" />
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              color: '#7dd3fc',
-            }}
-          >
-            Wake Aliases ({aliases.length})
-          </span>
+          <span style={labelStyle}>Wake Phrases ({aliases.length})</span>
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {aliases.map((alias, i) => (
             <div
               key={`${alias}-${i}`}
@@ -93,19 +79,7 @@ export default function WakeWordTab() {
               }}
             >
               <span>{alias}</span>
-              <button
-                onClick={() => removeAlias(i)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#5A7182',
-                  cursor: 'pointer',
-                  padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  transition: 'color 0.2s',
-                }}
-              >
+              <button onClick={() => removeAlias(i)} style={chipX}>
                 <X size={14} />
               </button>
             </div>
@@ -113,7 +87,7 @@ export default function WakeWordTab() {
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <input
               type="text"
-              placeholder="Add alias..."
+              placeholder="Add phrase..."
               value={newAlias}
               onChange={(e) => setNewAlias(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && addAlias()}
@@ -125,142 +99,98 @@ export default function WakeWordTab() {
                 color: '#e6f1ff',
                 fontSize: 13,
                 outline: 'none',
-                width: 140,
+                width: 150,
               }}
             />
-            <button
-              onClick={addAlias}
-              style={{
-                marginLeft: 6,
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                background: 'rgba(34, 211, 238, 0.1)',
-                border: '1px solid rgba(34, 211, 238, 0.2)',
-                color: '#22d3ee',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
+            <button onClick={addAlias} style={addBtn}>
               <Plus size={16} />
             </button>
           </div>
         </div>
-      </div>
+        <p style={{ fontSize: 11, color: '#5A7182', marginTop: 12 }}>
+          Extra phrases that wake Jarvis (e.g. "τζάρβις", "hey jarvis").
+        </p>
+      </Card>
 
-      {/* Porcupine Settings */}
-      <div
-        style={{
-          background: 'rgba(8, 14, 28, 0.4)',
-          border: '1px solid rgba(34, 211, 238, 0.08)',
-          borderRadius: 12,
-          padding: 20,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              color: '#7dd3fc',
-            }}
-          >
-            Porcupine Engine
+      {/* Wake sensitivity */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+          <span style={labelStyle}>Wake Sensitivity</span>
+          <span style={{ marginLeft: 'auto', color: '#22d3ee', fontSize: 12, fontFamily: 'monospace' }}>
+            {sens} · {threshold.toFixed(2)}
           </span>
-          <ToggleSwitch
-            enabled={porcupineEnabled}
-            onChange={(v) => {
-              setPorcupineEnabled(v);
-              setDirty(true);
-            }}
-          />
         </div>
-
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 20,
-            opacity: porcupineEnabled ? 1 : 0.4,
-            pointerEvents: porcupineEnabled ? 'auto' : 'none',
-            transition: 'opacity 0.3s',
+        <input
+          type="range"
+          min={0.05}
+          max={0.9}
+          step={0.05}
+          value={threshold}
+          onChange={(e) => {
+            setThreshold(Number(e.target.value));
+            setDirty(true);
           }}
-        >
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <label style={{ color: '#7dd3fc', fontSize: 12 }}>Sensitivity</label>
-              <span style={{ color: '#22d3ee', fontSize: 11, fontFamily: 'monospace' }}>{sensitivity.toFixed(2)}</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={sensitivity}
-              onChange={(e) => {
-                setSensitivity(Number(e.target.value));
-                setDirty(true);
-              }}
-              style={{
-                width: '100%',
-                height: 4,
-                WebkitAppearance: 'none',
-                appearance: 'none',
-                background: `linear-gradient(90deg, #22d3ee ${sensitivity * 100}%, rgba(255,255,255,0.08) ${sensitivity * 100}%)`,
-                borderRadius: 2,
-                outline: 'none',
-                cursor: 'pointer',
-              }}
-            />
-          </div>
-
-          <div>
-            <label style={{ color: '#7dd3fc', fontSize: 12, display: 'block', marginBottom: 8 }}>Access Key</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                type={showKey ? 'text' : 'password'}
-                value={accessKey}
-                onChange={(e) => {
-                  setAccessKey(e.target.value);
-                  setDirty(true);
-                }}
-                placeholder="pv_..."
-                style={{
-                  flex: 1,
-                  background: 'rgba(8, 14, 28, 0.6)',
-                  border: '1px solid rgba(34, 211, 238, 0.15)',
-                  borderRadius: 8,
-                  padding: '8px 12px',
-                  color: '#e6f1ff',
-                  fontSize: 13,
-                  fontFamily: 'monospace',
-                  outline: 'none',
-                }}
-              />
-              <button
-                onClick={() => setShowKey(!showKey)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  background: 'rgba(255,255,255,0.03)',
-                  color: '#5A7182',
-                  fontSize: 11,
-                  cursor: 'pointer',
-                }}
-              >
-                {showKey ? 'Hide' : 'Show'}
-              </button>
-            </div>
-          </div>
+          style={{
+            width: '100%',
+            height: 4,
+            WebkitAppearance: 'none',
+            appearance: 'none',
+            background: `linear-gradient(90deg, #22d3ee ${pct}%, rgba(255,255,255,0.08) ${pct}%)`,
+            borderRadius: 2,
+            outline: 'none',
+            cursor: 'pointer',
+          }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+          <span style={{ fontSize: 11, color: '#5A7182' }}>← Triggers easily</span>
+          <span style={{ fontSize: 11, color: '#5A7182' }}>Needs clear "Jarvis" →</span>
         </div>
-      </div>
+        <p style={{ fontSize: 11, color: '#5A7182', marginTop: 8 }}>
+          If Jarvis wakes by accident, move right. If it misses you, move left.
+        </p>
+      </Card>
 
       <SaveBar dirty={dirty} onSave={save} savedAt={savedAt} />
+    </div>
+  );
+}
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '0.1em',
+  textTransform: 'uppercase',
+  color: '#7dd3fc',
+};
+
+const chipX: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  color: '#5A7182',
+  cursor: 'pointer',
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
+};
+
+const addBtn: React.CSSProperties = {
+  marginLeft: 6,
+  width: 32,
+  height: 32,
+  borderRadius: 8,
+  background: 'rgba(34, 211, 238, 0.1)',
+  border: '1px solid rgba(34, 211, 238, 0.2)',
+  color: '#22d3ee',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ background: 'rgba(8, 14, 28, 0.4)', border: '1px solid rgba(34, 211, 238, 0.08)', borderRadius: 12, padding: 20 }}>
+      {children}
     </div>
   );
 }

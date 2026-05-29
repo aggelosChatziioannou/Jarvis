@@ -247,8 +247,8 @@ All UI components use a consistent dark theme defined in `themes.py`:
 COLORS = {
     "bg_primary": "#09090b",      # Deep space black
     "bg_secondary": "#18181b",    # Slightly lighter
-    "accent_primary": "#f59e0b",  # Amber
-    "accent_secondary": "#fbbf24", # Lighter amber
+    "accent_primary": "#22d3ee",  # Cyan (single source of truth — mirrors ui/src/index.css)
+    "accent_secondary": "#7dd3fc", # Lighter cyan
     "text_primary": "#fafafa",    # White
     "text_secondary": "#a1a1aa",  # Muted
     ...

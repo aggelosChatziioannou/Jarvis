@@ -1,9 +1,61 @@
 """Wake word and stop command detection logic."""
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import difflib
 
 from ..debug import debug_log
+
+
+def find_wake_word_position(
+    text_lower: str,
+    wake_word: str,
+    aliases: List[str],
+    fuzzy_ratio: float = 0.78,
+) -> Tuple[int, int]:
+    """Return (start_index, matched_length) of the FIRST wake-word occurrence.
+
+    Returns (-1, 0) if not found. Considers exact substring match against
+    wake_word and aliases first (earliest hit wins, ties broken by longer
+    alias to avoid splitting "jarvis" inside "yarvison"); then falls back to
+    token-by-token fuzzy match.
+
+    Used by the strict-prefix rule: anything before the returned position is
+    discarded so the intent judge only sees text the user spoke AFTER
+    addressing the assistant.
+    """
+    if not text_lower:
+        return (-1, 0)
+
+    # Longer aliases first so e.g. "hey jarvis" beats "jarvis" when both match
+    # at the same index — gives a cleaner discard.
+    all_aliases = sorted(set(aliases) | {wake_word}, key=len, reverse=True)
+
+    # 1. Exact substring — earliest match wins (ties broken by alias length).
+    best: Tuple[int, int] = (-1, 0)
+    for alias in all_aliases:
+        if not alias:
+            continue
+        idx = text_lower.find(alias)
+        if idx >= 0 and (best[0] == -1 or idx < best[0]):
+            best = (idx, len(alias))
+    if best[0] >= 0:
+        return best
+
+    # 2. Fuzzy fallback: walk tokens, return position of first token that
+    # matches any alias above the ratio threshold.
+    pos = 0
+    try:
+        for token in text_lower.split(" "):
+            stripped = token.strip(".,!?;:()[]{}\"'`).-_/")
+            if stripped:
+                for alias in all_aliases:
+                    if difflib.SequenceMatcher(a=alias, b=stripped).ratio() >= fuzzy_ratio:
+                        return (pos, len(token))
+            pos += len(token) + 1  # +1 for the space separator
+    except Exception:
+        pass
+
+    return (-1, 0)
 
 
 def is_wake_word_detected(text_lower: str, wake_word: str, aliases: List[str], fuzzy_ratio: float = 0.78) -> bool:

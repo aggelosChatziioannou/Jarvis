@@ -8,15 +8,17 @@ interface KeyField {
   configKey: string;
   label: string;
   type: 'text' | 'email' | 'password';
+  help: string;
 }
 
+// Only keys that real Jarvis features use. (The Picovoice/Porcupine key was
+// removed — Jarvis no longer uses Porcupine for wake detection.)
 const FIELDS: KeyField[] = [
-  { id: 'spotify-client', configKey: 'spotify_client_id', label: 'Spotify Client ID', type: 'text' },
-  { id: 'spotify-secret', configKey: 'spotify_client_secret', label: 'Spotify Client Secret', type: 'password' },
-  { id: 'weather', configKey: 'openweather_api_key', label: 'OpenWeather API Key', type: 'password' },
-  { id: 'gmail-addr', configKey: 'gmail_address', label: 'Gmail Address', type: 'email' },
-  { id: 'gmail-pass', configKey: 'gmail_app_password', label: 'Gmail App Password', type: 'password' },
-  { id: 'pv-key', configKey: 'porcupine_access_key', label: 'Picovoice Access Key', type: 'password' },
+  { id: 'spotify-client', configKey: 'spotify_client_id', label: 'Spotify Client ID', type: 'text', help: 'From developer.spotify.com → your app → Settings.' },
+  { id: 'spotify-secret', configKey: 'spotify_client_secret', label: 'Spotify Client Secret', type: 'password', help: 'Same page as the Client ID (click "View client secret").' },
+  { id: 'weather', configKey: 'openweather_api_key', label: 'OpenWeather API Key', type: 'password', help: 'Free key from openweathermap.org/api.' },
+  { id: 'gmail-addr', configKey: 'gmail_address', label: 'Gmail Address', type: 'email', help: 'The Gmail account Jarvis reads/sends from.' },
+  { id: 'gmail-pass', configKey: 'gmail_app_password', label: 'Gmail App Password', type: 'password', help: 'Google Account → Security → App passwords (needs 2-step verification).' },
 ];
 
 export default function APIKeysTab() {
@@ -64,10 +66,10 @@ export default function APIKeysTab() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 700 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <Key size={16} color="#22d3ee" />
         <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7dd3fc' }}>
-          Stored API Keys
+          Connected Accounts
         </span>
       </div>
 
@@ -84,55 +86,54 @@ export default function APIKeysTab() {
               border: '1px solid rgba(34, 211, 238, 0.08)',
               borderRadius: 12,
               padding: 16,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
             }}
           >
-            <label style={{ color: '#7dd3fc', fontSize: 12, minWidth: 180, flexShrink: 0 }}>
-              {key.label}
-            </label>
-            <input
-              type={isPassword && !isVisible ? 'password' : key.type === 'email' ? 'email' : 'text'}
-              value={value}
-              onChange={(e) => update(key.id, e.target.value)}
-              style={{
-                flex: 1,
-                background: 'rgba(5, 11, 25, 0.5)',
-                border: '1px solid rgba(34, 211, 238, 0.1)',
-                borderRadius: 8,
-                padding: '8px 12px',
-                color: '#e6f1ff',
-                fontSize: 13,
-                fontFamily: isPassword ? "'JetBrains Mono', monospace" : "'Inter', sans-serif",
-                outline: 'none',
-              }}
-            />
-            {isPassword && (
-              <button
-                onClick={() => toggleVisible(key.id)}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <label style={{ color: '#7dd3fc', fontSize: 12, minWidth: 180, flexShrink: 0 }}>
+                {key.label}
+              </label>
+              <input
+                type={isPassword && !isVisible ? 'password' : key.type === 'email' ? 'email' : 'text'}
+                value={value}
+                onChange={(e) => update(key.id, e.target.value)}
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#5A7182',
-                  cursor: 'pointer',
-                  padding: 4,
-                  display: 'flex',
-                  alignItems: 'center',
+                  flex: 1,
+                  background: 'rgba(5, 11, 25, 0.5)',
+                  border: '1px solid rgba(34, 211, 238, 0.1)',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  color: '#e6f1ff',
+                  fontSize: 13,
+                  fontFamily: isPassword ? "'JetBrains Mono', monospace" : "'Inter', sans-serif",
+                  outline: 'none',
                 }}
-              >
-                {isVisible ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            )}
+              />
+              {isPassword && (
+                <button onClick={() => toggleVisible(key.id)} style={eyeBtn}>
+                  {isVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              )}
+            </div>
+            <p style={{ color: '#5A7182', fontSize: 11, margin: '8px 0 0 192px' }}>{key.help}</p>
           </div>
         );
       })}
 
-      <p style={{ color: '#5A7182', fontSize: 11, marginTop: 8 }}>
-        Keys are stored in <code style={{ color: '#7dd3fc' }}>~/.config/jarvis/config.json</code> on this machine.
+      <p style={{ color: '#5A7182', fontSize: 11, marginTop: 4 }}>
+        Stored locally in <code style={{ color: '#7dd3fc' }}>~/.config/jarvis/config.json</code>. Leave a field blank to disable that feature.
       </p>
 
       <SaveBar dirty={dirty} onSave={save} savedAt={savedAt} />
     </div>
   );
 }
+
+const eyeBtn: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  color: '#5A7182',
+  cursor: 'pointer',
+  padding: 4,
+  display: 'flex',
+  alignItems: 'center',
+};

@@ -30,6 +30,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from . import control_bus
+from . import config_safety
 from .config import default_config_path, load_config, _save_json, _load_json
 from .debug import debug_log
 
@@ -50,11 +51,12 @@ _log_subscribers: List[asyncio.Queue] = []
 _log_subscribers_lock = threading.Lock()
 
 _voice_state: Dict[str, Any] = {
-    "state": "idle",       # idle | listening | thinking | speaking
+    "state": "idle",       # idle | listening | thinking | synthesizing | speaking
     "isMuted": False,
     "uptime": 0.0,
     "lastWake": None,
     "commandsProcessed": 0,
+    "query": "",
 }
 _state_subscribers: List[asyncio.Queue] = []
 _state_subscribers_lock = threading.Lock()
@@ -70,7 +72,7 @@ def publish_log(level: str, message: str) -> None:
     """
     entry = {
         "id": f"{time.time():.6f}",
-        "timestamp": time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}",
+        "timestamp": time.strftime("%H:%M:%S") + f".{int(time.time() * 100) % 100:02d}",
         "level": level,
         "message": message,
     }
@@ -169,6 +171,12 @@ def cmd_unmute() -> CommandResponse:
     return CommandResponse(ok=resp is not None, response=resp)
 
 
+@app.post("/api/command/trigger", response_model=CommandResponse)
+def cmd_trigger() -> CommandResponse:
+    resp = control_bus.send_command("TRIGGER")
+    return CommandResponse(ok=resp is not None, response=resp)
+
+
 # ---------- Config (read/write the JSON file directly) ----------
 
 @app.get("/api/config")
@@ -187,10 +195,21 @@ def patch_config(patch: ConfigPatch) -> Dict[str, Any]:
     if not isinstance(current, dict):
         current = {}
     current.update(patch.updates)
-    if not _save_json(cfg_path, current):
+    # Use the safety-net writer: takes a snapshot first, then atomic-write.
+    # If the file is corrupted mid-write (crash/reboot), the previous version
+    # is preserved.
+    if not config_safety.safe_write_config(cfg_path, current):
         raise HTTPException(500, "Failed to write config")
     publish_log("info", f"Config updated: {list(patch.updates.keys())}")
     return current
+
+
+# ---------- Config backup diagnostics ----------
+
+@app.get("/api/config/backups")
+def list_config_backups() -> List[Dict[str, Any]]:
+    """Diagnostic: list all stored config backups, newest first."""
+    return config_safety.list_backups()
 
 
 # ---------- Logs ----------
@@ -342,8 +361,36 @@ class EggToggle(BaseModel):
 
 @app.patch("/api/eastereggs/{egg_id}")
 def toggle_egg(egg_id: str, body: EggToggle) -> Dict[str, Any]:
+    # Persist the enabled flag to config (previously this only logged, so the
+    # toggle reverted on refresh / restart).
+    cfg_path = Path(os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+    current = _load_json(cfg_path)
+    if not isinstance(current, dict):
+        current = {}
+    eggs = current.get("easter_eggs")
+    if not isinstance(eggs, list) or not eggs:
+        # Seed from the default so the toggle has a concrete entry to persist.
+        eggs = [{
+            "id": "daddys_home",
+            "name": "Daddy's Home",
+            "triggers": ["daddy's home", "papa's home", "dad is home"],
+            "description": "Plays The Clash + cinematic JARVIS greeting with calendar/weather context",
+            "enabled": True,
+        }]
+    found = False
+    for egg in eggs:
+        if isinstance(egg, dict) and egg.get("id") == egg_id:
+            egg["enabled"] = bool(body.enabled)
+            found = True
+            break
+    if not found:
+        publish_log("warning", f"Easter egg '{egg_id}' not found — toggle ignored")
+        return {"id": egg_id, "enabled": body.enabled, "ok": False}
+    current["easter_eggs"] = eggs
+    if not config_safety.safe_write_config(cfg_path, current):
+        raise HTTPException(500, "Failed to write config")
     publish_log("info", f"Easter egg '{egg_id}' set to {body.enabled}")
-    return {"id": egg_id, "enabled": body.enabled}
+    return {"id": egg_id, "enabled": body.enabled, "ok": True}
 
 
 # ---------- LLM models ----------
@@ -392,11 +439,34 @@ def test_tone() -> Dict[str, bool]:
     try:
         import numpy as np
         import sounddevice as sd
+
+        # Honor the configured output device (tts_output_device) so the tone
+        # verifies the SAME speaker Jarvis speaks through. Resolve fresh from
+        # config (not the cached helper) so a just-saved change is reflected.
+        device = None
+        try:
+            from .output.tts import _resolve_output_device
+            spec = load_config().get("tts_output_device")
+            if spec not in (None, "", "null"):
+                device = _resolve_output_device(spec)
+        except Exception:
+            device = None
+
+        # Match the device's native rate — WASAPI devices reject mismatched
+        # rates (e.g. 22050 on a 48000 headset), exactly like the TTS path.
         sr = 22050
+        if device is not None:
+            try:
+                sr = int(round(float(sd.query_devices(device).get("default_samplerate", 22050))))
+            except Exception:
+                sr = 22050
         t = np.linspace(0, 0.4, int(sr * 0.4), endpoint=False)
-        tone = 0.25 * np.sin(2 * np.pi * 880 * t).astype("float32")
-        sd.play(tone, sr)
-        publish_log("info", "Test tone played (880 Hz, 0.4s)")
+        tone = (0.25 * np.sin(2 * np.pi * 880 * t)).astype("float32")
+        try:
+            sd.play(tone, sr, device=device)
+        except Exception:
+            sd.play(tone, 22050)  # last resort: system default
+        publish_log("info", f"Test tone played (880 Hz, device={device})")
         return {"ok": True}
     except Exception as e:
         publish_log("error", f"Test tone failed: {e}")

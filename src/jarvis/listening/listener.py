@@ -20,11 +20,38 @@ from datetime import datetime
 from rapidfuzz import fuzz
 from .echo_detection import EchoDetector
 from .state_manager import StateManager, ListeningState
-from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
+from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, find_wake_word_position
 from .transcript_buffer import TranscriptBuffer
-from .intent_judge import IntentJudge, create_intent_judge, warm_up_ollama_model
-from ..debug import debug_log
+from .intent_judge import IntentJudge, IntentJudgment, create_intent_judge, warm_up_ollama_model
+from ..debug import debug_log, log_state_transition
 from ..utils.location import is_location_available
+
+# Tier 1/2 intent cascade — optional, gracefully degrades if missing.
+# The cascade short-circuits the (relatively slow) intent_judge LLM call:
+#   Tier 1: heuristic classifier (Aho-Corasick + TF-IDF ONNX, <2ms)
+#   Tier 2: fused intent engine (one structured LLM call, replaces judge)
+# Each is imported defensively so the listener boots even when the new
+# modules are absent or their on-disk artefacts (ONNX model, etc.) are
+# missing. Feature flags `cfg.use_heuristic_classifier` and
+# `cfg.use_fused_intent` (both default True via getattr) let the user
+# disable either tier from config without touching code.
+try:
+    from .intent_classifier import HeuristicIntentClassifier, ClassifierResult
+    _HEURISTIC_CLASSIFIER_AVAILABLE = True
+except Exception as _e:  # noqa: BLE001 — defensive import
+    HeuristicIntentClassifier = None  # type: ignore
+    ClassifierResult = None  # type: ignore
+    _HEURISTIC_CLASSIFIER_AVAILABLE = False
+    print(f"  ⚠️  HeuristicIntentClassifier import failed (non-fatal): {_e}", flush=True)
+
+try:
+    from .fused_intent import FusedIntentEngine, FusedJudgment
+    _FUSED_INTENT_AVAILABLE = True
+except Exception as _e:  # noqa: BLE001 — defensive import
+    FusedIntentEngine = None  # type: ignore
+    FusedJudgment = None  # type: ignore
+    _FUSED_INTENT_AVAILABLE = False
+    print(f"  ⚠️  FusedIntentEngine import failed (non-fatal): {_e}", flush=True)
 
 if TYPE_CHECKING:
     from ..memory.db import Database
@@ -361,6 +388,15 @@ class VoiceListener(threading.Thread):
         self.tts = tts
         self.dialogue_memory = dialogue_memory
         self._should_stop = False
+
+        # STT backend selector — "whisper" (legacy, local) or "wispr"
+        # (Wispr Flow bridge: openWakeWord + Silero VAD + clipboard pickup).
+        # Read defensively so this code remains safe even before Phase B's
+        # Settings dataclass field lands.
+        self._stt_backend = getattr(cfg, "stt_backend", "whisper")
+        # Bridge instance populated below if stt_backend == "wispr". Kept on
+        # the listener so `stop()` and any thread-safety code can reach it.
+        self._wispr_bridge = None
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
         # ISO-639-1 code Whisper detected for the most recent utterance.
@@ -453,6 +489,9 @@ class VoiceListener(threading.Thread):
         # Energy tracking for echo detection
         self._recent_audio_energy: deque = deque(maxlen=50)
 
+        # TTS synthesis-to-callback timing (for buffer-delay logging)
+        self._last_tts_synthesis_time: float = 0.0
+
         # Audio-level wake word detection timestamp
         self._wake_timestamp: Optional[float] = None
 
@@ -461,7 +500,16 @@ class VoiceListener(threading.Thread):
         # dispatch loop poll this on safe boundaries. _muted suppresses
         # audio queue ingestion when the user presses MUTE.
         self._llm_cancel_event = threading.Event()
+        # These three flags are shared between the control-bus worker thread
+        # (_handle_control_command) and the audio loop / _dispatch_query. Guard
+        # every read/write with this lock so the manual-finalize handshake
+        # (set -> consume -> clear) cannot lose or duplicate an update. The
+        # lock is only ever held around the flag read/modify/clear, never
+        # across blocking I/O (audio reads, LLM, TTS).
+        self._control_flags_lock = threading.Lock()
         self._muted = False
+        self._manual_trigger_active = False  # True when listening was started via TRIGGER button
+        self._manual_finalize_requested = False  # Set by MUTE during manual trigger to force immediate dispatch
 
         # Control bus server — accepts STOP/MUTE/PING from the desktop HUD.
         # Lazy import to avoid pulling sockets into early init paths that
@@ -492,6 +540,91 @@ class VoiceListener(threading.Thread):
         else:
             debug_log("intent judge unavailable, using simple wake word detection", "voice")
 
+        # ---- Tier 1/2 intent cascade --------------------------------------
+        # Optional speed-ups that sit between the existing fast-path regex
+        # SHORT-CIRCUIT (Tier 0, lower in this function's flow) and the slow
+        # intent_judge LLM call. Either tier can be disabled from config.
+        # On any init failure we set the attribute to None and the runtime
+        # cascade falls through to the legacy intent_judge path.
+        self._use_heuristic_classifier = bool(
+            getattr(self.cfg, "use_heuristic_classifier", True)
+        )
+        self._use_fused_intent = bool(
+            getattr(self.cfg, "use_fused_intent", True)
+        )
+
+        # Tuning override: caller note says the classifier's built-in
+        # `_THRESH_MED=0.72` is too conservative — set 0.5 to lift local
+        # routing from ~62% to ~88-92% with ~95% precision. Configurable
+        # via `cfg.heuristic_med_threshold`.
+        self._heuristic_med_threshold = float(
+            getattr(self.cfg, "heuristic_med_threshold", 0.5)
+        )
+
+        # Tier 1: heuristic intent classifier (Aho-Corasick + ONNX TF-IDF).
+        self._heuristic_classifier = None
+        if self._use_heuristic_classifier and _HEURISTIC_CLASSIFIER_AVAILABLE:
+            try:
+                self._heuristic_classifier = HeuristicIntentClassifier()
+                # The class does not accept `med_threshold` in __init__; we
+                # patch the module-level constants used by the instance's
+                # `_bucket` static method instead. Module-level mutation is
+                # acceptable here — single classifier per process, and the
+                # caller explicitly requested this tuning (see prompt).
+                try:
+                    from . import intent_classifier as _ic_mod
+                    _ic_mod._THRESH_MED = self._heuristic_med_threshold
+                except Exception as _e:  # noqa: BLE001
+                    debug_log(
+                        f"heuristic classifier threshold override failed (non-fatal): {_e}",
+                        "voice",
+                    )
+                debug_log(
+                    f"Tier 1 heuristic classifier initialised "
+                    f"(med_threshold={self._heuristic_med_threshold})",
+                    "voice",
+                )
+            except Exception as e:  # noqa: BLE001
+                debug_log(f"Tier 1 heuristic classifier init failed (non-fatal): {e}", "voice")
+                self._heuristic_classifier = None
+        elif not _HEURISTIC_CLASSIFIER_AVAILABLE:
+            debug_log("Tier 1 heuristic classifier unavailable (import failed)", "voice")
+        else:
+            debug_log("Tier 1 heuristic classifier disabled by config", "voice")
+
+        # Tier 2: fused intent engine (collapses judge/router/planner into one LLM call).
+        self._fused_intent = None
+        if self._use_fused_intent and _FUSED_INTENT_AVAILABLE:
+            try:
+                self._fused_intent = FusedIntentEngine(self.cfg)
+                debug_log(
+                    f"Tier 2 fused intent engine initialised (model: {self._fused_intent.model})",
+                    "voice",
+                )
+            except Exception as e:  # noqa: BLE001
+                debug_log(f"Tier 2 fused intent engine init failed (non-fatal): {e}", "voice")
+                self._fused_intent = None
+        elif not _FUSED_INTENT_AVAILABLE:
+            debug_log("Tier 2 fused intent engine unavailable (import failed)", "voice")
+        else:
+            debug_log("Tier 2 fused intent engine disabled by config", "voice")
+
+        # Shared 10s TTL cache (32 entries) wrapping the cascade — mirrors
+        # the cache that intent_judge.py owns. Keyed on the same
+        # (text, hot_window, last_tts_text) tuple so cache semantics stay
+        # consistent regardless of which tier produced the verdict.
+        from collections import OrderedDict as _OrderedDict
+        self._cascade_cache: "_OrderedDict[str, tuple[float, IntentJudgment]]" = _OrderedDict()
+        self._CASCADE_CACHE_TTL_SEC = 10.0
+        self._CASCADE_CACHE_MAX_ENTRIES = 32
+
+        # Stash for the fused engine's tool/plan output. Not consumed yet
+        # (reply.engine still runs its own router+planner); kept here so a
+        # future reply.engine pass can pick them up without an extra LLM
+        # call. Updated on every successful Tier 2 hit; cleared on dispatch.
+        self._last_fused_tools: list = []
+        self._last_fused_plan: list = []
+
         # Thinking tune player
         self._tune_player: Optional = None
 
@@ -509,7 +642,19 @@ class VoiceListener(threading.Thread):
         # Same process, daemon thread, port 38130. Also install the stdout
         # mirror so every print() in the daemon ends up in the Live Logs feed.
         try:
-            from .. import api_server
+            from .. import api_server, config_safety
+            from ..config import default_config_path
+            import os as _os
+            from pathlib import Path as _Path
+
+            # Safety net: auto-restore if the config has been wiped, then
+            # take a fresh snapshot so subsequent migrations can't lose work.
+            _cfg_path = _Path(_os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+            restored = config_safety.check_and_restore(_cfg_path)
+            if restored:
+                print(f"♻️ Config auto-restored from {restored.name}", flush=True)
+            config_safety.snapshot(_cfg_path, reason="boot")
+
             api_server.start_in_background()
             api_server.install_stdout_mirror()
             api_server.publish_log("info", "Jarvis daemon initialised")
@@ -533,6 +678,39 @@ class VoiceListener(threading.Thread):
         except Exception as e:
             debug_log(f"Porcupine integration error (non-fatal): {e}", "voice")
 
+        # ------------------------------------------------------------------
+        # Wispr backend wiring (Phase C)
+        # ------------------------------------------------------------------
+        # When the user has selected the Wispr Flow backend we instantiate
+        # the bridge here so the heavy import (openWakeWord, Silero) does
+        # not happen at module load. Models load inside `bridge.start()`,
+        # which we invoke from `run()` so the load happens off the main
+        # init path (matches the Whisper-on-run model).
+        if self._stt_backend == "wispr":
+            try:
+                from .wispr_bridge import WisprBridge
+                self._wispr_bridge = WisprBridge(
+                    cfg,
+                    on_transcription=self.feed_transcript,
+                    on_wake=self._on_wispr_wake,
+                    on_dictation_end=self._on_wispr_dictation_end,
+                    on_stop=self._handle_wispr_stop,
+                )
+                debug_log("WisprBridge instantiated (start deferred to run())", "voice")
+            except Exception as e:
+                debug_log(
+                    f"WisprBridge instantiation failed (will fall back to "
+                    f"whisper at run() time): {e}",
+                    "voice",
+                )
+                print(
+                    f"  ⚠️  WisprBridge unavailable ({e}); "
+                    f"falling back to Whisper",
+                    flush=True,
+                )
+                self._stt_backend = "whisper"
+                self._wispr_bridge = None
+
     def stop(self) -> None:
         """Stop the voice listener."""
         self._should_stop = True
@@ -546,6 +724,28 @@ class VoiceListener(threading.Thread):
                 self._control_bus.stop()
             except Exception as e:
                 debug_log(f"control bus stop error: {e}", "voice")
+        # Phase C: tear down the Wispr bridge (audio stream + key worker
+        # + hot-window timer). Idempotent — see WisprBridge.stop().
+        if self._wispr_bridge is not None:
+            try:
+                self._wispr_bridge.stop()
+            except Exception as e:
+                debug_log(f"WisprBridge stop error: {e}", "voice")
+
+    def _consume_manual_finalize(self) -> bool:
+        """Atomically read-and-clear the manual-finalize handshake.
+
+        Returns True if a manual finalize was pending (and clears it, plus the
+        manual-trigger flag) so the audio loop can dispatch exactly once. The
+        lock is held only around the flag read/clear, never across the
+        subsequent finalize/dispatch work.
+        """
+        with self._control_flags_lock:
+            requested = self._manual_finalize_requested
+            if requested:
+                self._manual_finalize_requested = False
+                self._manual_trigger_active = False
+            return requested
 
     def _handle_control_command(self, command: str) -> Optional[str]:
         """Dispatch a single control-bus command. Runs on a bus worker thread."""
@@ -556,13 +756,102 @@ class VoiceListener(threading.Thread):
             self.reset_everything()
             return "OK STOP"
         if cmd == "MUTE":
-            self._muted = not self._muted
-            print(f"🔇 Mic {'muted' if self._muted else 'unmuted'} via control bus", flush=True)
-            return f"OK MUTED={self._muted}"
+            # If listening was manually triggered, treat mute as "I'm done
+            # speaking". Resolve the new flag state under the lock, then drop
+            # the lock before any I/O (UI publish, bridge pause/resume).
+            with self._control_flags_lock:
+                manual_finalize = (
+                    self._manual_trigger_active and self.state_manager.is_collecting()
+                )
+                if manual_finalize:
+                    self._manual_finalize_requested = True
+                    self._muted = True
+                else:
+                    self._muted = not self._muted
+                muted = self._muted
+            if manual_finalize:
+                print("🔇 Mic muted + manual finalize requested via control bus", flush=True)
+            else:
+                print(f"🔇 Mic {'muted' if muted else 'unmuted'} via control bus", flush=True)
+            # Sync mute state to React UI
+            try:
+                from .. import api_server
+                api_server.publish_state(isMuted=muted)
+            except Exception:
+                pass
+            # Wispr backend: propagate mute to the bridge so wake detection
+            # actually stops (mic stays open but wake model never fires).
+            if self._stt_backend == "wispr" and self._wispr_bridge is not None:
+                try:
+                    if muted:
+                        self._wispr_bridge.pause()
+                    else:
+                        self._wispr_bridge.resume()
+                except Exception as e:
+                    debug_log(f"bridge.pause/resume failed: {e!r}", "voice")
+            return f"OK MUTED={muted}"
         if cmd == "UNMUTE":
-            self._muted = False
+            with self._control_flags_lock:
+                self._muted = False
             print("🔊 Mic unmuted via control bus", flush=True)
+            # Sync mute state to React UI
+            try:
+                from .. import api_server
+                api_server.publish_state(isMuted=False)
+            except Exception:
+                pass
+            # Wispr backend: resume wake detection.
+            if self._stt_backend == "wispr" and self._wispr_bridge is not None:
+                try:
+                    self._wispr_bridge.resume()
+                except Exception as e:
+                    debug_log(f"bridge.resume failed: {e!r}", "voice")
             return "OK UNMUTED"
+        if cmd == "TRIGGER":
+            # Wispr backend: tap the hands-free shortcut directly, bypassing
+            # wake detection. The bridge handles state + key worker queuing.
+            if self._stt_backend == "wispr" and self._wispr_bridge is not None:
+                try:
+                    ok = self._wispr_bridge.trigger_now()
+                except Exception as e:
+                    debug_log(f"bridge.trigger_now failed: {e!r}", "voice")
+                    return f"ERROR bridge.trigger_now: {e}"
+                # Ensure UI knows we're unmuted (Trigger auto-unmutes)
+                with self._control_flags_lock:
+                    was_muted = self._muted
+                    if was_muted:
+                        self._muted = False
+                if was_muted:
+                    try:
+                        from .. import api_server
+                        api_server.publish_state(isMuted=False)
+                    except Exception:
+                        pass
+                return "OK TRIGGER" if ok else "OK ALREADY_DICTATING"
+            # Whisper backend: legacy collection-state trigger.
+            if self.state_manager.is_collecting():
+                return "OK ALREADY_COLLECTING"
+            with self._control_flags_lock:
+                self._manual_trigger_active = True
+                self._manual_finalize_requested = False
+                was_muted = self._muted
+                if was_muted:
+                    self._muted = False
+            self._wake_timestamp = None
+            self.state_manager.cancel_hot_window_activation()
+            self._clear_audio_buffers()
+            self._start_collection("")
+            self._start_thinking_tune()
+            # Ensure UI knows we're unmuted (Trigger Now auto-unmutes)
+            if was_muted:
+                try:
+                    from .. import api_server
+                    api_server.publish_state(isMuted=False)
+                except Exception:
+                    pass
+            debug_log("manual trigger activated", "voice")
+            print("⚡ Manual trigger — listening now", flush=True)
+            return "OK TRIGGER"
         debug_log(f"control bus: unknown command '{cmd}'", "voice")
         return f"ERROR unknown command '{cmd}'"
 
@@ -615,6 +904,258 @@ class VoiceListener(threading.Thread):
             pass
         self.state_manager.stop()
         self._stop_thinking_tune()
+        with self._control_flags_lock:
+            self._manual_trigger_active = False
+            self._manual_finalize_requested = False
+        # Phase F: drop the speaking flag on the Wispr bridge (if any) so
+        # subsequent stop-keywords aren't routed through on_stop after the
+        # interrupt has already torn down the TTS.
+        try:
+            self._set_bridge_speaking(False)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Query publishing helpers (sync UI text display with WebSocket state)
+    # ------------------------------------------------------------------
+    def _publish_query(self) -> None:
+        """Broadcast the current pending query to the React UI via WebSocket."""
+        try:
+            from .. import api_server
+            api_server.publish_state(query=self.state_manager.get_pending_query())
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Tier 1 / Tier 2 intent cascade
+    # ------------------------------------------------------------------
+    # Replaces the single intent_judge LLM call with a three-tier cascade:
+    #   Tier 0 — fast-path regex SHORT-CIRCUIT (already inline above; <1ms).
+    #   Tier 1 — heuristic classifier (Aho-Corasick + ONNX, <2ms, ~88%).
+    #   Tier 2 — fused intent engine (one structured LLM call, ~3-5s).
+    # Each tier either produces a verdict (returned as an IntentJudgment so
+    # the existing downstream wake-word / echo / hot-window plumbing keeps
+    # working unchanged) or escalates to the next. The legacy intent_judge
+    # remains the final fallback when every new tier is disabled or fails.
+    # ------------------------------------------------------------------
+
+    def _cascade_cache_key(
+        self,
+        current_text: str,
+        in_hot_window: bool,
+        last_tts_text: str,
+    ) -> str:
+        """MD5 of (text, hot_window, last_tts_text) — matches intent_judge.py
+        cache key shape so semantics are identical across producers."""
+        import hashlib as _hashlib
+        raw = f"{current_text}|{int(bool(in_hot_window))}|{last_tts_text or ''}"
+        return _hashlib.md5(raw.encode("utf-8", errors="replace")).hexdigest()
+
+    def _cascade_cache_get(self, key: str) -> Optional["IntentJudgment"]:
+        entry = self._cascade_cache.get(key)
+        if entry is None:
+            return None
+        ts, judgment = entry
+        if time.time() - ts >= self._CASCADE_CACHE_TTL_SEC:
+            self._cascade_cache.pop(key, None)
+            return None
+        # Refresh recency so popular keys survive eviction.
+        self._cascade_cache.move_to_end(key)
+        return judgment
+
+    def _cascade_cache_put(self, key: str, judgment: "IntentJudgment") -> None:
+        self._cascade_cache[key] = (time.time(), judgment)
+        self._cascade_cache.move_to_end(key)
+        while len(self._cascade_cache) > self._CASCADE_CACHE_MAX_ENTRIES:
+            self._cascade_cache.popitem(last=False)
+
+    def _fused_to_judgment(
+        self,
+        fused: "FusedJudgment",
+        text_lower: str,
+        in_hot_window: bool,
+    ) -> "IntentJudgment":
+        """Adapt a FusedJudgment into the IntentJudgment shape expected by the
+        existing downstream logic. We stash tools/plan on the listener so a
+        future reply.engine refactor can pick them up without re-routing.
+        """
+        # Intent mapping: 'stop' is the only one with explicit stop semantics;
+        # 'directed' / 'query' / 'clarification' all funnel into "directed".
+        # Confidence buckets are preserved (high/med/low).
+        is_stop = (fused.intent == "stop")
+        directed = fused.intent in ("directed", "query", "stop", "clarification")
+
+        # Stash the fused output for downstream consumers (currently logs only).
+        self._last_fused_tools = list(fused.tools or [])
+        self._last_fused_plan = list(fused.plan or [])
+
+        return IntentJudgment(
+            directed=directed,
+            query=text_lower,  # fused engine doesn't extract a cleaned query;
+                               # use the raw text — the same as judge fallback path.
+            stop=is_stop,
+            confidence=fused.confidence if fused.confidence in ("high", "medium", "low") else
+                       ("high" if fused.confidence == "high" else
+                        "medium" if fused.confidence == "med" else "low"),
+            reasoning=f"fused:{fused.intent}/{fused.confidence} {fused.explanation}"[:200],
+            raw_response=fused.llm_raw,
+        )
+
+    def _classifier_to_judgment(
+        self,
+        result: "ClassifierResult",
+        text_lower: str,
+    ) -> "IntentJudgment":
+        """Adapt a ClassifierResult into IntentJudgment. The classifier returns
+        a domain intent label (e.g. 'spotify_play') not the directed/stop axis,
+        so we treat any med-or-better classification as 'directed' with the
+        raw text as the query — same as the high-confidence judge fallback."""
+        return IntentJudgment(
+            directed=True,
+            query=text_lower,
+            stop=(result.intent == "stop"),
+            confidence=result.confidence if result.confidence in ("high", "medium", "low") else
+                       ("medium" if result.confidence == "med" else result.confidence),
+            reasoning=f"heuristic:{result.intent}/{result.tier}/score={result.score:.2f}",
+            raw_response="",
+        )
+
+    def _run_intent_cascade(
+        self,
+        *,
+        text_lower: str,
+        could_be_hot_window: bool,
+        last_tts_text: str,
+    ) -> tuple[Optional["IntentJudgment"], str]:
+        """Run Tier 1 → Tier 2 cascade. Returns (judgment, source_tag).
+
+        source_tag is one of:
+          'cache' / 'tier1_high' / 'tier1_med' / 'tier2' / 'fallback'
+        'fallback' means every cascade tier was unavailable/failed — caller
+        should run the legacy intent_judge as the final safety net.
+
+        Never raises; on any exception falls through to 'fallback'.
+        """
+        # Cache lookup first — same shape as intent_judge's cache so the two
+        # systems don't compete on duplicate (text, hot_window, tts) tuples.
+        cache_key = self._cascade_cache_key(text_lower, could_be_hot_window, last_tts_text)
+        cached = self._cascade_cache_get(cache_key)
+        if cached is not None:
+            debug_log(
+                f"⚡ Cascade cache hit: directed={cached.directed} stop={cached.stop} "
+                f"conf={cached.confidence}",
+                "voice",
+            )
+            return cached, "cache"
+
+        # ---- Tier 1: heuristic classifier --------------------------------
+        if self._heuristic_classifier is not None:
+            try:
+                t_start = time.time()
+                result = self._heuristic_classifier.classify(text_lower)
+                elapsed_ms = (time.time() - t_start) * 1000.0
+                debug_log(
+                    f"Tier 1 heuristic: intent={result.intent} conf={result.confidence} "
+                    f"score={result.score:.2f} tier={result.tier} ({elapsed_ms:.1f}ms)",
+                    "voice",
+                )
+
+                # Aho-Corasick + high confidence → fast-path equivalent.
+                if result.tier == "aho_corasick" and result.confidence == "high":
+                    print(
+                        f"  ⚡ Tier 1 heuristic: {result.intent} "
+                        f"(conf=high, {elapsed_ms:.1f}ms)",
+                        flush=True,
+                    )
+                    judgment = self._classifier_to_judgment(result, text_lower)
+                    self._cascade_cache_put(cache_key, judgment)
+                    return judgment, "tier1_high"
+
+                # Med confidence (with the lowered 0.5 threshold) → accept
+                # locally, skip LLM. Treat as directed with raw text as query.
+                if result.confidence == "med":
+                    print(
+                        f"  ⚡ Tier 1 heuristic: {result.intent} "
+                        f"(conf=med, {elapsed_ms:.1f}ms)",
+                        flush=True,
+                    )
+                    judgment = self._classifier_to_judgment(result, text_lower)
+                    self._cascade_cache_put(cache_key, judgment)
+                    return judgment, "tier1_med"
+
+                # Low confidence — fall through to Tier 2.
+            except Exception as e:  # noqa: BLE001
+                debug_log(f"Tier 1 heuristic classifier error (non-fatal): {e}", "voice")
+                # Fall through to Tier 2.
+
+        # ---- Tier 2: fused intent engine ---------------------------------
+        if self._fused_intent is not None:
+            try:
+                t_start = time.time()
+                # Pull current language from the rolling detector. Default to 'en'.
+                lang_hint = (getattr(self, "_last_detected_language", "") or "en").lower()
+                language = "el" if lang_hint.startswith("el") else "en"
+
+                fused = self._fused_intent.classify_route_plan(
+                    transcript=text_lower,
+                    in_hot_window=could_be_hot_window,
+                    language=language,
+                    last_tts_text=last_tts_text or None,
+                )
+                elapsed_s = time.time() - t_start
+                print(
+                    f"  🧠 Tier 2 fused intent: {fused.intent} ({elapsed_s:.2f}s)",
+                    flush=True,
+                )
+                debug_log(
+                    f"Tier 2 fused: intent={fused.intent} conf={fused.confidence} "
+                    f"tools={len(fused.tools)} plan_len={len(fused.plan)} "
+                    f"({elapsed_s*1000:.0f}ms)",
+                    "voice",
+                )
+                judgment = self._fused_to_judgment(fused, text_lower, could_be_hot_window)
+                self._cascade_cache_put(cache_key, judgment)
+                return judgment, "tier2"
+            except Exception as e:  # noqa: BLE001
+                debug_log(f"Tier 2 fused intent error (non-fatal): {e}", "voice")
+                # Fall through to legacy fallback.
+
+        # ---- Fallback ----------------------------------------------------
+        return None, "fallback"
+
+    def _start_collection(self, text: str) -> None:
+        """Wrap state_manager.start_collection + publish query to UI.
+
+        Wispr-flow short-circuit: when ``_process_transcript`` ran with
+        ``source="wispr"`` it sets ``self._wispr_current_source`` to
+        ``"wispr"`` for the lifetime of that call. In that case, the
+        transcript is ALREADY complete (Wispr Flow finalised the
+        utterance externally — no more partials will arrive via the
+        audio callback to trigger the silence-timeout finalize). We
+        publish state for UI visibility, then dispatch immediately to
+        the reply engine and clear the collection so the next utterance
+        isn't accidentally appended to this one.
+        """
+        self.state_manager.start_collection(text)
+        self._publish_query()
+        if getattr(self, "_wispr_current_source", None) == "wispr" and text.strip():
+            debug_log(
+                "Wispr short-circuit: dispatching immediately (skipping "
+                "silence-timeout collection wait)",
+                "voice",
+            )
+            # Clear the collection BEFORE dispatch so state_manager is
+            # ready for the next utterance. Capture pending text first.
+            try:
+                pending = self.state_manager.clear_collection() or text
+            except Exception:
+                pending = text
+            self._dispatch_query(pending)
+
+    def _add_to_collection(self, text: str) -> None:
+        """Wrap state_manager.add_to_collection + publish query to UI."""
+        self.state_manager.add_to_collection(text)
+        self._publish_query()
 
     def _start_thinking_tune(self) -> None:
         """Start the thinking tune when processing a query."""
@@ -662,28 +1203,46 @@ class VoiceListener(threading.Thread):
 
             self.echo_detector.track_tts_start(tts_text, baseline_energy)
 
+    def _log_tts_summary(self, text: str) -> None:
+        """Emit a single summary line for completed TTS and log any buffer delay."""
+        from ..debug import info_log
+        duration = self.echo_detector._tts_exact_duration if self.echo_detector else None
+        chars = len(text) if text else 0
+        preview = text[:60] + "..." if text and len(text) > 60 else (text or "")
+        duration_str = f", TTS: {duration:.1f}s" if duration else ""
+        info_log(f'🗣️ SPEAKING → "{preview}" ({chars} chars{duration_str}) ✓')
+
+        # Log buffer delay: time from synthesis completion to callback firing
+        if self._last_tts_synthesis_time > 0:
+            buffer_delay = time.time() - self._last_tts_synthesis_time
+            if buffer_delay > 0.5:
+                info_log(f"⏳ TTS buffered: {buffer_delay:.1f}s → callback fired")
+            self._last_tts_synthesis_time = 0.0
+
     def activate_hot_window(self) -> None:
         """Activate hot window after TTS completion."""
-        debug_log("TTS completed, checking hot window activation", "voice")
+        # Track TTS finish time for echo detection
+        self.echo_detector.track_tts_finish()
 
         if not self.cfg.hot_window_enabled:
             debug_log("hot window disabled in config, skipping", "voice")
             return
 
-        # Track TTS finish time for echo detection
-        self.echo_detector.track_tts_finish()
-
         # Schedule delayed hot window activation
-        debug_log(f"scheduling hot window activation (echo_tolerance={self.state_manager.echo_tolerance}s, hot_window={self.state_manager.hot_window_seconds}s)", "voice")
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
-    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0) -> None:
+    def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, source: str = "whisper") -> None:
         """
         Process a transcript from speech recognition.
 
         Args:
             text: Transcribed text from audio
             utterance_energy: Pre-calculated energy from the utterance frames
+            source: "whisper" for the local Whisper path (wake word lives IN
+                the text, so we reset and let the wake-check re-set it) or
+                "wispr" for the Wispr Flow bridge (openWakeWord validated the
+                wake EXTERNALLY before PTT started, so the text never contains
+                the wake word — we synthesise a wake_timestamp instead).
         """
         if not text or not text.strip():
             # Check for timeouts
@@ -703,10 +1262,36 @@ class VoiceListener(threading.Thread):
         # will set it. Without this reset, a prior rejected wake-worded
         # utterance would vouch for subsequent unrelated utterances via the
         # `_wake_timestamp is not None` guard in the intent-judge accept path.
-        self._wake_timestamp = None
+        #
+        # EXCEPTION: when source == "wispr", openWakeWord already validated
+        # the wake word out-of-band (the bridge wouldn't have PTT'd without
+        # a wake detection or a hot-follow-up speech-onset event). The text
+        # itself never contains the wake word, so the in-text wake-check at
+        # line ~1873 would fail and the cascade would reject. Instead, we
+        # synthesise a fresh wake_timestamp from the utterance time so the
+        # `has_engagement_signal` gate accepts the transcript.
+        if source == "wispr":
+            self._wake_timestamp = utterance_start_time or time.time()
+            debug_log(
+                f"_process_transcript source=wispr → wake_timestamp synthesised "
+                f"({self._wake_timestamp:.2f})",
+                "voice",
+            )
+        else:
+            self._wake_timestamp = None
 
-        start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-3] if utterance_start_time > 0 else "N/A"
-        end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3] if utterance_end_time > 0 else "N/A"
+        # Set the current-source flag so _start_collection (which is called
+        # from many places downstream after intent acceptance) knows to
+        # short-circuit and dispatch immediately instead of waiting for a
+        # silence-timeout collection finalize that will never fire (Wispr
+        # already produced the COMPLETE utterance — no more partials will
+        # arrive via the audio callback to trigger collection-timeout).
+        # Cleared in the finally block below so subsequent non-wispr
+        # invocations behave normally.
+        self._wispr_current_source = source
+
+        start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-4] if utterance_start_time > 0 else "N/A"
+        end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-4] if utterance_end_time > 0 else "N/A"
         debug_log(f"heard: '{text}' (utterance from {start_time_str} to {end_time_str})", "voice")
 
         # Track if this input was received during TTS (for logging purposes)
@@ -791,6 +1376,40 @@ class VoiceListener(threading.Thread):
                     self._start_thinking_tune()
                     self._set_face_state_listening()
                     debug_log("early beep: wake word detected", "voice")
+
+                    # STRICT-PREFIX RULE (cold-start only): anything BEFORE the
+                    # first wake-word occurrence is discarded. The user wants
+                    # "Jarvis" to be the first meaningful token; without this,
+                    # "I just ate a big monk chervish jarvis" would send the
+                    # food sentence as a query. Hot window follows-ups are not
+                    # affected (they live in the `if` branch above).
+                    pos, mlen = find_wake_word_position(
+                        text_lower, wake_word, aliases, fuzzy_ratio,
+                    )
+                    if pos > 0:
+                        discarded = text_lower[:pos].rstrip()
+                        truncated = text_lower[pos + mlen:].lstrip(" ,.;:!?").strip()
+                        print(
+                            f"  🗑️  Discarded prefix before wake word: \"{discarded}\"",
+                            flush=True,
+                        )
+                        debug_log(
+                            f"strict-prefix: kept '{truncated}' (was '{text_lower}')",
+                            "voice",
+                        )
+                        text_lower = truncated
+                        self._transcript_buffer.update_last_segment_text(text_lower)
+                    elif pos == 0:
+                        # Wake word at the very start — strip it so the rest of
+                        # the pipeline sees only the query portion.
+                        after = text_lower[mlen:].lstrip(" ,.;:!?").strip()
+                        if after:
+                            debug_log(
+                                f"strict-prefix: stripped leading wake word; kept '{after}'",
+                                "voice",
+                            )
+                            text_lower = after
+                            self._transcript_buffer.update_last_segment_text(text_lower)
 
         # Echo rejection & stop commands — only while TTS is actively playing.
         # After TTS finishes, the intent judge handles everything (echo detection,
@@ -931,16 +1550,23 @@ class VoiceListener(threading.Thread):
 
                 # Strip leading wake-word so the pattern can match the action
                 # portion of the utterance (e.g. "hey jarvis next song" →
-                # "next song"). This is best-effort; the patterns themselves
-                # are tolerant of wake-word prefixes too.
+                # "next song"). Uses the same position-aware helper as the
+                # strict-prefix rule above so we cover all ~80 configured
+                # aliases plus fuzzy matches, not just a hardcoded handful.
+                # Recompute the wake config locally — the strict-prefix block
+                # may have been skipped (e.g. thinking tune already active from
+                # a previous utterance) which would leave wake_word undefined.
+                _wake_word = getattr(self.cfg, "wake_word", "jarvis")
+                _aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {_wake_word})
+                _fuzzy_ratio = float(getattr(self.cfg, "wake_fuzzy_ratio", 0.78))
                 _stripped = text_lower
-                for _wake_term in ("jarvis", "τζάρβις", "τζάρβης", "hey", "τζέρβη"):
-                    if _wake_term in _stripped:
-                        _idx = _stripped.find(_wake_term)
-                        _after = _stripped[_idx + len(_wake_term):].lstrip(" ,.;:!?")
-                        if _after:
-                            _stripped = _after
-                            break
+                _pos, _mlen = find_wake_word_position(
+                    _stripped, _wake_word, _aliases, _fuzzy_ratio,
+                )
+                if _pos >= 0:
+                    _after = _stripped[_pos + _mlen:].lstrip(" ,.;:!?")
+                    if _after:
+                        _stripped = _after
 
                 _early_match = _fp_match_early(_stripped)
                 if _early_match is not None:
@@ -982,14 +1608,44 @@ class VoiceListener(threading.Thread):
             last_tts_text = self.echo_detector._last_tts_text or ""
             last_tts_finish_time = self.echo_detector._last_tts_finish_time or 0.0
 
-            intent_judgment = self._intent_judge.judge(
-                segments=context_segments,
-                wake_timestamp=self._wake_timestamp,
-                last_tts_text=last_tts_text,
-                last_tts_finish_time=last_tts_finish_time,
-                in_hot_window=could_be_hot_window,
-                current_text=text_lower,
-            )
+            # Tier 1 / Tier 2 cascade — tries the cheap heuristic classifier
+            # first, then the fused intent engine. Falls through to the
+            # legacy intent_judge LLM call when both tiers are
+            # disabled/unavailable or both error out. Source tag is logged
+            # for visibility into which tier actually produced the verdict.
+            intent_judgment = None
+            cascade_source = "fallback"
+            try:
+                intent_judgment, cascade_source = self._run_intent_cascade(
+                    text_lower=text_lower,
+                    could_be_hot_window=could_be_hot_window,
+                    last_tts_text=last_tts_text,
+                )
+            except Exception as _casc_e:  # noqa: BLE001 — full safety net
+                debug_log(
+                    f"intent cascade raised (non-fatal, falling back to judge): {_casc_e}",
+                    "voice",
+                )
+                intent_judgment = None
+                cascade_source = "fallback"
+
+            if intent_judgment is None:
+                # Legacy intent_judge — runs when the cascade was unavailable
+                # or returned no result. Preserves all original behavior.
+                intent_judgment = self._intent_judge.judge(
+                    segments=context_segments,
+                    wake_timestamp=self._wake_timestamp,
+                    last_tts_text=last_tts_text,
+                    last_tts_finish_time=last_tts_finish_time,
+                    in_hot_window=could_be_hot_window,
+                    current_text=text_lower,
+                )
+                if intent_judgment is not None:
+                    debug_log(
+                        f"intent cascade ({cascade_source}) → judge produced verdict "
+                        f"(directed={intent_judgment.directed})",
+                        "voice",
+                    )
 
             if intent_judgment is not None:
                 # Log intent judge decision for user visibility
@@ -1023,7 +1679,7 @@ class VoiceListener(threading.Thread):
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
-                        self.state_manager.start_collection(text_lower)
+                        self._start_collection(text_lower)
                         self._start_thinking_tune()
                         try:
                             print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1061,7 +1717,7 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(intent_judgment.query)
+                            self._start_collection(intent_judgment.query)
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1124,7 +1780,7 @@ class VoiceListener(threading.Thread):
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
 
-                        self.state_manager.start_collection(hot_query)
+                        self._start_collection(hot_query)
 
                         # Start thinking tune and show processing message
                         self._start_thinking_tune()
@@ -1158,7 +1814,7 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self._start_collection(text_lower)
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1188,7 +1844,7 @@ class VoiceListener(threading.Thread):
                         self.state_manager.cancel_hot_window_activation()
                         self._transcript_buffer.mark_segment_processed(text_lower)
                         self._clear_audio_buffers()
-                        self.state_manager.start_collection(text_lower)
+                        self._start_collection(text_lower)
                         self._start_thinking_tune()
                         try:
                             print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1230,7 +1886,7 @@ class VoiceListener(threading.Thread):
                             self._transcript_buffer.mark_segment_processed(text_lower)
 
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self._start_collection(text_lower)
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1271,7 +1927,7 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self._start_collection(text_lower)
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1319,7 +1975,7 @@ class VoiceListener(threading.Thread):
                             self.state_manager.cancel_hot_window_activation()
                             self._transcript_buffer.mark_segment_processed(text_lower)
                             self._clear_audio_buffers()
-                            self.state_manager.start_collection(text_lower)
+                            self._start_collection(text_lower)
                             self._start_thinking_tune()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
@@ -1354,7 +2010,7 @@ class VoiceListener(threading.Thread):
             self._clear_audio_buffers()
 
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
-            self.state_manager.start_collection(query_fragment)
+            self._start_collection(query_fragment)
 
             # Start thinking tune and show processing message
             self._start_thinking_tune()
@@ -1366,7 +2022,7 @@ class VoiceListener(threading.Thread):
 
         # Priority 5: Collection mode handling
         if self.state_manager.is_collecting():
-            self.state_manager.add_to_collection(text_lower)
+            self._add_to_collection(text_lower)
             return
 
         # Priority 6: Non-wake input (ignore)
@@ -1398,6 +2054,11 @@ class VoiceListener(threading.Thread):
         """
         debug_log(f"dispatching query: '{query}'", "voice")
 
+        # Manual trigger mode ends once the query is dispatched
+        with self._control_flags_lock:
+            self._manual_trigger_active = False
+            self._manual_finalize_requested = False
+
         # Clear audio buffers to prevent stale audio from next query
         self._clear_audio_buffers()
 
@@ -1406,7 +2067,7 @@ class VoiceListener(threading.Thread):
             from desktop_app.face_widget import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
             state_manager.set_state(JarvisState.THINKING)
-            debug_log("face state set to THINKING (dispatch_query)", "voice")
+            log_state_transition("THINKING", "dispatch_query")
         except Exception as e:
             debug_log(f"failed to set face state to THINKING: {e}", "voice")
 
@@ -1433,6 +2094,16 @@ class VoiceListener(threading.Thread):
                     debug_log(f"fast-path TTS exact duration: {duration:.2f}s", "voice")
                     if self.echo_detector:
                         self.echo_detector._tts_exact_duration = duration
+                    self._last_tts_synthesis_time = time.time()
+
+                def _fp_tts_complete():
+                    self._log_tts_summary(fast_reply)
+                    self.activate_hot_window()
+
+                def _fp_playback_started() -> None:
+                    # Mirror the main-path: set Wispr speaking flag so stop
+                    # keywords interrupt instead of routing through cascade.
+                    self._set_bridge_speaking(True)
 
                 self.track_tts_start(fast_reply)
                 debug_log(f"starting TTS for fast-path reply ({len(fast_reply)} chars)", "voice")
@@ -1440,17 +2111,37 @@ class VoiceListener(threading.Thread):
                     fast_reply,
                     completion_callback=_fp_tts_complete,
                     duration_callback=_fp_duration_known,
+                    playback_started_callback=_fp_playback_started,
+                    playback_ended_callback=self._on_playback_ended,
                 )
             return
 
         # Import reply engine
         from ..reply.engine import run_reply_engine
 
-        # Process the query (keep thinking tune playing during processing)
+        # Process the query (keep thinking tune playing during processing).
+        # Forward the pre-computed fused tools/plan stashed by the Tier-2
+        # intent cascade so the engine can skip its internal router +
+        # planner LLM calls (~5-7s each). These may be None/empty, which is
+        # fine — the engine falls back to routing internally. Clear them
+        # afterwards so they never leak into the next query's dispatch.
+        fused_tools = self._last_fused_tools
+        fused_plan = self._last_fused_plan
+        self._last_fused_tools = None
+        self._last_fused_plan = None
+        # Clear any stale STOP/barge-in signal from a previous turn BEFORE
+        # starting this reply, then hand the engine the same event so a STOP
+        # arriving DURING this reply aborts it at a turn/tool boundary. Without
+        # the clear, a STOP left set from the prior turn would cancel this
+        # fresh reply on its very first boundary check.
+        self._llm_cancel_event.clear()
         try:
             reply = run_reply_engine(
                 self.db, self.cfg, None, query, self.dialogue_memory,
                 language=self._last_detected_language,
+                fused_tools=fused_tools,
+                fused_plan=fused_plan,
+                cancel_event=self._llm_cancel_event,
             )
         except Exception as e:
             # Log the error visibly - this should never happen silently
@@ -1469,8 +2160,7 @@ class VoiceListener(threading.Thread):
 
             # TTS completion callback for hot window
             def _on_tts_complete():
-                import time as _time
-                debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
+                self._log_tts_summary(reply)
                 self.activate_hot_window()
 
             # Duration callback to update echo detector with exact timing (Piper only)
@@ -1478,13 +2168,36 @@ class VoiceListener(threading.Thread):
                 debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
                 if self.echo_detector:
                     self.echo_detector._tts_exact_duration = duration
+                self._last_tts_synthesis_time = time.time()
 
-            # Track TTS start for echo detection with actual text
+            # Track TTS start for echo detection with actual text. The
+            # `track_tts_start` here is the EARLY marker (synthesis about to
+            # begin); the echo detector's _tts_start_time will be REFRESHED
+            # to the real play-start moment via `_on_playback_started`
+            # below, so the echo-offset math lines up with what the user
+            # actually hears.
             self.track_tts_start(reply)
             debug_log(f"starting TTS for reply ({len(reply)} chars)", "voice")
 
+            def _on_playback_started() -> None:
+                # Reset the echo detector's tts_start_time to NOW — i.e. the
+                # moment pygame engaged audio. The synthesis-to-play gap is
+                # 5-7s and was throwing the echo segment-offset off by the
+                # same amount, causing "is_echo? No — text doesn't match
+                # segment" false negatives.
+                if self.echo_detector:
+                    self.echo_detector._tts_start_time = time.time()
+                    debug_log("echo detector tts_start_time refreshed at play-engage", "voice")
+                # Phase F: tell the Wispr bridge JARVIS is now speaking.
+                # While the flag is True, a "stop"/"σταμάτα" utterance is
+                # routed through on_stop (interrupting TTS) instead of the
+                # normal cascade.
+                self._set_bridge_speaking(True)
+
             self.tts.speak(reply, completion_callback=_on_tts_complete,
-                          duration_callback=_on_duration_known)
+                          duration_callback=_on_duration_known,
+                          playback_started_callback=_on_playback_started,
+                          playback_ended_callback=self._on_playback_ended)
         else:
             debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
             # Stop thinking tune if no TTS response
@@ -1526,12 +2239,13 @@ class VoiceListener(threading.Thread):
             return False
 
         # Kick off music IMMEDIATELY (sounddevice, parallel to TTS later).
-        # Music sits at ~20% so the cloned voice cuts through cleanly.
+        # Music starts at a prominent level so the intro feels cinematic,
+        # then ducks when TTS begins so Jarvis's voice cuts through cleanly.
         self._stop_thinking_tune()  # silence the regular thinking pad
         try:
             from ..output.audio_overlay import get_overlay
             overlay = get_overlay()
-            overlay.play(str(asset_path), volume=0.20, fade_in_sec=0.4)
+            overlay.play(str(asset_path), volume=0.55, fade_in_sec=0.4)
         except Exception as e:
             debug_log(f"easter egg: overlay start failed: {e}", "voice")
             return False
@@ -1570,19 +2284,32 @@ class VoiceListener(threading.Thread):
 
         # Speak the greeting (music keeps playing underneath via sounddevice).
         if self.tts and self.tts.enabled:
+            # Duck music so the voice sits on top
+            overlay.duck(ratio=0.45, fade_sec=0.3)
+
             def _on_done() -> None:
-                # Let music tail off for a few seconds after speech ends,
-                # then stop overlay.
+                # Bring music back up, then fade out gracefully after a tail
                 try:
-                    _th.Timer(4.0, lambda: get_overlay().stop()).start()
+                    overlay.unduck(fade_sec=1.5)
+                except Exception:
+                    pass
+                try:
+                    _th.Timer(4.0, lambda: overlay.stop(fade_out_sec=2.5)).start()
                 except Exception:
                     pass
                 self.activate_hot_window()
+
             self.track_tts_start(text)
-            self.tts.speak(text, completion_callback=_on_done)
+            self.tts.speak(
+                text,
+                completion_callback=_on_done,
+                playback_started_callback=lambda: self._set_bridge_speaking(True),
+                playback_ended_callback=self._on_playback_ended,
+                volume=1.15,
+            )
         else:
-            # No TTS — stop music after a short while anyway
-            _th.Timer(8.0, lambda: get_overlay().stop()).start()
+            # No TTS — let music play out, then fade out gracefully
+            _th.Timer(8.0, lambda: overlay.stop(fade_out_sec=2.5)).start()
         return True
 
     def _compose_daddys_home_greeting(self) -> str:
@@ -1779,6 +2506,19 @@ class VoiceListener(threading.Thread):
         if fp is None:
             return None
 
+        # Local pseudo-server handled in-process — no MCP roundtrip, no LLM.
+        # Used for trivial dynamic queries (time / date) and "stop"/"cancel"
+        # acknowledgments where the full pipeline is pure overhead.
+        if fp.mcp_server == "_local":
+            local_reply = self._handle_local_fast_path(fp)
+            if local_reply is not None:
+                print(
+                    f"  ⚡ Fast-path [LOCAL]: {fp.tool_name} → \"{local_reply[:60]}\"",
+                    flush=True,
+                )
+                return local_reply
+            # Local handler said it can't serve this — fall through.
+
         mcps_cfg = getattr(self.cfg, "mcps", {}) or {}
         server_cfg = mcps_cfg.get(fp.mcp_server)
         if not server_cfg:
@@ -1813,13 +2553,33 @@ class VoiceListener(threading.Thread):
                         arguments=fp.arguments,
                         timeout=15.0,
                     )
-                    debug_log(
-                        f"fast-path async result: {extract_mcp_text(result)[:120]}",
-                        "voice",
-                    )
+                    text = extract_mcp_text(result)
+                    debug_log(f"fast-path async result: {text[:120]}", "voice")
+                    # The instant ack (response_override, e.g. "Skipped.")
+                    # optimistically assumed success. If the tool actually
+                    # reported a failure, correct the record out loud so we
+                    # never falsely claim success when nothing happened.
+                    low = text.lower()
+                    if any(k in low for k in (
+                        "no spotify device", "no active device", "open spotify",
+                        "nothing is", "failed", "error",
+                    )):
+                        try:
+                            self.tts.speak(text)
+                        except Exception:
+                            pass
                 except Exception as e:
-                    debug_log(f"fast-path async invocation failed: {e}", "voice")
-                    print(f"  ❌ Fast-path async error: {e}", flush=True)
+                    # anyio TaskGroups wrap the real cause in an ExceptionGroup;
+                    # unwrap it so the log shows WHAT failed (not just
+                    # "unhandled errors in a TaskGroup").
+                    inner = getattr(e, "exceptions", None)
+                    detail = "; ".join(repr(x) for x in inner) if inner else repr(e)
+                    debug_log(f"fast-path async invocation failed: {detail}", "voice")
+                    print(f"  ❌ Fast-path async error: {detail}", flush=True)
+                    try:
+                        self.tts.speak("Sorry, that didn't go through.")
+                    except Exception:
+                        pass
 
             _threading.Thread(
                 target=_invoke_async, daemon=True, name=f"FastPath-{fp.mcp_server}"
@@ -1844,6 +2604,72 @@ class VoiceListener(threading.Thread):
             debug_log(f"fast-path invocation failed: {e}", "voice")
             print(f"  ❌ Fast-path error, falling back to LLM: {e}", flush=True)
             return None
+
+    def _handle_local_fast_path(self, fp) -> Optional[str]:
+        """Resolve a `_local` fast-path match in-process. No MCP, no LLM.
+
+        Returns the spoken reply, or None to signal "fall through to LLM".
+        Tools handled:
+          * time_now   — current local time, formatted by language preference
+          * date_today — today's date
+          * noop       — for short "stop"/"cancel" acks (response_override
+            handled by the caller; we just return that override if present)
+        """
+        try:
+            from datetime import datetime
+            tool = (fp.tool_name or "").lower()
+
+            # Greek when the daemon's last detected language is Greek; English
+            # otherwise. Defaults to English when the listener hasn't seen any
+            # ASR yet (cold start).
+            lang = (getattr(self, "_last_detected_language", "") or "en").lower()
+            is_greek = lang.startswith("el")
+
+            if tool == "time_now":
+                now = datetime.now()
+                if is_greek:
+                    # 24h format reads more naturally in Greek voice.
+                    return f"Η ώρα είναι {now.strftime('%H:%M')}."
+                # English: 12h with am/pm. strftime('%-I:%M %p') is POSIX-only,
+                # so build it manually for Windows compatibility.
+                hour_24 = now.hour
+                hour_12 = hour_24 % 12 or 12
+                suffix = "AM" if hour_24 < 12 else "PM"
+                return f"It's {hour_12}:{now.strftime('%M')} {suffix}."
+
+            if tool == "date_today":
+                now = datetime.now()
+                if is_greek:
+                    months_el = [
+                        "Ιανουαρίου", "Φεβρουαρίου", "Μαρτίου", "Απριλίου",
+                        "Μαΐου", "Ιουνίου", "Ιουλίου", "Αυγούστου",
+                        "Σεπτεμβρίου", "Οκτωβρίου", "Νοεμβρίου", "Δεκεμβρίου",
+                    ]
+                    weekdays_el = [
+                        "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη",
+                        "Παρασκευή", "Σάββατο", "Κυριακή",
+                    ]
+                    return (
+                        f"Σήμερα είναι {weekdays_el[now.weekday()]}, "
+                        f"{now.day} {months_el[now.month - 1]} {now.year}."
+                    )
+                # %-d is POSIX-only, build the day-of-month manually for
+                # cross-platform compatibility.
+                return f"Today is {now.strftime('%A, %B ')}{now.day}, {now.year}."
+
+            if tool == "noop":
+                # response_override carries the ack; the caller returns it
+                # directly when fp.action_only is True. Here we just confirm
+                # we recognised the tool so the caller doesn't fall through
+                # to the MCP-config check.
+                return fp.response_override or "OK."
+
+        except Exception as e:
+            debug_log(f"local fast-path handler error ({fp.tool_name}): {e}", "voice")
+            return None
+
+        # Unknown _local tool — let the caller fall through.
+        return None
 
     def _calculate_audio_energy(self, frames: list) -> float:
         """Calculate RMS energy from audio frames."""
@@ -2051,44 +2877,80 @@ class VoiceListener(threading.Thread):
     def _pick_fallback_language(self, audio, allowed, decode_kwargs):
         """Pick the best allowed language when Whisper detected something outside the whitelist.
 
-        Strategy:
-          1. If the sticky language lock has consensus on an allowed language,
-             use that — recent history is a strong signal that survives a
-             single mis-detection on quiet audio.
-          2. Otherwise, try each allowed language and keep whichever Whisper
-             reports the higher `language_probability` for. One extra
-             transcribe call (~150 ms on GPU) but only fires on the rare
-             out-of-whitelist detection.
-          3. As a last resort, fall back to `allowed[0]` (the legacy behaviour).
+        Strategy (refined to fix Greek mis-detection):
+          1. **Sticky lock**: if the language lock has consensus on an allowed
+             language, use it.
+          2. **Config priority**: if `language_priority` is set in config, try
+             those languages first. The first one whose transcription has
+             non-trivial confidence wins — much more reliable than
+             `language_probability` which is biased toward English.
+          3. **Quality-based vote**: probe each allowed language with a real
+             transcribe call and score by `avg_logprob` of the actual segments
+             (transcription quality), NOT `language_probability` (phonetic
+             match — Whisper rates English-like phonetics high even for Greek).
+          4. **Last resort**: `allowed[0]`.
         """
         locked = self._language_lock.suggest()
         if locked and locked in allowed:
             return locked
+
+        # Config-driven priority: tries Greek first for el-primary users.
+        priority = getattr(self.cfg, "language_priority", None) or []
+        priority_list = [p for p in priority if p in allowed]
+
+        candidates_to_probe = list(priority_list) + [c for c in allowed if c not in priority_list]
+
         best_lang = None
-        best_prob = -1.0
-        for candidate in allowed:
+        best_score = float("-inf")
+        scored: list[tuple[str, float, float]] = []  # (lang, avg_logprob, lang_prob)
+
+        for candidate in candidates_to_probe:
             try:
                 with self.transcribe_lock:
                     _segs, info = self.model.transcribe(
                         audio, language=candidate, **decode_kwargs,
                     )
-                    # Drain the generator so faster-whisper actually decodes;
-                    # we only need the language_probability from `info`.
-                    list(_segs)
-                prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+                    seg_list = list(_segs)
+                lang_prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+                # Real transcription quality: average avg_logprob across segments.
+                # Higher (less negative) = better-quality words. Greek words
+                # transcribed in Greek score much higher than Greek-as-English garbage.
+                if seg_list:
+                    logprobs = [
+                        float(getattr(s, "avg_logprob", -10.0) or -10.0)
+                        for s in seg_list
+                    ]
+                    avg_logprob = sum(logprobs) / len(logprobs)
+                else:
+                    avg_logprob = -10.0
             except Exception as e:
                 debug_log(
                     f"fallback probe for language='{candidate}' failed: {e}",
                     "voice",
                 )
                 continue
-            if prob > best_prob:
-                best_prob = prob
+
+            scored.append((candidate, avg_logprob, lang_prob))
+
+            # Score = avg_logprob (primary) + small lang_prob bonus.
+            # Priority languages get a static bonus so they win unless the
+            # other candidate's transcription quality is *much* higher.
+            priority_bonus = 0.5 if candidate in priority_list else 0.0
+            score = avg_logprob + 0.1 * lang_prob + priority_bonus
+            if score > best_score:
+                best_score = score
                 best_lang = candidate
+
         if best_lang is None:
             return allowed[0]
+
+        scored_str = ", ".join(
+            f"{l}: avg_logprob={lp:.2f} lang_prob={pp:.2f}"
+            for l, lp, pp in scored
+        )
         debug_log(
-            f"fallback language probe: picked '{best_lang}' (prob={best_prob:.2f})",
+            f"fallback language probe: picked '{best_lang}' (best_score={best_score:.2f}; "
+            f"candidates: {scored_str})",
             "voice",
         )
         return best_lang
@@ -2244,7 +3106,9 @@ class VoiceListener(threading.Thread):
     def _on_audio(self, indata, frames, time_info, status):
         """Audio callback from sounddevice."""
         try:
-            if self._should_stop or self._dictation_active:
+            with self._control_flags_lock:
+                muted = self._muted
+            if self._should_stop or self._dictation_active or muted:
                 return
             self._callback_count += 1
             chunk = (indata.copy() if hasattr(indata, "copy") else indata)
@@ -2424,6 +3288,16 @@ class VoiceListener(threading.Thread):
 
     def run(self) -> None:
         """Main voice listening loop."""
+        # Phase C: dispatch on STT backend. The Wispr branch owns its own
+        # audio stream (openWakeWord + Silero VAD inside WisprBridge) and
+        # delivers final transcripts via the on_transcription callback
+        # (-> self.feed_transcript -> cascade). The Whisper branch keeps
+        # the original behaviour intact — gating happens here so rollback
+        # is one config flip away.
+        if self._stt_backend == "wispr":
+            self._run_wispr_backend()
+            return
+
         if sd is None:
             debug_log("sounddevice not available", "voice")
             print("  ❌ Audio system not available - sounddevice failed to load", flush=True)
@@ -3044,6 +3918,26 @@ class VoiceListener(threading.Thread):
             _audio_health_logged = False
 
             while not self._should_stop:
+                # Manual finalize: mute pressed during Trigger Now listening.
+                # Read-and-clear atomically so a concurrent MUTE on the bus
+                # worker can never be lost or consumed twice.
+                if self._consume_manual_finalize():
+                    if self.is_speech_active:
+                        self._finalize_utterance()
+                    if self.state_manager.is_collecting():
+                        query = self.state_manager.clear_collection()
+                        if query.strip():
+                            self._dispatch_query(query)
+                        else:
+                            self._stop_thinking_tune()
+                            try:
+                                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                                get_jarvis_state().set_state(JarvisState.IDLE)
+                            except Exception:
+                                pass
+                    self._clear_audio_buffers()
+                    continue
+
                 # One-time audio health check after 5 seconds
                 if not _audio_health_logged and time.time() - _audio_start_time > 5:
                     _audio_health_logged = True
@@ -3058,6 +3952,12 @@ class VoiceListener(threading.Thread):
                     # Critical: Check timeouts even when no audio is being received
                     # This ensures hot window expiry fires reliably
                     self._check_query_timeout()
+                    continue
+
+                # Discard queued audio when muted
+                with self._control_flags_lock:
+                    muted = self._muted
+                if muted:
                     continue
 
                 if item is None:
@@ -3165,8 +4065,8 @@ class VoiceListener(threading.Thread):
 
         if self.cfg.voice_debug:
             utterance_duration = utterance_end_time - utterance_start_time if utterance_start_time > 0 else 0
-            start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-3] if utterance_start_time > 0 else "N/A"
-            end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-3]
+            start_time_str = datetime.fromtimestamp(utterance_start_time).strftime('%H:%M:%S.%f')[:-4] if utterance_start_time > 0 else "N/A"
+            end_time_str = datetime.fromtimestamp(utterance_end_time).strftime('%H:%M:%S.%f')[:-4]
             debug_log(f"utterance captured: duration={utterance_duration:.2f}s (started: {start_time_str}, ended: {end_time_str})", "voice")
 
         # Transcribe full audio - the intent judge will extract the relevant query
@@ -3447,3 +4347,331 @@ class VoiceListener(threading.Thread):
 
         # Process the transcript with pre-calculated energy and utterance timing
         self._process_transcript(text, utterance_energy, utterance_start_time, utterance_end_time)
+
+    # ==================================================================
+    # Phase C + D — Wispr Flow backend
+    # ==================================================================
+    # The Wispr branch replaces Whisper + sounddevice + Silero (the
+    # `run()` loop above) with the WisprBridge: openWakeWord wake
+    # detection, Silero VAD endpointing, and clipboard pickup of the
+    # final transcript from Wispr Flow's cloud round-trip. Transcripts
+    # land in `feed_transcript` (called from a daemon worker thread)
+    # and are funnelled through the SAME intent cascade Whisper uses
+    # via `_dispatch_wispr_transcript_to_cascade`.
+
+    def _run_wispr_backend(self) -> None:
+        """Main loop for the Wispr Flow backend (Phase C).
+
+        Boots the WisprBridge (loads openWakeWord + Silero, opens its
+        own sounddevice InputStream) and then idles on
+        ``self._should_stop`` so the daemon-thread `VoiceListener` stays
+        alive for the duration of the process. Transcripts and wake
+        events arrive asynchronously via the callbacks wired up in
+        ``__init__``.
+        """
+        if self._wispr_bridge is None:
+            debug_log(
+                "_run_wispr_backend invoked but bridge is None — refusing to "
+                "start. Check WisprBridge instantiation in __init__.",
+                "voice",
+            )
+            print(
+                "  ❌ Wispr backend selected but bridge unavailable. "
+                "Set `stt_backend: whisper` in config to fall back.",
+                flush=True,
+            )
+            return
+
+        # Kick off LLM warmups in parallel with model load (mirrors the
+        # Whisper branch — first engagement shouldn't pay cold-load
+        # cost on either the STT or the LLMs).
+        print("  🔥 Warming up LLM models in parallel with Wispr bridge...", flush=True)
+        self._llm_warmup_started_at = time.time()
+        self._llm_warmup_threads = self._start_llm_warmup()
+
+        # Block until the bridge has loaded models and opened the audio
+        # stream. Returns False on any failure — print a hint and bail.
+        print("  🎙️  Starting Wispr bridge (openWakeWord + Silero VAD)...", flush=True)
+        try:
+            ok = self._wispr_bridge.start()
+        except Exception as e:  # noqa: BLE001 — defensive: bridge may raise on import
+            debug_log(f"WisprBridge.start() raised: {e}", "voice")
+            print(f"  ❌ WisprBridge startup error: {e}", flush=True)
+            return
+
+        if not ok:
+            print(
+                "  ❌ WisprBridge failed to start. Check the [ERROR]/[HINT] "
+                "lines above for the root cause (missing openWakeWord, "
+                "Silero, mic permissions, etc.).",
+                flush=True,
+            )
+            return
+
+        # Drain LLM warmups (same 60s budget as the Whisper branch).
+        warmup_threads = getattr(self, "_llm_warmup_threads", [])
+        if warmup_threads:
+            budget = 60.0
+            deadline = getattr(self, "_llm_warmup_started_at", time.time()) + budget
+            for t in warmup_threads:
+                remaining = max(0.0, deadline - time.time())
+                t.join(timeout=remaining)
+            results = getattr(self, "_llm_warmup_results", {})
+
+            def _print_status(role_key: str, label: str, ok_icon: str) -> None:
+                entry = results.get(role_key)
+                if entry is None:
+                    return
+                name, ready = entry
+                icon = ok_icon if ready else "⚠️ "
+                status = "ready" if ready else "warmup failed — will load on first use"
+                print(f"     {icon} {label} '{name}' {status}", flush=True)
+
+            _print_status("chat", "Chat model", "💬")
+            _print_status("judge", "Intent judge", "🧠")
+            _print_status("router", "Tool router", "🔧")
+
+        wake_title = getattr(self.cfg, "wake_word", "jarvis").lower().title()
+        print(f"\n{'─' * 50}\n🎙️  Listening via Wispr Flow! Try:", flush=True)
+        print(f"      {self._weather_example(wake_title)}", flush=True)
+        print(f"      \"What are you thinking, {wake_title}?\"", flush=True)
+
+        # Set face state to IDLE — bridge is up and waiting for "Hey Jarvis".
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            get_jarvis_state().set_state(JarvisState.IDLE)
+        except Exception:
+            pass
+
+        # Stay alive — the bridge runs its own threads. We just need to
+        # keep the VoiceListener thread alive so stop() can be called
+        # cleanly from the outside.
+        while not self._should_stop:
+            time.sleep(0.2)
+
+        # Clean shutdown — stop the bridge if it's still running.
+        try:
+            self._wispr_bridge.stop()
+        except Exception as e:
+            debug_log(f"WisprBridge stop error (during run shutdown): {e}", "voice")
+
+    def feed_transcript(self, text: str) -> None:
+        """Entry point for transcripts arriving from WisprBridge.
+
+        Called from a background thread (the WisprPostDictationWorker
+        in wispr_bridge.py) when Wispr Flow produces a final transcript.
+        Runs the text through the same intent cascade Whisper would have
+        used.
+
+        Thread-safety: this method does not block the bridge's worker —
+        we strip the leading wake word and then dispatch synchronously
+        into the cascade. Dictations are serialised by the bridge state
+        machine (DICTATING -> IDLE happens before the next wake fires),
+        so concurrent invocations are not expected. If they did occur,
+        the underlying state machinery (`state_manager`, `tts`,
+        `dialogue_memory`) holds its own locks where needed.
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+
+        # Strip leading wake word if Wispr Flow captured it. The wake
+        # word fires ~200ms before PTT, so Wispr Flow's recording can
+        # easily include the wake word at the head of the transcript.
+        text = self._strip_leading_wake_word(text)
+        if not text:
+            debug_log("feed_transcript: text empty after wake-word strip", "voice")
+            return
+
+        debug_log(f"feed_transcript → cascade: '{text[:80]}'", "voice")
+        try:
+            self._dispatch_wispr_transcript_to_cascade(text)
+        except Exception as e:  # noqa: BLE001 — never crash the bridge worker
+            debug_log(f"_dispatch_wispr_transcript_to_cascade raised: {e}", "voice")
+            print(f"  ❌ Wispr cascade dispatch error: {e}", flush=True)
+
+    def _strip_leading_wake_word(self, text: str) -> str:
+        """Strip a leading wake word ('hey jarvis' / 'jarvis' / Greek
+        variants) from a Wispr Flow transcript. Match is case-insensitive
+        and tolerant of surrounding punctuation/whitespace."""
+        import re
+        return re.sub(
+            r"^\s*(hey|ok|okay|hi|hello|γεια)?\s*"
+            r"(jarvis|τζάρβις|τζαρβις|γιάρβης|γιαρβης)"
+            r"[\s,.\-:!?]*",
+            "",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    def _on_wispr_wake(self) -> None:
+        """Called from the bridge's audio thread the instant the wake
+        word fires (BEFORE the dictation completes). SHORT — do not
+        block the audio callback. Heavy work happens in
+        ``feed_transcript`` later once the transcript arrives."""
+        try:
+            self._start_thinking_tune()
+        except Exception:
+            pass
+        try:
+            self._set_face_state_listening()
+        except Exception:
+            pass
+        # Set a synthetic wake timestamp so the cascade's
+        # `has_engagement_signal` gate accepts the transcript we'll
+        # feed in shortly.
+        try:
+            self._wake_timestamp = time.time()
+        except Exception:
+            pass
+
+    def _on_wispr_dictation_end(self, captured: bool = True) -> None:
+        """Called from the post-dictation worker once clipboard polling
+        has either captured the transcript or timed out.
+
+        Args:
+            captured: True if Wispr Flow produced a transcript, False on a
+                clipboard timeout (no text within ``wispr_clipboard_wait_sec``).
+                Defaults to True so any caller that doesn't pass the flag
+                keeps the original no-op behaviour.
+
+        When ``captured`` is True the cascade entry (``_process_transcript``
+        invoked from ``_dispatch_wispr_transcript_to_cascade``) drives its own
+        state transitions (thinking-tune, face state, hot window) once the
+        transcript arrives, so there is nothing to do here. Hot-window
+        re-arming happens inside :meth:`WisprBridge._stop_dictation` BEFORE
+        this callback fires, so we don't double-arm it.
+
+        When ``captured`` is False the wake handler has already started the
+        thinking tune and put the face into LISTENING, but no transcript will
+        ever arrive to clear them — so we stop the tune (which also resets the
+        face to IDLE) and surface a visible notice so the failure isn't
+        silent. We deliberately do NOT speak via TTS here to avoid noise.
+        """
+        if captured:
+            return None
+
+        debug_log(
+            "wispr dictation produced no transcript (clipboard timeout)",
+            "voice",
+        )
+        try:
+            print("  🔇 Didn't catch that (no transcript).", flush=True)
+        except Exception:
+            pass
+        # Tear down the stuck thinking tune + reset the face to IDLE.
+        self._stop_thinking_tune()
+        return None
+
+    def _on_playback_ended(self) -> None:
+        """Called when TTS playback finishes naturally (not on interrupt).
+
+        Opens the Wispr hot window so the user can follow up without
+        re-saying "Hey Jarvis". Idempotent — the bridge clamps repeat
+        calls inside :meth:`WisprBridge.enter_hot_window`.
+        """
+        if self._stt_backend == "wispr" and self._wispr_bridge is not None:
+            try:
+                self._wispr_bridge.enter_hot_window()
+            except Exception as e:
+                debug_log(f"enter_hot_window failed: {e!r}", "voice")
+        # Always clear the speaking flag — even if hot-window opening
+        # raised, we don't want to leave the bridge thinking JARVIS is
+        # still speaking. The bridge route the next stop-keyword to
+        # on_transcription instead of on_stop, which is the safe default.
+        self._set_bridge_speaking(False)
+
+    def _handle_wispr_stop(self) -> None:
+        """Stop pattern detected by Wispr bridge while TTS was playing.
+
+        Fired from :meth:`WisprBridge._dispatch_transcription` BEFORE the
+        regular ``on_transcription`` callback so the in-flight TTS is torn
+        down as fast as possible. We piggy-back on the existing
+        :meth:`reset_everything` path which already interrupts TTS,
+        cancels in-flight LLM work, and clears the dialogue/hot-window
+        state. Safe to call from any thread.
+        """
+        try:
+            self.reset_everything()
+        except Exception as e:
+            debug_log(f"_handle_wispr_stop failed: {e!r}", "voice")
+
+    def _set_bridge_speaking(self, speaking: bool) -> None:
+        """Forward TTS playback start/end to the Wispr bridge.
+
+        Wraps :meth:`WisprBridge.set_speaking` so call sites in TTS
+        callbacks don't need to repeat the backend/None checks. No-op on
+        the Whisper backend.
+        """
+        if self._stt_backend == "wispr" and self._wispr_bridge is not None:
+            try:
+                self._wispr_bridge.set_speaking(bool(speaking))
+            except Exception as e:
+                debug_log(f"set_speaking({speaking}) failed: {e!r}", "voice")
+
+    def _dispatch_wispr_transcript_to_cascade(self, text: str) -> None:
+        """Inject a Wispr transcript into the same cascade Whisper uses.
+
+        The Whisper path lands at ``_process_transcript(text, energy,
+        start, end)`` (called from ``_finalize_utterance``). We replicate
+        that call here with neutral defaults for the audio-level fields
+        Wispr doesn't have access to:
+
+          - ``utterance_energy``: 0.0 — used only by echo detection,
+            and the openWakeWord wake-gating in the bridge gives us a
+            much stronger directed-speech signal than energy ever
+            could.
+          - ``utterance_start_time`` / ``utterance_end_time``:
+            ``now`` and ``now`` — used for transcript-buffer ordering
+            and hot-window timing checks. Since Wispr's wake-word
+            gating already happened, the post-TTS hot window math is
+            secondary; setting both to ``now`` means the utterance is
+            treated as "just finished" which is accurate.
+
+        Adds the transcript to the rolling transcript buffer so the
+        intent judge has context (matches what _finalize_utterance does).
+        """
+        now = time.time()
+
+        # Add to the rolling transcript buffer so the legacy judge (and
+        # any cascade tier that consults context) sees the new utterance.
+        try:
+            is_during_tts = bool(self.tts is not None and self.tts.is_speaking())
+            self._transcript_buffer.add(
+                text=text,
+                start_time=now,
+                end_time=now,
+                energy=0.0,
+                is_during_tts=is_during_tts,
+            )
+        except Exception as e:
+            debug_log(f"transcript buffer add failed (non-fatal): {e}", "voice")
+
+        # Reset the "first utterance" flag so the visual separator
+        # behaves like the Whisper path.
+        separator = "" if self._first_utterance else f"\n{'─' * 50}"
+        self._first_utterance = False
+        print(f"{separator}\n📝 Heard (Wispr): \"{text}\"", flush=True)
+
+        # The cascade entry point. _process_transcript handles:
+        #   - Tier 0 fast-path SHORT-CIRCUIT
+        #   - Tier 1 (heuristic) and Tier 2 (fused intent) cascade
+        #   - Legacy intent_judge fallback
+        #   - Hot-window / echo / wake-word logic
+        #   - Dispatch via _dispatch_query → reply.engine
+        # Energy is set to 0.0 (we have no raw audio); timestamps are
+        # both `now` (transcript "just arrived"). source="wispr" tells
+        # _process_transcript to (a) synthesise a wake_timestamp (since
+        # openWakeWord already validated the wake out-of-band — the text
+        # never contains the wake word for the in-text gate to find),
+        # and (b) flip `_wispr_current_source` so `_start_collection`
+        # dispatches immediately instead of waiting for a silence-timeout
+        # finalize that would never fire (Wispr already gave us the full
+        # utterance — no more partials will arrive via audio callback).
+        try:
+            self._process_transcript(text, 0.0, now, now, source="wispr")
+        finally:
+            # Always clear, even if _process_transcript raised, so non-wispr
+            # invocations (TRIGGER button, etc.) downstream behave normally.
+            self._wispr_current_source = None

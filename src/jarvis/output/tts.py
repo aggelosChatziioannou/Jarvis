@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
-from ..debug import debug_log
+import numpy as np
+
+from ..debug import debug_log, info_log, log_state_transition
 
 
 # ============================================================================
@@ -25,6 +27,459 @@ from ..debug import debug_log
 # en_GB-alan-medium: Good quality, ~60MB, British English male
 PIPER_DEFAULT_VOICE = "en_GB-alan-medium"
 PIPER_VOICE_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
+
+
+# Path to the cross-process state file. Inlined as a module-level constant
+# so the daemon's TTS worker thread does NOT need to import
+# `desktop_app.face_widget` (a 1700-line PyQt6 module) just to compute this
+# path. The import was triggering a Python import-lock deadlock when fired
+# from a worker thread for the first time while the daemon main thread was
+# concurrently doing heavy initialisation.
+_JARVIS_STATE_FILE = os.path.join(tempfile.gettempdir(), "jarvis_state")
+
+
+# JarvisState (string) → React state vocabulary. Used by ChatterboxTTS
+# ._publish_tts_state to push live phase info to the React HUD without
+# instantiating any QObject in the daemon's worker thread (which would
+# deadlock — see the method's docstring).
+_JARVIS_STATE_TO_REACT_VOCAB = {
+    "asleep": "idle",
+    "idle": "idle",
+    "listening": "listening",
+    "thinking": "thinking",
+    "synthesizing": "thinking",
+    "speaking": "speaking",
+    "dictating": "listening",
+    "dictation_processing": "thinking",
+}
+
+
+def _list_output_devices() -> None:
+    """Print available output devices once, so the user can verify routing."""
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        default_out = sd.default.device[1] if isinstance(sd.default.device, (list, tuple)) else sd.default.device
+        print("🔉 Audio output devices:", flush=True)
+        for idx, dev in enumerate(devices):
+            if dev.get("max_output_channels", 0) > 0:
+                mark = " ← DEFAULT" if idx == default_out else ""
+                print(f"    [{idx}] {dev.get('name', '?')}  ({int(dev.get('default_samplerate', 0))} Hz){mark}", flush=True)
+    except Exception as e:
+        print(f"🔉 Could not enumerate output devices: {e!r}", flush=True)
+
+
+def _safe_mixer_init(samplerate: int) -> bool:
+    """Initialize pygame.mixer ONCE per process — idempotent + correct.
+
+    CRITICAL: must call mixer.init() with EXPLICIT args. `pre_init` is unreliable
+    on Windows pygame — the user observed 2x speed because pre_init's
+    `channels=1` was ignored and pygame opened a stereo mixer for mono WAVs,
+    making playback twice as fast.
+
+    Strategy:
+      - If the mixer is already initialised AT THE CORRECT RATE, reuse it.
+      - Otherwise quit any existing mixer and init fresh with the requested
+        frequency + 1 channel + 16-bit signed PCM.
+      - Mixer stays alive between speak calls (no quit-in-finally).
+    """
+    import pygame
+    try:
+        existing = pygame.mixer.get_init()
+        if existing is not None:
+            cur_freq, _cur_size, cur_channels = existing
+            if cur_freq == int(samplerate) and cur_channels == 1:
+                # Already correct — reuse.
+                return True
+            # Wrong format — tear down and re-init at the right rate.
+            try:
+                pygame.mixer.quit()
+            except Exception:
+                pass
+
+        # Explicit args — pre_init has been observed silently ignoring some
+        # parameters on Windows (notably channels), so we pass everything to
+        # init() directly.
+        pygame.mixer.init(
+            frequency=int(samplerate),
+            size=-16,
+            channels=1,
+            buffer=1024,
+        )
+        new_init = pygame.mixer.get_init()
+        print(f"🔊 TTS mixer initialised: {new_init} (requested samplerate={samplerate})", flush=True)
+        return True
+    except Exception as e:
+        # Real failure — surface it so the user knows.
+        print(f"⚠️ TTS mixer init FAILED: {e!r}", flush=True)
+        debug_log(f"pygame.mixer.init failed: {e!r}", "tts")
+        return False
+
+
+def _play_audio(
+    wav_path: str,
+    samplerate: int,
+    volume: float,
+    should_interrupt,
+    label: str = "tts",
+    duration_hint: float = 0.0,
+    on_engaged: Optional[Callable[[], None]] = None,
+    on_finished: Optional[Callable[[], None]] = None,
+) -> tuple[bool, bool]:
+    """Play a WAV file. Try sounddevice first (correct sample-rate handling on
+    Windows), fall back to pygame mixer if PortAudio is unavailable.
+
+    Returns (played_ok, interrupted). The caller controls state + callback.
+
+    sounddevice is primary because pygame's SDL backend on Windows opens the
+    output device in stereo (channels=2) regardless of the channels=1 request
+    in mixer.init(). Loading a mono WAV onto that stereo mixer interleaves
+    samples as if they were L/R pairs, halving the duration → 2x playback
+    speed. sounddevice uses PortAudio, which reads the WAV header correctly
+    and lets the OS audio API handle resampling + channel conversion.
+
+    ``on_finished`` fires ONLY when playback completes naturally (interrupt
+    path skips it — the caller knows the stream was torn down). Used by the
+    listener to open the Wispr hot window the instant TTS audio ends.
+    """
+    sd_result = _play_via_sounddevice(
+        wav_path, volume, should_interrupt, label, duration_hint, on_engaged,
+        on_finished,
+    )
+    if sd_result is not None:
+        return sd_result
+    return _play_via_pygame(
+        wav_path, samplerate, volume, should_interrupt, label, duration_hint,
+        on_engaged, on_finished,
+    )
+
+
+def _build_extra_settings():
+    """Return (sd.WasapiSettings(exclusive=True), wasapi_default_device_idx)
+    on Windows if WASAPI HostApi is available; else (None, None).
+
+    Tier 3.9: WASAPI exclusive mode bypasses Windows's shared mixer, dropping
+    audio latency from ~20-50ms (shared, resampled) to ~3-10ms (exclusive,
+    bit-perfect). When TTS is the only audio source, this is pure upside.
+
+    Tradeoff: while exclusive mode is engaged, OTHER Windows audio is muted
+    (browser, music, system sounds). Acceptable for a voice assistant — the
+    user expects JARVIS to "take the floor" while speaking — but worth noting.
+
+    IMPORTANT: WasapiSettings is only valid when the stream is routed to a
+    WASAPI device. The system default output device is often on a different
+    host API (MME / DirectSound), so we must explicitly select the WASAPI
+    host API's default output device. Otherwise PortAudio rejects the
+    extra_settings with `Incompatible host API specific stream info` (-9984).
+    """
+    if sys.platform != "win32":
+        return None, None
+    try:
+        import sounddevice as sd
+        hostapis = sd.query_hostapis()
+        wasapi_index = next(
+            (i for i, ha in enumerate(hostapis) if "wasapi" in ha["name"].lower()),
+            None,
+        )
+        if wasapi_index is None:
+            return None, None
+        wasapi_default = hostapis[wasapi_index].get("default_output_device", -1)
+        if wasapi_default is None or wasapi_default < 0:
+            # WASAPI host API present but no default device — extra_settings
+            # would still be rejected without a valid device target.
+            return None, None
+        return sd.WasapiSettings(exclusive=True), int(wasapi_default)
+    except Exception as e:
+        debug_log(f"_build_extra_settings: WASAPI unavailable ({e!r})", "tts")
+        return None, None
+
+
+def _resolve_output_device(spec) -> Optional[int]:
+    """Resolve a `tts_output_device` config value to a sounddevice index.
+
+    Accepts:
+      - None / empty → return None (use system default)
+      - int / digit string → use that index directly
+      - non-digit string → case-insensitive substring match on device name;
+        prefers WASAPI host API over MME/DirectSound when multiple devices
+        share the same name (better quality + lower latency).
+
+    Returns None on any failure (caller falls back to default).
+    """
+    if spec is None or (isinstance(spec, str) and spec.strip() == ""):
+        return None
+    try:
+        import sounddevice as sd
+        s = str(spec).strip()
+        # Numeric → direct index
+        if s.lstrip("-").isdigit():
+            return int(s)
+        # Substring match — find all output devices whose name contains spec
+        needle = s.lower()
+        candidates = []
+        for i, dev in enumerate(sd.query_devices()):
+            if dev.get("max_output_channels", 0) <= 0:
+                continue
+            if needle in dev.get("name", "").lower():
+                ha_name = sd.query_hostapis(dev["hostapi"])["name"].lower()
+                # Score: WASAPI=2, DirectSound=1, MME/WDM-KS=0 (prefer WASAPI)
+                score = 2 if "wasapi" in ha_name else (1 if "directsound" in ha_name else 0)
+                candidates.append((score, i, dev["name"], ha_name))
+        if not candidates:
+            print(f"⚠️ tts_output_device: no device matching '{spec}' — using system default",
+                  flush=True)
+            return None
+        candidates.sort(reverse=True)  # highest score first
+        score, idx, name, ha = candidates[0]
+        print(f"🎯 tts_output_device='{spec}' → matched [{idx}] {name} ({ha})", flush=True)
+        return idx
+    except Exception as e:
+        debug_log(f"_resolve_output_device({spec!r}) raised: {e!r}", "tts")
+        return None
+
+
+def _get_configured_output_device() -> Optional[int]:
+    """Read cfg.tts_output_device and resolve to an index. Cached after first call."""
+    global _CONFIGURED_OUTPUT_DEVICE_CACHED
+    try:
+        return _CONFIGURED_OUTPUT_DEVICE_CACHED
+    except NameError:
+        pass
+    try:
+        from ..config import load_settings
+        cfg = load_settings()
+        spec = getattr(cfg, "tts_output_device", None)
+    except Exception:
+        spec = None
+    _CONFIGURED_OUTPUT_DEVICE_CACHED = _resolve_output_device(spec)
+    return _CONFIGURED_OUTPUT_DEVICE_CACHED
+
+
+def _play_via_sounddevice(
+    wav_path: str,
+    volume: float,
+    should_interrupt,
+    label: str = "tts",
+    duration_hint: float = 0.0,
+    on_engaged: Optional[Callable[[], None]] = None,
+    on_finished: Optional[Callable[[], None]] = None,
+) -> Optional[tuple[bool, bool]]:
+    """Primary playback via sounddevice + PortAudio.
+
+    Returns (played_ok, interrupted) on success or interrupt, None when the
+    backend isn't available so the caller can try pygame instead.
+
+    Tier 3.9: on Windows, attempt WASAPI exclusive mode first for low-latency
+    bit-perfect playback (~3-10ms vs ~20-50ms shared). Falls back to shared
+    mode on PortAudioError (format-negotiation failure, device already owned,
+    etc.). `latency='low'` + `blocksize=256` (~10.7ms at 24kHz) are passed
+    through `sd.play()`'s **kwargs to the internal OutputStream so we get
+    the tighter buffer in both modes.
+
+    Known limitation: when the pygame.mixer fallback is initialised at startup
+    (`_safe_mixer_init(24000)` in ChatterboxTTS.start), SDL holds an open
+    handle on the *system default* output device. PortAudio's WASAPI exclusive
+    open then fails with `Invalid device` (-9996) even when targeting a
+    *different* device index, because WASAPI exclusive needs uncontested
+    host-API access. The fallback to shared mode is automatic and keeps
+    audio playing, so this is correctness-safe — but the WASAPI win only
+    materialises when pygame is NOT pre-initialised. Future tier: defer
+    pygame mixer init until the sounddevice path actually fails.
+    """
+    try:
+        import soundfile as sf
+        import sounddevice as sd
+    except Exception as e:
+        debug_log(f"sounddevice/soundfile unavailable: {e!r}", "tts")
+        return None
+    try:
+        data, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        if data.ndim > 1:
+            data = data.mean(axis=1)  # downmix to mono if stereo
+        if abs(volume - 1.0) > 1e-3:
+            data = data * float(volume)
+
+        # Try WASAPI exclusive first; fall back to shared on any PortAudio
+        # error (most commonly: device already opened exclusively by another
+        # process, or the requested format isn't supported in exclusive mode).
+        # The device index must point at a WASAPI device for extra_settings
+        # to be honored — see _build_extra_settings docstring.
+        extra, wasapi_device = _build_extra_settings()
+        used_mode = "shared"
+        play_started = False
+        if extra is not None and wasapi_device is not None:
+            try:
+                # Exclusive mode requires the device's NATIVE sample rate
+                # (Windows can't insert its mixer to resample). Query the
+                # device's default rate and resample if needed. Chatterbox
+                # emits 24000 Hz; typical Realtek WASAPI devices are 48000,
+                # so the ratio is usually a clean 2:1.
+                play_data = data
+                play_sr = int(sr)
+                try:
+                    dev_info = sd.query_devices(wasapi_device)
+                    native_sr = int(dev_info.get("default_samplerate", sr))
+                except Exception:
+                    native_sr = int(sr)
+                if native_sr and native_sr != int(sr):
+                    try:
+                        from scipy.signal import resample_poly
+                        from math import gcd
+                        g = gcd(native_sr, int(sr)) or 1
+                        up = native_sr // g
+                        down = int(sr) // g
+                        play_data = resample_poly(data, up, down).astype(np.float32)
+                        play_sr = native_sr
+                        debug_log(
+                            f"WASAPI exclusive: resampled {int(sr)} -> {native_sr} "
+                            f"(poly up/down={up}/{down})",
+                            "tts",
+                        )
+                    except Exception as _re:
+                        # Resample failed — let exclusive try the original
+                        # rate; if PortAudio rejects we'll fall back to shared.
+                        debug_log(
+                            f"WASAPI exclusive: resample failed ({_re!r}); "
+                            f"trying original rate {int(sr)} (likely will fail)",
+                            "tts",
+                        )
+
+                sd.play(
+                    play_data,
+                    samplerate=play_sr,
+                    device=wasapi_device,
+                    extra_settings=extra,
+                    latency="low",
+                    blocksize=256,
+                )
+                used_mode = "WASAPI exclusive"
+                play_started = True
+                print(
+                    f"🔊 TTS playing (sounddevice {used_mode}, dev={wasapi_device}, "
+                    f"{play_sr} Hz, {duration_hint:.1f}s)",
+                    flush=True,
+                )
+            except sd.PortAudioError as pae:
+                # Exclusive denied (format negotiation failed, device busy,
+                # etc.) — retry with shared mode below.
+                print(
+                    f"⚠️ WASAPI exclusive denied ({pae!r}) — falling back to shared mode",
+                    flush=True,
+                )
+                debug_log(f"WASAPI exclusive denied: {pae!r}", "tts")
+                # Make sure no half-started stream lingers.
+                try:
+                    sd.stop()
+                except Exception:
+                    pass
+
+        if not play_started:
+            # Honor cfg.tts_output_device if set — user can pin which output
+            # device gets the audio (e.g. PD200X speakers vs Realtek headset).
+            # None = use system default (sd.default.device[1]).
+            shared_device = _get_configured_output_device()
+            if shared_device is not None:
+                sd.play(data, samplerate=int(sr), device=shared_device,
+                        latency="low", blocksize=256)
+                used_mode = f"shared dev={shared_device}"
+            else:
+                sd.play(data, samplerate=int(sr), latency="low", blocksize=256)
+                used_mode = "shared"
+            print(
+                f"🔊 TTS playing (sounddevice {used_mode}, {int(sr)} Hz, {duration_hint:.1f}s)",
+                flush=True,
+            )
+
+        # Fire on_engaged immediately — PortAudio startup latency is ~20-50ms
+        # shared / ~3-10ms exclusive, close enough to "now" for echo-detection
+        # timing.
+        if on_engaged is not None:
+            try:
+                on_engaged()
+            except Exception as e:
+                debug_log(f"on_engaged callback raised: {e!r}", "tts")
+        stream = sd.get_stream()
+        while True:
+            try:
+                if stream is None or not stream.active:
+                    break
+            except Exception:
+                break
+            if should_interrupt is not None and should_interrupt.is_set():
+                sd.stop()
+                print(f"⏹  TTS interrupted ({label})", flush=True)
+                return (True, True)
+            sd.sleep(50)
+        debug_log(f"sounddevice playback finished ({label}, mode={used_mode})", "tts")
+        # Natural-completion hook: lets the listener open the Wispr hot
+        # window the instant audio stops. Interrupt path skips this — the
+        # caller already knows the stream was torn down via STOP.
+        if on_finished is not None:
+            try:
+                on_finished()
+            except Exception as e:
+                debug_log(f"on_finished callback raised: {e!r}", "tts")
+        return (True, False)
+    except Exception as e:
+        print(f"⚠️ TTS sounddevice failed ({label}): {e!r} — trying pygame", flush=True)
+        debug_log(f"sounddevice playback failed: {e!r}", "tts")
+        return None
+
+
+def _play_via_pygame(
+    wav_path: str,
+    samplerate: int,
+    volume: float,
+    should_interrupt,
+    label: str = "tts",
+    duration_hint: float = 0.0,
+    on_engaged: Optional[Callable[[], None]] = None,
+    on_finished: Optional[Callable[[], None]] = None,
+) -> tuple[bool, bool]:
+    """Fallback playback via pygame.mixer (used when sounddevice is missing)."""
+    import pygame
+    pygame_ok = False
+    try:
+        if pygame.mixer.get_init() is None:
+            debug_log(f"pygame mixer not init, initialising now (sr={samplerate})", "tts")
+            pygame_ok = _safe_mixer_init(samplerate)
+        else:
+            pygame_ok = True
+
+        if pygame_ok:
+            debug_log(f"pygame load + play ({label}, {duration_hint:.1f}s)", "tts")
+            try:
+                pygame.mixer.music.load(wav_path)
+                pygame.mixer.music.set_volume(float(volume))
+                pygame.mixer.music.play()
+                pygame.time.wait(80)
+                if pygame.mixer.music.get_busy():
+                    print(f"🔊 TTS playing (pygame fallback, {label}, {duration_hint:.1f}s)", flush=True)
+                    if on_engaged is not None:
+                        try:
+                            on_engaged()
+                        except Exception as e:
+                            debug_log(f"on_engaged callback raised: {e!r}", "tts")
+                    while pygame.mixer.music.get_busy():
+                        if should_interrupt is not None and should_interrupt.is_set():
+                            pygame.mixer.music.stop()
+                            print(f"⏹  TTS interrupted ({label})", flush=True)
+                            return (True, True)
+                        pygame.time.wait(100)
+                    # Natural-completion hook (see _play_via_sounddevice).
+                    if on_finished is not None:
+                        try:
+                            on_finished()
+                        except Exception as e:
+                            debug_log(f"on_finished callback raised: {e!r}", "tts")
+                    return (True, False)
+                else:
+                    print(f"⚠️ TTS stalled (pygame fallback, {label})", flush=True)
+            except Exception as e:
+                print(f"⚠️ TTS pygame error ({label}): {e!r}", flush=True)
+    except Exception as e:
+        print(f"⚠️ TTS pygame setup error ({label}): {e!r}", flush=True)
+    return (False, False)
 
 
 def _get_piper_models_dir() -> Path:
@@ -346,6 +801,161 @@ def _preprocess_for_speech(text: str) -> str:
     return result
 
 
+# Sentence-final punctuation, EL + EN aware. Note that Greek's question mark is
+# the SAME code point as the Latin semicolon (U+003B ';'), so a single class
+# covers both. '·' (U+0387, Greek ano teleia) is a sentence-level separator.
+_SENTENCE_TERMINATORS = ".!?;·"
+
+# Minimal abbreviation set whose trailing '.' must NOT end a sentence. Kept
+# deliberately tiny and language-agnostic-ish (these forms are borrowed across
+# many European languages). This is a pragmatic guard, not an attempt to model
+# every abbreviation — splitting is fail-open, so a missed split just means one
+# slightly longer synthesis chunk, never wrong audio.
+_NON_TERMINAL_ABBREVIATIONS = frozenset(
+    {
+        "e.g", "i.e", "etc", "vs", "mr", "mrs", "ms", "dr", "prof", "st",
+        "no", "fig", "al", "approx", "cf", "p.s",
+    }
+)
+
+
+def _next_nonspace_char(text: str, start: int) -> str:
+    """Return the first non-space char at/after ``start``, or '' at end."""
+    j = start
+    n = len(text)
+    while j < n and text[j].isspace():
+        j += 1
+    return text[j] if j < n else ""
+
+
+def _ends_with_abbreviation(accumulated: str) -> bool:
+    """True if ``accumulated`` (ending just before/at a '.') closes a known
+    abbreviation such as ``etc``, ``vs`` or the dotted ``e.g`` / ``i.e``.
+
+    Compares the trailing whitespace-delimited token, normalised to lower-case
+    with any trailing dots removed, against ``_NON_TERMINAL_ABBREVIATIONS``.
+    """
+    token = re.split(r"\s", accumulated)[-1] if accumulated else ""
+    core = token.rstrip(".").lower()
+    return core in _NON_TERMINAL_ABBREVIATIONS
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Split already-preprocessed TTS text into sentences, EL + EN aware.
+
+    Splits on sentence-final punctuation (``. ! ? ;`` and the Greek ``;``/``·``)
+    and on newlines, but deliberately does NOT split inside:
+      * decimals — ``3.5`` stays intact (digit on both sides of the dot),
+      * ellipses — ``...`` is treated as one terminator, no empty fragments,
+      * common abbreviations — ``e.g.``, ``etc.``, ``i.e.`` etc.
+
+    The terminator stays attached to the sentence it ends. Blank fragments are
+    dropped. Operates on the output of ``_preprocess_for_speech`` /
+    ``_strip_markdown_for_speech`` so URLs and markdown are already handled.
+
+    Fail-open: any uncertainty resolves towards NOT splitting, so the worst case
+    is a slightly larger synthesis chunk, never mangled or reordered audio.
+    """
+    if not text or not text.strip():
+        return []
+
+    sentences: list[str] = []
+    buf: list[str] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        buf.append(ch)
+
+        if ch == "\n":
+            # Hard boundary — newlines always separate sentences.
+            sentence = "".join(buf).strip()
+            if sentence:
+                sentences.append(sentence)
+            buf = []
+            i += 1
+            continue
+
+        if ch in _SENTENCE_TERMINATORS:
+            if ch == ".":
+                prev_ch = text[i - 1] if i > 0 else ""
+                next_ch = text[i + 1] if i + 1 < n else ""
+                # Decimal: digit on both sides → not a terminator (e.g. 3.5).
+                if prev_ch.isdigit() and next_ch.isdigit():
+                    i += 1
+                    continue
+                # Ellipsis / dot-run (2+ dots): swallow the whole run and never
+                # treat it as a boundary — keeps "Well... I suppose" together.
+                if next_ch == ".":
+                    while i + 1 < n and text[i + 1] == ".":
+                        buf.append(text[i + 1])
+                        i += 1
+                    i += 1
+                    continue
+                # Abbreviation guard: the trailing dotted word is a known
+                # abbreviation (e.g. "etc.", "vs.", "e.g."). Catches the case
+                # where an abbreviation is followed by a capitalised word, which
+                # the next-char heuristic below would misread as a boundary.
+                if _ends_with_abbreviation("".join(buf)):
+                    i += 1
+                    continue
+                # Sentence-continuation heuristic (language-agnostic): a real
+                # sentence boundary is followed by end-of-text or an
+                # upper/title-case char. If the next non-space char is
+                # lower-case, this dot is mid-sentence (abbreviation, initial,
+                # filename) → do not split. Greek upper-case is handled by
+                # str.isupper(), so no per-language list is needed.
+                nxt = _next_nonspace_char(text, i + 1)
+                if nxt and not (nxt.isupper() or nxt.istitle()):
+                    i += 1
+                    continue
+
+            # Real sentence end — flush the accumulated buffer.
+            sentence = "".join(buf).strip()
+            if sentence:
+                sentences.append(sentence)
+            buf = []
+            i += 1
+            continue
+
+        i += 1
+
+    tail = "".join(buf).strip()
+    if tail:
+        sentences.append(tail)
+
+    return sentences
+
+
+# Cached result of reading cfg.tts_streaming_enabled, mirroring
+# _get_configured_output_device's lazy-load-once pattern so the TTS worker
+# thread never repeatedly hits disk. Tests patch _get_streaming_enabled
+# directly, so they bypass the cache entirely.
+_STREAMING_ENABLED_CACHED = None
+
+
+def _get_streaming_enabled() -> bool:
+    """Read cfg.tts_streaming_enabled (default True). Cached after first call.
+
+    Read lazily here rather than threaded through PiperTTS.__init__ /
+    create_tts_engine so sentence streaming stays fully contained in this
+    module and needs no changes to the daemon or listener.
+    """
+    global _STREAMING_ENABLED_CACHED
+    if _STREAMING_ENABLED_CACHED is not None:
+        return _STREAMING_ENABLED_CACHED
+    enabled = True
+    try:
+        from ..config import load_settings
+        cfg = load_settings()
+        enabled = bool(getattr(cfg, "tts_streaming_enabled", True))
+    except Exception as e:
+        debug_log(f"_get_streaming_enabled: defaulting True ({e!r})", "tts")
+        enabled = True
+    _STREAMING_ENABLED_CACHED = enabled
+    return _STREAMING_ENABLED_CACHED
+
+
 class ChatterboxTTS:
     """Experimental TTS implementation using Resemble AI's Chatterbox model."""
 
@@ -368,11 +978,26 @@ class ChatterboxTTS:
         self._last_spoken_text: str = ""
         self._completion_callback: Optional[Callable[[], None]] = None
         self._duration_callback: Optional[Callable[[float], None]] = None
+        # Fires when audio playback ACTUALLY engages (after pygame.get_busy
+        # flips True), NOT when speak() is called. Used by the echo detector
+        # to reset its `_tts_start_time` to the real play-start time —
+        # otherwise it computes which part of the TTS text is "currently
+        # playing" using a timestamp from ~5-7 seconds before audio actually
+        # began (because synthesis + buffer fill is slow), and false-positives
+        # the echo check.
+        self._playback_started_callback: Optional[Callable[[], None]] = None
+        # Fires once playback finishes naturally (NOT on interrupt). Used by
+        # the Wispr listener to open the hot window the instant audio ends,
+        # so the user can follow up without re-saying "Hey Jarvis".
+        self._playback_ended_callback: Optional[Callable[[], None]] = None
         self._should_interrupt = threading.Event()
 
         # Chatterbox model (eagerly loaded during initialization)
         self._model = None
         self._model_error = None
+        # Tier 1.2: reduced max_new_tokens for the t3 sampling loop.
+        # Resolved lazily in _initialize_with_logging() from cfg.tts_chatterbox_steps (default 300).
+        self._steps: int = 300
         # Lazy initialization flags
         self._initialized = False
         self._init_lock = threading.Lock()
@@ -402,6 +1027,74 @@ class ChatterboxTTS:
 
             # Load model with proper device specification
             self._model = ChatterboxModel.from_pretrained(device=actual_device)
+
+            # Tier 1.2: resolve max-new-tokens override from config (default 300).
+            try:
+                from ..config import load_settings as _ls
+                _s = _ls()
+                self._steps = int(getattr(_s, "tts_chatterbox_steps", 300))
+                print(f"⏩ Chatterbox: max_new_tokens override = {self._steps}", file=sys.stderr, flush=True)
+            except Exception as _e:
+                print(f"⚠️  Chatterbox steps override failed (default=300): {_e!r}", file=sys.stderr, flush=True)
+                self._steps = 300
+
+            # Tier 1.2: BF16 cast on t3 — ~2× speed, ~50% VRAM.
+            try:
+                if torch.cuda.is_available() and hasattr(self._model, "t3"):
+                    self._model.t3.to(dtype=torch.bfloat16)
+                    if getattr(self._model, "conds", None) is not None and hasattr(self._model.conds, "t3"):
+                        self._model.conds.t3.to(dtype=torch.bfloat16)
+                    print("⏩ Chatterbox: t3 cast to bfloat16", file=sys.stderr, flush=True)
+            except Exception as _e:
+                print(f"⚠️  Chatterbox BF16 cast skipped: {_e!r}", file=sys.stderr, flush=True)
+
+            # Tier 1.2: torch.compile(cudagraphs) on the per-step decoder.
+            # NOTE: this entry point lives in rsxdalv/chatterbox fast fork; not in upstream
+            # ResembleAI build. On upstream we log a warning and skip gracefully.
+            try:
+                if torch.cuda.is_available() and hasattr(self._model, "t3"):
+                    target = getattr(self._model.t3, "_step_compilation_target", None)
+                    if target is not None and callable(target):
+                        self._model.t3._step_compilation_target = torch.compile(
+                            target, fullgraph=True, backend="cudagraphs"
+                        )
+                        print("⏩ Chatterbox: torch.compile(cudagraphs) wrapped on _step_compilation_target",
+                              file=sys.stderr, flush=True)
+                    else:
+                        print("⚠️  Chatterbox torch.compile: _step_compilation_target not found "
+                              "(upstream resemble-ai build, not rsxdalv/chatterbox fast fork)",
+                              file=sys.stderr, flush=True)
+            except Exception as _e:
+                print(f"⚠️  Chatterbox torch.compile skipped: {_e!r}", file=sys.stderr, flush=True)
+
+            # Tier 1.2: monkey-patch t3.inference to (a) clamp max_new_tokens to configured value
+            # and (b) coerce t3_cond to the t3 weights' dtype (BF16) because prepare_conditionals()
+            # rebuilds self.conds as fp32 on every generate() call with audio_prompt_path, which
+            # would otherwise cause a dtype mismatch against the BF16-cast t3 weights.
+            # The upstream chatterbox/tts.py:249 hardcodes max_new_tokens=1000 with a TODO;
+            # this wraps it so we can configure it without touching the library.
+            try:
+                if hasattr(self._model, "t3") and hasattr(self._model.t3, "inference"):
+                    _orig_inference = self._model.t3.inference
+                    _steps_capture = self._steps
+                    _t3_module = self._model.t3
+                    def _patched_inference(*args, **kwargs):
+                        kwargs["max_new_tokens"] = _steps_capture
+                        # Coerce t3_cond to the t3 module's weight dtype to avoid Float/BFloat16 mismatch.
+                        try:
+                            _wparam = next(_t3_module.parameters(), None)
+                            _target_dtype = _wparam.dtype if _wparam is not None else None
+                            _cond = kwargs.get("t3_cond")
+                            if _cond is not None and _target_dtype is not None:
+                                kwargs["t3_cond"] = _cond.to(dtype=_target_dtype)
+                        except Exception:
+                            pass
+                        return _orig_inference(*args, **kwargs)
+                    self._model.t3.inference = _patched_inference
+                    print(f"⏩ Chatterbox: t3.inference wrapped to max_new_tokens={self._steps} (with dtype coerce)",
+                          file=sys.stderr, flush=True)
+            except Exception as _e:
+                print(f"⚠️  Chatterbox steps patch skipped: {_e!r}", file=sys.stderr, flush=True)
 
             print("✅ [TTS] Chatterbox neural voice synthesis ready!", file=sys.stderr)
 
@@ -437,10 +1130,47 @@ class ChatterboxTTS:
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
             return
-        # Initialize on first actual start
-        self._ensure_initialized()
+
+        # STEP 1: list output devices + init pygame.mixer FIRST so the user
+        # sees these logs even if Chatterbox model loading later hangs/takes
+        # forever. Windows SDL audio init from a worker thread is unreliable —
+        # doing it here on the caller's thread (daemon main) is required.
+        print("⏩ TTS phase: pre-init (enumerate devices)", flush=True)
+        try:
+            _list_output_devices()  # one-shot diagnostic
+        except Exception as e:
+            print(f"⚠️ device enumeration failed: {e!r}", flush=True)
+
+        # IMPORTANT: pygame.mixer.init is DEFERRED to lazy-init inside
+        # _play_via_pygame (only fires if sounddevice fails). The previous
+        # eager init grabbed the system default device handle via SDL,
+        # which then prevented sounddevice from successfully routing audio
+        # to it (shared-mode "play" succeeded but produced silence) AND
+        # blocked WASAPI exclusive mode with "-9996 Invalid device".
+        # By deferring, sounddevice owns the device unless it fails — at
+        # which point pygame falls back, by which time sounddevice has
+        # already released its handle.
+        print("⏩ TTS phase: pygame mixer init DEFERRED (lazy on sounddevice failure)", flush=True)
+
+        # STEP 2: load Chatterbox model. This is the slow part on first run
+        # (can take 30-60s). Bracket it with timing logs so the user sees
+        # progress instead of silence.
+        print("⏩ TTS phase: loading Chatterbox model (this may take 30-60s on first run)...", flush=True)
+        _model_t0 = time.time()
+        try:
+            self._ensure_initialized()
+            print(f"⏩ TTS phase: Chatterbox model ready in {time.time()-_model_t0:.1f}s", flush=True)
+        except Exception as e:
+            print(f"❌ TTS phase: Chatterbox model load FAILED after {time.time()-_model_t0:.1f}s: {e!r}", flush=True)
+            debug_log(f"chatterbox load failed: {e!r}", "tts")
+            # Continue anyway — worker thread will surface the error when it
+            # tries to use the model.
+
+        # STEP 3: start the worker thread. From here on, all TTS work is
+        # asynchronous; speak() just enqueues text.
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        print("⏩ TTS phase: worker thread started — ready to speak", flush=True)
 
     def stop(self) -> None:
         if self._thread is None:
@@ -458,9 +1188,21 @@ class ChatterboxTTS:
         self._thread.join(timeout=2.0)
         self._thread = None
         self._stop.clear()
+        # Release the audio device only at engine shutdown — NOT between
+        # individual speak calls. _safe_mixer_init is idempotent and reuses
+        # the existing mixer if already initialised.
+        try:
+            import pygame
+            if pygame.mixer.get_init() is not None:
+                pygame.mixer.quit()
+        except Exception:
+            pass
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
+              duration_callback: Optional[Callable[[float], None]] = None,
+              playback_started_callback: Optional[Callable[[], None]] = None,
+              playback_ended_callback: Optional[Callable[[], None]] = None,
+              volume: float = 1.0) -> None:
         if not self.enabled or not text.strip():
             return
         # Lazy start the worker thread and lazy init on first speak
@@ -468,6 +1210,9 @@ class ChatterboxTTS:
             self.start()
         self._completion_callback = completion_callback
         self._duration_callback = duration_callback
+        self._playback_started_callback = playback_started_callback
+        self._playback_ended_callback = playback_ended_callback
+        self._speak_volume = float(np.clip(volume, 0.0, 2.0))
         # Preprocess text for speech (convert links to readable descriptions)
         processed_text = _preprocess_for_speech(text)
         try:
@@ -493,19 +1238,31 @@ class ChatterboxTTS:
                 continue
 
     def _speak_once(self, text: str) -> None:
+        # Sentence-by-sentence streaming (tts_streaming_enabled) is implemented
+        # for Piper ONLY — see PiperTTS._speak_once. Chatterbox stays on the
+        # whole-text path: its generate() returns a single tensor for the full
+        # text, its TTS cache is keyed on the full text, and the per-call BF16 /
+        # dtype patching makes per-sentence invocation risky for no clear win
+        # (Chatterbox synthesis dominates wall-clock regardless). So Chatterbox
+        # ignores the streaming flag and synthesises the reply in one shot.
+        #
+        # Diagnostic tracer prints (debug_log so they don't spam the Live Logs
+        # UI; can be enabled selectively if a regression appears).
+        debug_log(f"_speak_once entered (text_len={len(text)})", "tts")
         self._is_speaking.set()
         self._last_spoken_text = text
         self._should_interrupt.clear()
         interrupted = False
-        
-        # Signal speaking state to face widget
-        self._notify_speaking_state(True)
+
+        # Signal synthesizing state to face widget (audio not playing yet).
+        # _publish_tts_state is QObject-free AND face_widget-import-free.
+        self._publish_tts_state("synthesizing")
 
         try:
             # Check if model is available
             if not self._ensure_model():
-                # Fall back to system TTS if Chatterbox fails
                 warnings.warn("Chatterbox TTS not available, skipping speech synthesis")
+                print("⚠️ TTS: Chatterbox model unavailable, skipping", flush=True)
                 return
 
             # Generate audio using Chatterbox
@@ -514,51 +1271,75 @@ class ChatterboxTTS:
             import os
 
             # --- TTS cache lookup -------------------------------------------------
-            # Hash (text, voice_prompt, exaggeration, cfg_weight); replay cached
-            # audio instantly when the same combination reappears.
             from .tts_cache import get_cache
             _cache = get_cache()
             _cached_wav = _cache.lookup(
                 text, self.audio_prompt_path, self.exaggeration, self.cfg_weight
             )
+            debug_log(f"cache lookup done (hit={_cached_wav is not None})", "tts")
             if _cached_wav is not None:
-                debug_log(f"TTS cache HIT for: {text[:60]}", "tts")
+                debug_log(f"TTS cache HIT (text='{text[:40]}...')", "tts")
                 # Compute duration via soundfile (no model invocation needed)
                 import soundfile as _sf
                 _info = _sf.info(str(_cached_wav))
                 exact_duration = float(_info.frames) / float(_info.samplerate)
-                debug_log(f"cached audio duration: {exact_duration:.2f}s", "tts")
                 if self._duration_callback is not None:
                     try:
                         self._duration_callback(exact_duration)
                     except Exception as e:
                         debug_log(f"cached duration callback error: {e}", "tts")
-                pygame.mixer.init(frequency=_info.samplerate, size=-16, channels=1, buffer=1024)
-                try:
-                    pygame.mixer.music.load(str(_cached_wav))
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
-                        if self._should_interrupt.is_set():
-                            pygame.mixer.music.stop()
-                            interrupted = True
-                            break
-                        pygame.time.wait(100)
-                finally:
-                    pygame.mixer.quit()
+                # Audio playback actually starts — switch to SPEAKING
+                self._publish_tts_state("speaking")  # string literal — JarvisState was never imported at module scope
+                played_ok, was_interrupted = _play_audio(
+                    str(_cached_wav),
+                    _info.samplerate,
+                    self._speak_volume,
+                    self._should_interrupt,
+                    label="cache hit",
+                    duration_hint=exact_duration,
+                    on_engaged=self._playback_started_callback,
+                    on_finished=self._playback_ended_callback,
+                )
+                if was_interrupted:
+                    interrupted = True
+                if not played_ok:
+                    print(
+                        "⚠️ TTS skipped — both pygame and sounddevice failed. "
+                        "Check Windows Sound settings and default playback device.",
+                        flush=True,
+                    )
                 return  # Done — no neural synthesis needed
             # --- end cache lookup -------------------------------------------------
 
-            # Generate speech
-            wav = self._model.generate(
-                text,
-                audio_prompt_path=self.audio_prompt_path,
-                exaggeration=self.exaggeration,
-                cfg_weight=self.cfg_weight
-            )
+            # Generate speech — suppress chatterbox's tqdm progress bar spam
+            # by redirecting stderr during synthesis.
+            debug_log(f"synthesis START (text='{text[:40]}...', len={len(text)})", "tts")
+            _synth_t0 = time.time()
+            import io
+            _stderr_capture = io.StringIO()
+            _orig_stderr = sys.stderr
+            sys.stderr = _stderr_capture
+            try:
+                wav = self._model.generate(
+                    text,
+                    audio_prompt_path=self.audio_prompt_path,
+                    exaggeration=self.exaggeration,
+                    cfg_weight=self.cfg_weight
+                )
+            finally:
+                sys.stderr = _orig_stderr
+                _captured = _stderr_capture.getvalue()
+                if _captured:
+                    debug_log(f"Chatterbox synthesis stderr:\n{_captured}", "tts")
 
             # Calculate exact duration from audio samples
             exact_duration = wav.shape[-1] / self._model.sr
-            debug_log(f"Chatterbox TTS synthesis complete: {exact_duration:.2f}s", "tts")
+            _synth_elapsed = time.time() - _synth_t0
+            debug_log(
+                f"synthesis DONE in {_synth_elapsed:.2f}s "
+                f"(audio={exact_duration:.2f}s, sr={self._model.sr})",
+                "tts",
+            )
 
             # Notify listener of exact duration for precise echo detection
             if self._duration_callback is not None:
@@ -573,6 +1354,7 @@ class ChatterboxTTS:
 
             try:
                 # Save audio
+                debug_log("saving WAV...", "tts")
                 import torchaudio as ta
                 ta.save(tmp_path, wav, self._model.sr)
 
@@ -587,22 +1369,33 @@ class ChatterboxTTS:
                 except Exception as _ce:
                     debug_log(f"TTS cache store error (non-fatal): {_ce}", "tts")
 
-                # Play audio using pygame (cross-platform)
-                pygame.mixer.init(frequency=self._model.sr, size=-16, channels=1, buffer=1024)
-                pygame.mixer.music.load(tmp_path)
-                pygame.mixer.music.play()
-
-                # Wait for playback to complete or interruption
-                while pygame.mixer.music.get_busy():
-                    if self._should_interrupt.is_set():
-                        pygame.mixer.music.stop()
-                        interrupted = True
-                        break
-                    pygame.time.wait(100)  # Check every 100ms
+                # Audio playback actually starts — switch to SPEAKING
+                self._publish_tts_state("speaking")  # string literal — JarvisState was never imported at module scope
+                played_ok, was_interrupted = _play_audio(
+                    tmp_path,
+                    self._model.sr,
+                    self._speak_volume,
+                    self._should_interrupt,
+                    label="synthesis",
+                    duration_hint=exact_duration,
+                    on_engaged=self._playback_started_callback,
+                    on_finished=self._playback_ended_callback,
+                )
+                if was_interrupted:
+                    interrupted = True
+                if not played_ok:
+                    print(
+                        "⚠️ TTS skipped — both pygame and sounddevice failed. "
+                        "Check Windows Sound settings and default playback device.",
+                        flush=True,
+                    )
+                # Fall through to inner finally for tmp-file cleanup.
 
             finally:
-                # Cleanup
-                pygame.mixer.quit()
+                # Only delete temp file. Do NOT pygame.mixer.quit() here —
+                # the mixer stays alive between speak calls (idempotent init
+                # in _safe_mixer_init). Quitting would lock the audio device
+                # on Windows and silently break the next playback.
                 try:
                     os.unlink(tmp_path)
                 except Exception:
@@ -612,38 +1405,61 @@ class ChatterboxTTS:
             warnings.warn(f"Chatterbox TTS error: {e}")
         finally:
             self._is_speaking.clear()
-            
             # Signal speaking stopped to face widget
-            self._notify_speaking_state(False)
-            
-            # Call completion callback if set and not interrupted
-            if self._completion_callback is not None and not interrupted:
+            self._publish_tts_state("idle")  # string literal — JarvisState was never imported at module scope
+
+            # ALWAYS fire the completion callback — even on interrupt or audio
+            # failure — so the listener's hot window activates and we never
+            # leave the voice pipeline stuck waiting for a TTS that never
+            # completes. The callback (activate_hot_window) is idempotent and
+            # handles the interrupted case safely.
+            #
+            # Previously this guard was `and not interrupted`, which meant a
+            # STOP press during the 100ms wait loop would leave the listener
+            # hung — exactly the symptom the user reported.
+            if self._completion_callback is not None:
                 try:
                     self._completion_callback()
-                except Exception:
-                    pass
+                except Exception as _cb_err:
+                    debug_log(f"completion_callback raised: {_cb_err!r}", "tts")
                 self._completion_callback = None
-    
-    def _notify_speaking_state(self, is_speaking: bool) -> None:
-        """Notify the face widget of speaking state changes.
+            # Reset the playback-ended hook so it doesn't leak into a
+            # subsequent speak() call that doesn't supply one. The natural
+            # fire-site is inside _play_audio; this only clears the slot.
+            self._playback_ended_callback = None
+            # Same for the engaged hook for symmetry.
+            self._playback_started_callback = None
 
-        Uses file-based approach to work across processes:
-        - Dev mode runs daemon as subprocess (different process)
-        - File-based state works across process boundaries
+    def _publish_tts_state(self, state: "JarvisState") -> None:
+        """Publish TTS phase cross-process WITHOUT touching any QObject
+        AND WITHOUT importing `desktop_app.face_widget`.
+
+        Previously this method imported `_get_jarvis_state_file` from
+        `desktop_app.face_widget`. That import — fired from the TTS worker
+        thread on first speak — pulled in a 1700-line PyQt6 module while
+        the daemon main thread was concurrently doing heavy work. Python's
+        import lock deadlocks in that scenario. The diagnostic prints below
+        will fire even on cold start, so any future hang is visible.
         """
-        # Import here to avoid circular dependencies
+        state_value = state.value if hasattr(state, "value") else str(state)
+        debug_log(f"_publish_tts_state: {state_value}", "tts")
+
+        # 1. File-based IPC (cross-process). Uses the module-level constant
+        #    — no face_widget import, no PyQt6 init in this thread.
         try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            if is_speaking:
-                debug_log("setting face state to SPEAKING (chatterbox)", "tts")
-                state_manager.set_state(JarvisState.SPEAKING)
-            # Note: When speaking ends, we don't change state here - let daemon manage transitions
-        except ImportError:
-            debug_log("face widget not available (ImportError) (chatterbox)", "tts")
+            with open(_JARVIS_STATE_FILE, "w") as f:
+                f.write(state_value)
         except Exception as e:
-            # Don't let face widget errors affect TTS
-            debug_log(f"failed to set face state to SPEAKING (chatterbox): {e}", "tts")
+            debug_log(f"state file write failed: {e!r}", "tts")
+
+        # 2. React UI WebSocket via api_server. Non-blocking — schedules a
+        #    call_soon_threadsafe on uvicorn's loop.
+        try:
+            from jarvis import api_server
+            react_state = _JARVIS_STATE_TO_REACT_VOCAB.get(state_value, "idle")
+            api_server.publish_state(state=react_state)
+        except Exception as e:
+            debug_log(f"api_server publish_state failed: {e!r}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:
@@ -691,7 +1507,10 @@ class PiperTTS:
         self._last_spoken_text: str = ""
         self._completion_callback: Optional[Callable[[], None]] = None
         self._duration_callback: Optional[Callable[[float], None]] = None
+        self._playback_started_callback: Optional[Callable[[], None]] = None
+        self._playback_ended_callback: Optional[Callable[[], None]] = None
         self._should_interrupt = threading.Event()
+        self._speak_volume = 1.0
 
         # Piper voice (lazy loaded)
         self._voice = None
@@ -811,7 +1630,12 @@ class PiperTTS:
         self._stop.clear()
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
-              duration_callback: Optional[Callable[[float], None]] = None) -> None:
+              duration_callback: Optional[Callable[[float], None]] = None,
+              playback_started_callback: Optional[Callable[[], None]] = None,
+              playback_ended_callback: Optional[Callable[[], None]] = None,
+              volume: float = 1.0) -> None:
+        # Signature mirrors ChatterboxTTS.speak so callers (listener.py) can
+        # pass the same callbacks regardless of which engine is active.
         if not self.enabled or not text.strip():
             return
         # Lazy start the worker thread
@@ -819,6 +1643,9 @@ class PiperTTS:
             self.start()
         self._completion_callback = completion_callback
         self._duration_callback = duration_callback
+        self._playback_started_callback = playback_started_callback
+        self._playback_ended_callback = playback_ended_callback
+        self._speak_volume = float(np.clip(volume, 0.0, 2.0))
         # Preprocess text for speech
         processed_text = _preprocess_for_speech(text)
         try:
@@ -856,8 +1683,8 @@ class PiperTTS:
         self._should_interrupt.clear()
         interrupted = False
 
-        # Signal speaking state to face widget
-        self._notify_speaking_state(True)
+        # Signal synthesizing state to face widget (audio not playing yet)
+        self._publish_tts_state("synthesizing")  # string literal — JarvisState was never imported at module scope
 
         try:
             # Initialize on first use
@@ -866,120 +1693,102 @@ class PiperTTS:
                     print(f"  ⚠️ Piper TTS: {self._init_error}", flush=True)
                 return
 
-            import sounddevice as sd
-            import numpy as np
-
             start_time = time.time()
-
-            debug_log(f"Piper TTS starting synthesis: {len(text.split())} words", "tts")
 
             # Check for interruption before synthesis
             if self._should_interrupt.is_set():
                 debug_log("Piper TTS interrupted before synthesis", "tts")
                 return
 
-            # Synthesize audio - synthesize() returns an iterable of AudioChunks
-            from piper.config import SynthesisConfig
-            syn_config = SynthesisConfig(
-                speaker_id=self.speaker,
-                length_scale=self.length_scale,
-                noise_scale=self.noise_scale,
-                noise_w_scale=self.noise_w,
-            )
-            audio_chunks = []
-            for chunk in self._voice.synthesize(text, syn_config):
-                if self._should_interrupt.is_set():
-                    debug_log("Piper TTS interrupted during synthesis", "tts")
+            # Decide whole-text vs sentence-streaming. Streaming synthesises +
+            # plays one sentence at a time so time-to-first-audio is the FIRST
+            # sentence's synthesis time, not the whole reply's. Gate on the
+            # config flag AND >1 sentence; otherwise fall through to the
+            # byte-for-byte whole-text path (a single segment).
+            segments = [text]
+            if _get_streaming_enabled():
+                split = _split_into_sentences(text)
+                if len(split) > 1:
+                    segments = split
+                    debug_log(
+                        f"Piper TTS streaming: {len(segments)} sentences", "tts"
+                    )
+
+            # `_started_fired` guarantees the wake-listener mute hook
+            # (playback_started_callback) fires EXACTLY ONCE for the whole
+            # reply — on the first sentence whose audio actually engages.
+            started_fired = [False]
+
+            def _fire_started_once():
+                if started_fired[0]:
                     return
-                audio_chunks.append(chunk.audio_int16_array)
+                started_fired[0] = True
+                if self._playback_started_callback is not None:
+                    try:
+                        self._playback_started_callback()
+                    except Exception as _cb_err:
+                        debug_log(
+                            f"Piper playback_started_callback error: {_cb_err}",
+                            "tts",
+                        )
 
-            # Check for interruption after synthesis
-            if self._should_interrupt.is_set():
-                debug_log("Piper TTS interrupted after synthesis", "tts")
-                return
-
-            # Concatenate all audio chunks
-            if not audio_chunks:
-                debug_log("Piper TTS: no audio chunks generated", "tts")
-                return
-
-            full_audio = np.concatenate(audio_chunks)
-
-            if len(full_audio) == 0:
-                debug_log("Piper TTS: no audio generated", "tts")
-                return
-
-            # Calculate exact duration from actual samples
-            exact_duration = len(full_audio) / self._sample_rate
-            debug_log(f"Piper TTS synthesis complete: {exact_duration:.2f}s, {len(full_audio)} samples", "tts")
-
-            # Notify listener of exact duration for precise echo detection
-            if self._duration_callback is not None:
-                try:
-                    self._duration_callback(exact_duration)
-                except Exception as e:
-                    debug_log(f"Piper TTS duration callback error: {e}", "tts")
-
-            # Play audio with streaming for interruption support
-            play_position = [0]
-            blocksize = 1024  # Small blocks for responsive interruption
-
-            def audio_callback(outdata, frames, time_info, status):
+            for seg in segments:
                 if self._should_interrupt.is_set():
-                    raise sd.CallbackAbort()
+                    debug_log("Piper TTS interrupted before next sentence", "tts")
+                    interrupted = True
+                    break
 
-                start = play_position[0]
-                end = start + frames
-                chunk = full_audio[start:end]
+                seg_audio = self._synthesise(seg)
+                if self._should_interrupt.is_set():
+                    interrupted = True
+                    break
+                if seg_audio is None or len(seg_audio) == 0:
+                    # Nothing to play for this segment — skip, keep going.
+                    continue
 
-                if len(chunk) < frames:
-                    # Pad with zeros if we're at the end
-                    outdata[:len(chunk), 0] = chunk
-                    outdata[len(chunk):, 0] = 0
-                    raise sd.CallbackStop()
-                else:
-                    outdata[:, 0] = chunk
+                # Exact duration per played segment, for echo detection. In
+                # streaming mode this tracks the currently-playing sentence,
+                # which is the correct echo window (each sentence plays at a
+                # distinct time). track_tts_start / the full-reply text remain
+                # the listener's responsibility and are untouched.
+                exact_duration = len(seg_audio) / self._sample_rate
+                if self._duration_callback is not None:
+                    try:
+                        self._duration_callback(exact_duration)
+                    except Exception as e:
+                        debug_log(f"Piper TTS duration callback error: {e}", "tts")
 
-                play_position[0] = end
-
-            with self._audio_lock:
-                self._audio_stream = sd.OutputStream(
-                    samplerate=self._sample_rate,
-                    channels=1,
-                    dtype='int16',
-                    blocksize=blocksize,
-                    callback=audio_callback,
+                _played_ok, seg_interrupted = self._play_int16_array(
+                    seg_audio, play_started_hook=_fire_started_once
                 )
-                self._audio_stream.start()
-
-            # Wait for playback to complete
-            try:
-                while self._audio_stream is not None and self._audio_stream.active:
-                    if self._should_interrupt.is_set():
-                        interrupted = True
-                        with self._audio_lock:
-                            if self._audio_stream is not None:
-                                self._audio_stream.abort()
-                        break
-                    time.sleep(0.05)
-            finally:
-                with self._audio_lock:
-                    if self._audio_stream is not None:
-                        try:
-                            self._audio_stream.close()
-                        except Exception:
-                            pass
-                        self._audio_stream = None
+                if seg_interrupted:
+                    interrupted = True
+                    break
 
             actual_duration = time.time() - start_time
-            debug_log(f"Piper TTS complete: actual={actual_duration:.2f}s (audio={exact_duration:.2f}s)", "tts")
+            debug_log(
+                f"Piper TTS complete: actual={actual_duration:.2f}s "
+                f"(segments={len(segments)}, interrupted={interrupted})",
+                "tts",
+            )
 
         except Exception as e:
             debug_log(f"Piper TTS error: {e}", "tts")
             print(f"  ⚠️ Piper TTS error: {e}", flush=True)
         finally:
             self._is_speaking.clear()
-            self._notify_speaking_state(False)
+            self._publish_tts_state("idle")  # string literal — JarvisState was never imported at module scope
+
+            # Fire playback-ended on natural completion (mirrors Chatterbox),
+            # then clear the one-shot start/ended callbacks so they don't leak
+            # into the next utterance.
+            if self._playback_ended_callback is not None and not interrupted:
+                try:
+                    self._playback_ended_callback()
+                except Exception as _cb_err:
+                    debug_log(f"Piper playback_ended_callback error: {_cb_err}", "tts")
+            self._playback_started_callback = None
+            self._playback_ended_callback = None
 
             # Call completion callback if set and not interrupted
             if self._completion_callback is not None and not interrupted:
@@ -989,18 +1798,227 @@ class PiperTTS:
                     print(f"  ⚠️ Piper TTS completion callback error: {e}", flush=True)
                 self._completion_callback = None
 
-    def _notify_speaking_state(self, is_speaking: bool) -> None:
-        """Notify the face widget of speaking state changes."""
+    def _synthesise(self, text: str) -> Optional["np.ndarray"]:
+        """Synthesise one text segment to a concatenated int16 mono array.
+
+        Returns the audio samples, or None if interrupted mid-synthesis or no
+        audio was produced. Interrupt checks happen between chunks so a STOP
+        during synthesis of a long sentence aborts promptly. This is the exact
+        synthesis logic the whole-text path used previously, lifted verbatim so
+        single-segment behaviour is byte-for-byte unchanged.
+        """
+        import numpy as np
+        from piper.config import SynthesisConfig
+
+        debug_log(
+            f"Piper TTS starting synthesis: {len(text.split())} words", "tts"
+        )
+        syn_config = SynthesisConfig(
+            speaker_id=self.speaker,
+            length_scale=self.length_scale,
+            noise_scale=self.noise_scale,
+            noise_w_scale=self.noise_w,
+        )
+        audio_chunks = []
+        for chunk in self._voice.synthesize(text, syn_config):
+            if self._should_interrupt.is_set():
+                debug_log("Piper TTS interrupted during synthesis", "tts")
+                return None
+            audio_chunks.append(chunk.audio_int16_array)
+
+        if self._should_interrupt.is_set():
+            debug_log("Piper TTS interrupted after synthesis", "tts")
+            return None
+        if not audio_chunks:
+            debug_log("Piper TTS: no audio chunks generated", "tts")
+            return None
+
+        full_audio = np.concatenate(audio_chunks)
+        if len(full_audio) == 0:
+            debug_log("Piper TTS: no audio generated", "tts")
+            return None
+
+        exact_duration = len(full_audio) / self._sample_rate
+        debug_log(
+            f"Piper TTS synthesis complete: {exact_duration:.2f}s, "
+            f"{len(full_audio)} samples",
+            "tts",
+        )
+        return full_audio
+
+    def _play_int16_array(
+        self,
+        full_audio: "np.ndarray",
+        play_started_hook: Optional[Callable[[], None]] = None,
+    ) -> tuple[bool, bool]:
+        """Play one int16 mono buffer via sounddevice, honouring interrupt.
+
+        Returns ``(played_ok, interrupted)``. ``play_started_hook`` fires once
+        this buffer's stream actually engages (used to fire the reply-level
+        ``playback_started_callback`` exactly once, on the first sentence).
+
+        This is the playback logic the whole-text path used previously, lifted
+        verbatim (device selection, WASAPI-rate resample, streaming callback,
+        interrupt-abort wait loop) so single-segment behaviour is unchanged. It
+        is reused per sentence in streaming mode.
+        """
+        import sounddevice as sd
+        import numpy as np
+
+        interrupted = False
+
+        # Play audio with streaming for interruption support
+        play_position = [0]
+        blocksize = 1024  # Small blocks for responsive interruption
+
+        def audio_callback(outdata, frames, time_info, status):
+            if self._should_interrupt.is_set():
+                raise sd.CallbackAbort()
+
+            start = play_position[0]
+            end = start + frames
+            chunk = full_audio[start:end]
+
+            boost = self._speak_volume
+            if len(chunk) < frames:
+                # Pad with zeros if we're at the end
+                boosted = (chunk.astype(np.float32) * boost)
+                boosted = np.clip(boosted, -32768.0, 32767.0)
+                outdata[:len(chunk), 0] = boosted.astype(np.int16)
+                outdata[len(chunk):, 0] = 0
+                raise sd.CallbackStop()
+            else:
+                boosted = (chunk.astype(np.float32) * boost)
+                boosted = np.clip(boosted, -32768.0, 32767.0)
+                outdata[:, 0] = boosted.astype(np.int16)
+
+            play_position[0] = end
+
+        # Honor cfg.tts_output_device so Piper plays to the SAME device
+        # the user configured (e.g. CORSAIR VOID), not PortAudio's default
+        # output (often the Realtek onboard jack → silence).
+        configured_device = _get_configured_output_device()
+
+        # WASAPI shared mode rejects sample rates that differ from the
+        # device's mix format — e.g. Piper's 22050 Hz on a 48000 Hz CORSAIR
+        # headset raises PortAudioError('Invalid device', -9996). Resample
+        # to the device's native rate so any host API (incl. low-latency
+        # WASAPI) accepts the stream. The duration callback already used the
+        # original-rate sample count, and resampling preserves wall-clock
+        # length. `full_audio` is reassigned here and the audio_callback
+        # closes over it (late binding), so the callback streams the
+        # resampled buffer.
+        play_sr = self._sample_rate
+        if configured_device is not None:
+            try:
+                dev_native = int(round(float(
+                    sd.query_devices(configured_device).get(
+                        "default_samplerate", self._sample_rate))))
+            except Exception:
+                dev_native = self._sample_rate
+            if dev_native and dev_native != self._sample_rate:
+                try:
+                    from scipy.signal import resample_poly
+                    from math import gcd
+                    g = gcd(dev_native, self._sample_rate) or 1
+                    resampled = resample_poly(
+                        full_audio.astype(np.float32),
+                        dev_native // g, self._sample_rate // g)
+                    full_audio = np.clip(
+                        resampled, -32768.0, 32767.0).astype(np.int16)
+                    play_sr = dev_native
+                    debug_log(
+                        f"Piper: resampled {self._sample_rate}->{dev_native} "
+                        f"for device {configured_device}", "tts")
+                except Exception as _re:
+                    debug_log(
+                        f"Piper resample failed ({_re!r}); trying native "
+                        f"{self._sample_rate} Hz", "tts")
+
+        def _open_stream(dev, rate):
+            return sd.OutputStream(
+                samplerate=rate,
+                channels=1,
+                dtype='int16',
+                blocksize=blocksize,
+                device=dev,
+                callback=audio_callback,
+            )
+
+        with self._audio_lock:
+            try:
+                self._audio_stream = _open_stream(configured_device, play_sr)
+                if configured_device is not None:
+                    print(f"🔊 Piper TTS → device {configured_device} @ {play_sr} Hz",
+                          flush=True)
+            except Exception as _dev_err:
+                if configured_device is not None:
+                    print(f"⚠️ Piper: device {configured_device} @ {play_sr} Hz "
+                          f"failed ({_dev_err!r}) — falling back to default",
+                          flush=True)
+                    debug_log(f"Piper device {configured_device} open failed: "
+                              f"{_dev_err!r}; using default", "tts")
+                    self._audio_stream = _open_stream(None, play_sr)
+                else:
+                    raise
+            # Audio playback actually starts — switch to SPEAKING
+            self._publish_tts_state("speaking")  # string literal — JarvisState was never imported at module scope
+            self._audio_stream.start()
+
+        # Audio is now engaged — fire playback-started (e.g. so the wake
+        # listener mutes itself while Jarvis speaks). Outside the audio lock.
+        # In streaming mode the hook is a once-guard so only the first
+        # sentence's engage actually invokes the reply-level callback.
+        if play_started_hook is not None:
+            try:
+                play_started_hook()
+            except Exception as _cb_err:
+                debug_log(f"Piper play_started_hook error: {_cb_err}", "tts")
+
+        # Wait for playback to complete
+        try:
+            while self._audio_stream is not None and self._audio_stream.active:
+                if self._should_interrupt.is_set():
+                    interrupted = True
+                    with self._audio_lock:
+                        if self._audio_stream is not None:
+                            self._audio_stream.abort()
+                    break
+                time.sleep(0.05)
+        finally:
+            with self._audio_lock:
+                if self._audio_stream is not None:
+                    try:
+                        self._audio_stream.close()
+                    except Exception:
+                        pass
+                    self._audio_stream = None
+
+        return (True, interrupted)
+
+    def _publish_tts_state(self, state: "JarvisState") -> None:
+        """Publish the current TTS phase to the face widget and React UI."""
         try:
             from desktop_app.face_widget import get_jarvis_state, JarvisState
             state_manager = get_jarvis_state()
-            if is_speaking:
+            if state == JarvisState.SYNTHESIZING:
+                debug_log("setting face state to SYNTHESIZING (piper)", "tts")
+                state_manager.set_state(JarvisState.SYNTHESIZING)
+            elif state == JarvisState.SPEAKING:
                 debug_log("setting face state to SPEAKING (piper)", "tts")
                 state_manager.set_state(JarvisState.SPEAKING)
+            elif state == JarvisState.IDLE:
+                # Transition back to IDLE only if we are still in SPEAKING or SYNTHESIZING.
+                # If the user already started a follow-up (state == LISTENING) or
+                # the reply engine is working (state == THINKING), leave it alone.
+                current = state_manager.state
+                if current in (JarvisState.SPEAKING, JarvisState.SYNTHESIZING):
+                    debug_log("setting face state to IDLE (piper)", "tts")
+                    state_manager.set_state(JarvisState.IDLE)
         except ImportError:
             debug_log("face widget not available (ImportError) (piper)", "tts")
         except Exception as e:
-            debug_log(f"failed to set face state to SPEAKING (piper): {e}", "tts")
+            debug_log(f"failed to set face state (piper): {e}", "tts")
 
     # Loopback guard helpers (same interface as TextToSpeech)
     def is_speaking(self) -> bool:

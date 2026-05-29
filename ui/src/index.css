@@ -3,6 +3,12 @@
 @tailwind utilities;
 
 @layer base {
+  /* ─────────────────────────────────────────────────────────────────
+     SINGLE SOURCE OF TRUTH for the Jarvis cyan identity.
+     Native windows mirror these exact values in
+     src/desktop_app/themes.py (COLORS). Change here → update there too.
+     Primary cyan = #22d3ee  (HSL 188 86% 53%)
+     ───────────────────────────────────────────────────────────────── */
   :root {
     --background: 216 50% 4%;
     --foreground: 195 60% 94%;
@@ -10,26 +16,26 @@
     --card-foreground: 195 60% 94%;
     --popover: 216 58% 7%;
     --popover-foreground: 195 60% 94%;
-    --primary: 193 100% 50%;
+    --primary: 188 86% 53%;
     --primary-foreground: 216 50% 4%;
     --secondary: 207 35% 15%;
     --secondary-foreground: 195 60% 94%;
     --muted: 207 35% 15%;
     --muted-foreground: 207 18% 43%;
-    --accent: 193 100% 50%;
+    --accent: 188 86% 53%;
     --accent-foreground: 216 50% 4%;
     --destructive: 348 100% 62%;
     --destructive-foreground: 0 0% 98%;
-    --border: 193 100% 50% / 0.12;
+    --border: 188 86% 53% / 0.12;
     --input: 207 35% 15%;
-    --ring: 193 100% 50%;
+    --ring: 188 86% 53%;
     --radius: 0.75rem;
 
     --bg-base: #050B14;
     --bg-card: rgba(8, 16, 30, 0.92);
-    --bg-card-border: rgba(0, 212, 255, 0.15);
-    --accent-cyan: #00D4FF;
-    --accent-cyan-dim: rgba(0, 212, 255, 0.4);
+    --bg-card-border: rgba(34, 211, 238, 0.15);
+    --accent-cyan: #22d3ee;
+    --accent-cyan-dim: rgba(34, 211, 238, 0.4);
     --text-primary: #E8F4F8;
     --text-secondary: #5A7182;
     --icon-muted: #2A3F50;
@@ -50,6 +56,31 @@
     height: 100vh;
     margin: 0;
     padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Custom dark scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #1a2a3a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #4a5568;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #5a6a7a;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #4a5568 #1a2a3a;
   }
 }
 
@@ -57,4 +88,20 @@
   .font-orbitron {
     font-family: 'Orbitron', sans-serif;
   }
+}
+
+/* ── BootScreen minimal keyframe animations ── */
+@keyframes bootFadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bootFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@keyframes bootStatusCrossfade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }

@@ -23,7 +23,7 @@ import sys
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QUrl, QTimer, QObject
-from PyQt6.QtGui import QGuiApplication, QPainter, QColor, QPen, QFont
+from PyQt6.QtGui import QGuiApplication, QPainter, QColor, QPen, QFont, QRadialGradient
 from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
@@ -59,8 +59,7 @@ class _HUDPage(QWebEnginePage):
 class _LoadingPlaceholder(QWidget):
     """Tiny native widget shown until the daemon's API is reachable.
 
-    Draws the same rounded cyan-on-deep-navy aesthetic as the React card,
-    so the cold-start visual is consistent with what shows up afterwards.
+    Premium minimal aesthetic for the small HUD card.
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -68,53 +67,53 @@ class _LoadingPlaceholder(QWidget):
         self._tick = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
-        self._timer.start(80)
+        self._timer.start(50)
 
     def _on_tick(self) -> None:
         self._tick = (self._tick + 1) % 1000
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        import math
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         w = self.width()
         h = self.height()
+        cx = w // 2
+        cy = h // 2 - 10
 
-        # Card surface
+        # ── Card surface ──
         card_rect = self.rect().adjusted(8, 8, -8, -8)
-        painter.setPen(QPen(QColor(0, 212, 255, 30), 1))
-        painter.setBrush(QColor(8, 16, 30, 235))
+        painter.setPen(QPen(QColor(30, 40, 55, 180), 1))
+        painter.setBrush(QColor(8, 12, 20, 245))
         painter.drawRoundedRect(card_rect, 20, 20)
 
-        # Wordmark
-        painter.setPen(QColor(0, 212, 255, 100))
-        font = QFont("Inter, Segoe UI", 9, QFont.Weight.Medium)
+        # ── Wordmark ──
+        painter.setPen(QColor(255, 255, 255, 210))
+        font = QFont("Inter, Segoe UI", 14, QFont.Weight.Bold)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
         painter.setFont(font)
-        painter.drawText(
-            32, 48, "JARVIS"
-        )
+        painter.drawText(0, cy - 30, w, 24, Qt.AlignmentFlag.AlignCenter, "JARVIS")
 
-        # Pulsing concentric rings (matches the React WaveformRings vibe)
-        cx = w // 2
-        cy = h // 2 - 20
-        for ring_idx in range(3):
-            phase = (self._tick / 14.0) + ring_idx * 1.0
-            import math
-            scale = 0.6 + 0.4 * (0.5 + 0.5 * math.sin(phase))
-            radius = int(20 + ring_idx * 18 * scale)
-            alpha = int(80 - ring_idx * 20)
-            painter.setPen(QPen(QColor(0, 212, 255, max(20, alpha)), 1))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(cx - radius, cy - radius, 2 * radius, 2 * radius)
+        # ── Progress bar track ──
+        bar_w = 200
+        bar_h = 2
+        bar_x = cx - bar_w // 2
+        bar_y = cy + 6
+        painter.fillRect(bar_x, bar_y, bar_w, bar_h, QColor(26, 35, 50))
 
-        # Loading label
-        painter.setPen(QColor(125, 211, 252, 180))
-        font2 = QFont("Inter, Segoe UI", 8)
-        font2.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 130)
-        painter.setFont(font2)
-        loading_text = "BOOTING DAEMON" + "." * ((self._tick // 8) % 4)
-        painter.drawText(0, h - 80, w, 20, Qt.AlignmentFlag.AlignCenter, loading_text)
+        # ── Progress bar fill (subtle pulse) ──
+        pulse = 0.35 + 0.15 * math.sin(self._tick * 0.08)
+        fill_w = int(bar_w * pulse)
+        fill_x = bar_x + (bar_w - fill_w) // 2
+        painter.fillRect(fill_x, bar_y, fill_w, bar_h, QColor(79, 209, 197, 180))
+
+        # ── Status text ──
+        painter.setPen(QColor(100, 116, 139, 200))
+        font_status = QFont("Inter, Segoe UI", 10)
+        painter.setFont(font_status)
+        painter.drawText(0, bar_y + 14, w, 18, Qt.AlignmentFlag.AlignCenter, "Loading...")
 
         painter.end()
 

@@ -47,11 +47,12 @@ async function jdel<T>(path: string): Promise<T> {
 // ---------- Types ----------
 
 export interface VoiceStatePayload {
-  state: 'idle' | 'listening' | 'thinking' | 'speaking';
+  state: 'idle' | 'listening' | 'thinking' | 'synthesizing' | 'speaking';
   isMuted: boolean;
   uptime: number;
   lastWake: string | null;
   commandsProcessed: number;
+  query?: string;
 }
 
 export interface LogPayload {
@@ -116,6 +117,7 @@ export const api = {
   stop: () => jpost<{ ok: boolean; response: string | null }>('/api/command/stop'),
   mute: () => jpost<{ ok: boolean; response: string | null }>('/api/command/mute'),
   unmute: () => jpost<{ ok: boolean; response: string | null }>('/api/command/unmute'),
+  triggerNow: () => jpost<{ ok: boolean; response: string | null }>('/api/command/trigger'),
 
   // config
   getConfig: () => jget<Record<string, unknown>>('/api/config'),

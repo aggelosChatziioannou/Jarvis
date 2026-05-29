@@ -56,15 +56,23 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
 
     if (state === 'speaking') {
       gsap.to(panel, {
-        boxShadow: '0 0 50px rgba(255,184,0,0.15), 0 8px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,184,0,0.1)',
+        boxShadow: '0 0 50px rgba(34,211,238,0.15), 0 8px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(34,211,238,0.1)',
         duration: 1.2,
+        yoyo: true,
+        repeat: -1,
+        ease: 'sine.inOut',
+      });
+    } else if (state === 'synthesizing') {
+      gsap.to(panel, {
+        boxShadow: '0 0 25px rgba(167,139,250,0.08), 0 8px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(167,139,250,0.05)',
+        duration: 2.0,
         yoyo: true,
         repeat: -1,
         ease: 'sine.inOut',
       });
     } else if (state === 'thinking') {
       gsap.to(panel, {
-        boxShadow: '0 0 30px rgba(255,184,0,0.1), 0 8px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,184,0,0.08)',
+        boxShadow: '0 0 30px rgba(34,211,238,0.1), 0 8px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(34,211,238,0.08)',
         duration: 0.3,
         yoyo: true,
         repeat: -1,
@@ -72,7 +80,7 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
       });
     } else {
       gsap.to(panel, {
-        boxShadow: '0 0 30px rgba(255,184,0,0.05), 0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.03)',
+        boxShadow: '0 0 30px rgba(34,211,238,0.05), 0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.03)',
         duration: 0.6,
         ease: 'power2.out',
       });
@@ -90,7 +98,7 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
   }, [state]);
 
   // Status color for label
-  const statusColor = state === 'listening' ? '#00E5A0' : '#FFB800';
+  const statusColor = state === 'listening' ? '#00E5A0' : state === 'synthesizing' ? '#a78bfa' : '#22d3ee';
 
   return (
     <div
@@ -100,9 +108,9 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
         minHeight: 480,
         background: 'linear-gradient(180deg, rgba(14, 20, 35, 0.95) 0%, rgba(8, 12, 22, 0.98) 100%)',
         backdropFilter: 'blur(30px)',
-        border: `1px solid ${stopFlash ? 'rgba(255, 59, 92, 0.5)' : 'rgba(255, 184, 0, 0.1)'}`,
+        border: `1px solid ${stopFlash ? 'rgba(255, 59, 92, 0.5)' : 'rgba(34, 211, 238, 0.1)'}`,
         borderRadius: 24,
-        boxShadow: '0 0 30px rgba(255,184,0,0.05), 0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.03)',
+        boxShadow: '0 0 30px rgba(34,211,238,0.05), 0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.03)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -122,7 +130,7 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
           left: '15%',
           right: '15%',
           height: 2,
-          background: 'linear-gradient(90deg, transparent, rgba(255,184,0,0.4), transparent)',
+          background: 'linear-gradient(90deg, transparent, rgba(34,211,238,0.4), transparent)',
           borderRadius: 1,
         }}
       />
@@ -153,7 +161,7 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
             fontSize: 10,
             fontWeight: 600,
             letterSpacing: '0.2em',
-            color: state !== 'idle' ? 'rgba(255,184,0,0.7)' : 'rgba(90, 113, 130, 0.6)',
+            color: state !== 'idle' ? 'rgba(34,211,238,0.7)' : 'rgba(90, 113, 130, 0.6)',
             transition: 'color 0.4s ease',
           }}
         >
@@ -202,7 +210,7 @@ export default function JarvisPanel({ state, isMuted, onMuteToggle, onStop, onSt
         style={{
           width: '60%',
           height: 1,
-          background: 'linear-gradient(90deg, transparent, rgba(255,184,0,0.15), transparent)',
+          background: 'linear-gradient(90deg, transparent, rgba(34,211,238,0.15), transparent)',
           marginTop: 24,
           marginBottom: 20,
         }}

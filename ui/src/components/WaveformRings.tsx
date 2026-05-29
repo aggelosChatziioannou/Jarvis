@@ -21,6 +21,7 @@ const COLOR_MAP: Record<VoiceState, { r: number; g: number; b: number }> = {
   idle: { r: 0, g: 0.33, b: 0.4 },
   listening: { r: 0, g: 0.53, b: 0.67 },
   thinking: { r: 0, g: 0.67, b: 0.8 },
+  synthesizing: { r: 0.4, g: 0.45, b: 0.7 },
   speaking: { r: 0, g: 0.83, b: 1 },
 };
 
@@ -28,6 +29,7 @@ const PARAM_MAP: Record<VoiceState, Partial<AnimParams>> = {
   idle: { amplitude: 0.02, frequency: 3.0, rotationSpeed: 0.001, opacity: 0.25 },
   listening: { amplitude: 0.05, frequency: 5.0, rotationSpeed: 0.002, opacity: 0.5 },
   thinking: { amplitude: 0.15, frequency: 12.0, rotationSpeed: 0.008, opacity: 0.7 },
+  synthesizing: { amplitude: 0.04, frequency: 3.5, rotationSpeed: 0.0015, opacity: 0.35 },
   speaking: { amplitude: 0.3, frequency: 8.0, rotationSpeed: 0.003, opacity: 0.95 },
 };
 
@@ -244,6 +246,19 @@ export default function WaveformRings({ state }: WaveformRingsProps) {
         ease: 'sine.inOut',
       });
       pulseTweensRef.current.push(speakPulse);
+    }
+
+    // Synthesizing: gentle ambient pulse
+    if (state === 'synthesizing') {
+      const synthPulse = gsap.to(params, {
+        amplitude: 0.06,
+        opacity: 0.45,
+        duration: 2.5,
+        yoyo: true,
+        repeat: -1,
+        ease: 'sine.inOut',
+      });
+      pulseTweensRef.current.push(synthPulse);
     }
 
     // Idle: restore ambient heartbeat

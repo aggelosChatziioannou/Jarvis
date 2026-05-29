@@ -327,6 +327,32 @@ def main() -> None:
 
     _install_signal_handlers()
 
+    # CRITICAL: start the API server + stdout mirror IMMEDIATELY so EVERY
+    # print() from here on (including TTS init, model loading, etc.) is
+    # captured in the React UI's Live Logs feed. Previously these were
+    # installed only inside VoiceListener.__init__, meaning all TTS-init
+    # diagnostics from tts.start() (mixer init, device list, Chatterbox
+    # load timing) were silently discarded — which is why the user could
+    # not see any of the new TTS phase logs.
+    try:
+        from . import api_server, config_safety
+        from .config import default_config_path
+        import os as _os
+        from pathlib import Path as _Path
+
+        _cfg_path = _Path(_os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+        restored = config_safety.check_and_restore(_cfg_path)
+        if restored:
+            print(f"♻️ Config auto-restored from {restored.name}", flush=True)
+        config_safety.snapshot(_cfg_path, reason="boot")
+
+        api_server.start_in_background()
+        api_server.install_stdout_mirror()
+        api_server.publish_log("info", "API server + stdout mirror ready (early init)")
+    except Exception as _early_err:
+        # Non-fatal — daemon continues; just no log capture for early prints.
+        debug_log(f"early api_server init failed (non-fatal): {_early_err!r}", "jarvis")
+
     cfg = load_settings()
     db = Database(cfg.db_path, cfg.sqlite_vss_path)
 
@@ -335,35 +361,46 @@ def main() -> None:
     print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
 
+    # ─── Deadlock guard: pre-import heavy C-extension stack on MAIN thread ───
+    # openWakeWord imports sklearn → scipy.special (large C-extension .pyd's).
+    # When that import runs on the Wispr-bridge thread CONCURRENTLY with the
+    # parallel Whisper / torch / LLM-warmup imports, Windows' loader lock can
+    # DEADLOCK — freezing the entire daemon (API, wake word, AND the trigger
+    # button all hang together, low CPU). Importing it HERE, on the main
+    # thread before any of those worker threads start, serializes the
+    # C-extension load and removes the race. Cheap (~1-2s) and idempotent;
+    # the later threaded `import openwakeword` then just reuses the cache.
+    try:
+        import warnings as _w
+        _w.filterwarnings("ignore", category=UserWarning, module="openwakeword")
+        import openwakeword as _oww  # noqa: F401
+        debug_log("pre-imported openwakeword on main thread (deadlock guard)", "jarvis")
+    except Exception as _oww_err:
+        debug_log(f"openwakeword pre-import skipped (non-fatal): {_oww_err!r}", "jarvis")
+
     # MCP preflight: discover and cache external MCP tools
     mcps = getattr(cfg, "mcps", {}) or {}
     if mcps:
-        print(f"📡 Discovering MCP tools from {len(mcps)} server(s)...", flush=True)
         try:
             mcp_tools, mcp_errors = initialize_mcp_tools(mcps, verbose=False)
 
-            # Group tools by server for display
-            tools_by_server: dict = {}
-            for tool_name in mcp_tools.keys():
-                if "__" in tool_name:
-                    server_name = tool_name.split("__")[0]
-                    if server_name not in tools_by_server:
-                        tools_by_server[server_name] = []
-                    tools_by_server[server_name].append(tool_name)
-
-            for server_name in mcps.keys():
-                count = len(tools_by_server.get(server_name, []))
-                if count > 0:
-                    print(f"  ✅ {server_name}: {count} tools available", flush=True)
-                elif server_name in mcp_errors:
-                    print(f"  ❌ {server_name}: {mcp_errors[server_name]}", flush=True)
-                else:
-                    print(f"  ⚠️ {server_name}: no tools discovered", flush=True)
+            # Consolidated single-line MCP readiness summary
+            _server_names = sorted({tn.split("__")[0] for tn in mcp_tools.keys() if "__" in tn})
+            if _server_names:
+                _server_list = ", ".join(_server_names)
+                print(
+                    f"✅ MCP ready: {_server_list} ({len(mcp_tools)} tools total)",
+                    flush=True,
+                )
+            elif mcp_errors:
+                print(f"⚠️ MCP discovery failed for {len(mcp_errors)} server(s)", flush=True)
+            else:
+                print("⚠️ MCP ready: no tools discovered", flush=True)
 
             debug_log(f"MCP tools cached: {len(mcp_tools)} total", "mcp")
         except Exception as e:
             debug_log(f"MCP discovery failed: {e}", "mcp")
-            print(f"  ⚠️ MCP discovery failed: {e}", flush=True)
+            print(f"⚠️ MCP discovery failed: {e}", flush=True)
     else:
         print("📡 No MCP servers configured", flush=True)
 

@@ -6,7 +6,7 @@ from typing import Optional
 from enum import Enum
 from datetime import datetime
 
-from ..debug import debug_log
+from ..debug import debug_log, info_log, log_state_transition
 
 
 class ListeningState(Enum):
@@ -84,15 +84,14 @@ class StateManager:
             self._last_voice_time = time.time()
             self._collect_start_time = self._last_voice_time
 
-        start_time_str = datetime.fromtimestamp(self._collect_start_time).strftime('%H:%M:%S.%f')[:-3]
-        debug_log(f"collection started at {start_time_str}: '{initial_text}'", "state")
+        debug_log(f"collection started: '{initial_text}'", "state")
 
         # Set face state to LISTENING
         try:
             from desktop_app.face_widget import get_jarvis_state, JarvisState
             face_state_manager = get_jarvis_state()
             face_state_manager.set_state(JarvisState.LISTENING)
-            debug_log("face state set to LISTENING (collection started)", "state")
+            log_state_transition("LISTENING", "collection started")
         except ImportError:
             pass
         except Exception as e:
@@ -136,15 +135,39 @@ class StateManager:
         if query and collect_start_time > 0:
             end_time = time.time()
             duration = end_time - collect_start_time
-            start_time_str = datetime.fromtimestamp(collect_start_time).strftime('%H:%M:%S.%f')[:-3]
-            end_time_str = datetime.fromtimestamp(end_time).strftime('%H:%M:%S.%f')[:-3]
-            debug_log(f"collection cleared: '{query}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
+            debug_log(f"collection cleared: '{query}' (duration: {duration:.2f}s)", "state")
         else:
             debug_log(f"collection cleared: '{query}'", "state")
 
         # Note: Don't set face state here - it will be set to THINKING or ASLEEP by caller
 
         return query
+
+    # Aggressive silence threshold for queries that look already-complete.
+    # 0.8s is enough breathing room for a quick "what time is it?" while still
+    # tolerating brief inter-word pauses; longer than that and short queries
+    # spend most of their pipeline time staring at silence.
+    _FAST_SILENCE_TIMEOUT = 0.8
+
+    def _looks_complete(self, pending: str) -> bool:
+        """Heuristic: does the pending query look like a finished utterance?
+
+        Any one of these signals is enough — they each have low false-positive
+        rate in practice for the directed-speech path:
+          - ends with terminal punctuation
+          - ≥ 7 words (long enough to be a full thought)
+          - ≥ 4 words AND starts with a wake-word prefix (directed query)
+        """
+        if not pending:
+            return False
+        if pending.endswith(("?", ".", "!", ";")):
+            return True
+        words = pending.split()
+        if len(words) >= 7:
+            return True
+        if len(words) >= 4 and pending.lower().startswith(("jarvis", "hey jarvis")):
+            return True
+        return False
 
     def check_collection_timeout(self) -> bool:
         """
@@ -157,18 +180,27 @@ class StateManager:
             return False
 
         current_time = time.time()
-        silence_timeout = current_time - self._last_voice_time >= self.voice_collect_seconds
-        max_timeout = current_time - self._collect_start_time >= self.max_collect_seconds
+        silence_elapsed = current_time - self._last_voice_time
+        max_elapsed = current_time - self._collect_start_time
+
+        pending = self._pending_query.strip()
+        effective_silence = (
+            self._FAST_SILENCE_TIMEOUT
+            if self._looks_complete(pending)
+            else self.voice_collect_seconds
+        )
+
+        silence_timeout = silence_elapsed >= effective_silence
+        max_timeout = max_elapsed >= self.max_collect_seconds
 
         if silence_timeout or max_timeout:
             timeout_type = "silence" if silence_timeout else "max"
-
-            end_time = time.time()
-            duration = end_time - self._collect_start_time
-            start_time_str = datetime.fromtimestamp(self._collect_start_time).strftime('%H:%M:%S.%f')[:-3]
-            end_time_str = datetime.fromtimestamp(end_time).strftime('%H:%M:%S.%f')[:-3]
-
-            debug_log(f"collection timeout ({timeout_type}): '{self._pending_query}' (started: {start_time_str}, ended: {end_time_str}, duration: {duration:.2f}s)", "state")
+            duration = time.time() - self._collect_start_time
+            debug_log(
+                f"collection timeout ({timeout_type}, threshold={effective_silence:.1f}s): "
+                f"'{self._pending_query}' (duration: {duration:.2f}s)",
+                "state",
+            )
             return True
 
         return False
@@ -299,29 +331,22 @@ class StateManager:
                     return
                 self._state = ListeningState.WAKE_WORD
                 self._hot_window_span_end = time.time()
-
-            expiry_time = self._hot_window_span_end
-            duration = expiry_time - self._hot_window_start_time if self._hot_window_start_time > 0 else 0
-            expiry_time_str = datetime.fromtimestamp(expiry_time).strftime('%H:%M:%S.%f')[:-3]
-            debug_log(f"hot window expired (timer) at {expiry_time_str} after {duration:.2f}s", "state")
+            duration = self._hot_window_span_end - self._hot_window_start_time if self._hot_window_start_time > 0 else 0
 
             # Set face state to IDLE
             try:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
                 face_state_manager = get_jarvis_state()
                 face_state_manager.set_state(JarvisState.IDLE)
-                debug_log("face state set to IDLE (hot window timer expiry)", "state")
+                log_state_transition("IDLE", "hot window timer expiry")
             except ImportError:
                 # Desktop app not available (headless mode)
                 pass
             except Exception as e:
                 debug_log(f"failed to set face state to IDLE: {e}", "state")
 
-            # Always show user-facing output
-            try:
-                print("💤 Returning to wake word mode\n", flush=True)
-            except Exception:
-                pass
+            # Single visible expiry line
+            info_log(f"💤 Hot window expired → IDLE ({duration:.1f}s)")
 
         with self._timer_lock:
             self._hot_window_expiry_timer = threading.Timer(self.hot_window_seconds, _expire)
@@ -329,6 +354,7 @@ class StateManager:
             self._hot_window_expiry_timer.start()
 
         debug_log(f"scheduled hot window expiry in {self.hot_window_seconds}s", "state")
+        # Hot window expiry is handled by the timer callback above; no extra info line needed.
 
     def schedule_hot_window_activation(self, voice_debug: bool = False) -> None:
         """
@@ -339,8 +365,7 @@ class StateManager:
         Args:
             voice_debug: Whether to enable debug logging
         """
-        schedule_time_str = datetime.fromtimestamp(time.time()).strftime('%H:%M:%S.%f')[:-3]
-        debug_log(f"scheduling hot window activation at {schedule_time_str} (delay={self.echo_tolerance}s, should_stop={self._should_stop})", "state")
+        debug_log(f"scheduling hot window activation (delay={self.echo_tolerance}s)", "state")
 
         # Cancel any pending activation first
         self.cancel_hot_window_activation()
@@ -371,25 +396,19 @@ class StateManager:
                 self._state = ListeningState.HOT_WINDOW
                 self._hot_window_start_time = time.time()
 
-            activation_time_str = datetime.fromtimestamp(self._hot_window_start_time).strftime('%H:%M:%S.%f')[:-3]
-            debug_log(f"hot window activated at {activation_time_str} for {self.hot_window_seconds}s (after {self.echo_tolerance}s echo delay)", "state")
-
             # Set face state to LISTENING
             try:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
                 face_state_manager = get_jarvis_state()
                 face_state_manager.set_state(JarvisState.LISTENING)
-                debug_log("face state set to LISTENING (hot window activated)", "state")
+                log_state_transition("LISTENING", "hot window activated")
             except ImportError:
                 pass
             except Exception as e:
                 debug_log(f"failed to set face state to LISTENING: {e}", "state")
 
-            # Always show user-facing output
-            try:
-                print(f"👂 Listening for follow-up ({int(self.hot_window_seconds)}s)...", flush=True)
-            except Exception as e:
-                debug_log(f"failed to print hot window message: {e}", "state")
+            # Single visible activation line
+            info_log(f"👂 Hot window: {self.hot_window_seconds:.1f}s (echo delay: {self.echo_tolerance:.1f}s)")
 
             # Schedule the expiry timer now that hot window is active
             self._schedule_hot_window_expiry()
@@ -442,17 +461,11 @@ class StateManager:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
                 face_state_manager = get_jarvis_state()
                 face_state_manager.set_state(JarvisState.IDLE)
-                debug_log("face state set to IDLE (hot window poll expiry)", "state")
+                log_state_transition("IDLE", "hot window poll expiry")
             except ImportError:
                 pass
             except Exception as e:
                 debug_log(f"failed to set face state to IDLE: {e}", "state")
-
-            # Always show user-facing output
-            try:
-                print("💤 Returning to wake word mode\n", flush=True)
-            except Exception:
-                pass
 
             return True
         return False
@@ -479,17 +492,11 @@ class StateManager:
                 from desktop_app.face_widget import get_jarvis_state, JarvisState
                 face_state_manager = get_jarvis_state()
                 face_state_manager.set_state(JarvisState.IDLE)
-                debug_log("face state set to IDLE (hot window manually expired)", "state")
+                log_state_transition("IDLE", "hot window manually expired")
             except ImportError:
                 pass
             except Exception as e:
                 debug_log(f"failed to set face state to IDLE: {e}", "state")
-
-            # Always show user-facing output
-            try:
-                print("💤 Returning to wake word mode", flush=True)
-            except Exception:
-                pass
 
     def stop(self) -> None:
         """Stop the state manager and cancel all timers."""

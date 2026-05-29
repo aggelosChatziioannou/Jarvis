@@ -287,8 +287,12 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
   - `llm_tools_timeout_sec` (enrichment extraction)
   - `llm_embed_timeout_sec` (vector search)
   - `llm_chat_timeout_sec` (messages loop turn)
+- Generation caps (final synthesis turn):
+  - `llm_chat_max_tokens` (default 512) sets `num_predict` on the chat call to bound runaway generation latency; omitted when ≤ 0.
+  - `llm_chat_temperature` (default `-1.0` = unset, uses the model default) sets the decode `temperature` only when ≥ 0.
 - Memory enrichment:
   - `memory_enrichment_max_results` limits recalled snippets.
+  - `memory_injection_max_turns` (default 4) is the number of agentic turns during which a late-arriving async memory-enrichment result may still be injected into the system prompt; if the worker has not finished by then the recalled memory is dropped (a `debug_log` records the drop). Widened from the previous hardcoded 2-turn window so slow recalls are not silently lost.
   - `memory_digest_enabled` (default `null` = auto-on for SMALL models ≤7B, off for LARGE) distils the combined diary + graph dump into a short relevance-filtered note via a cheap LLM pass before injecting into the system prompt. See **Memory Digest for Small Models** below.
   - `tool_result_digest_enabled` (default `null` = auto-on for SMALL models ≤7B) distils raw tool-result payloads (especially webSearch UNTRUSTED WEB EXTRACT blocks and fetch_web_page responses) into a short attributed fact note before appending as a tool-role message. Auto-on for small models mitigates large payloads (fetch_web_page truncates at 50,000 chars) blowing the 8192 num_ctx window. Set to `true` to force on, `false` to force off. See **Tool-Result Digest for Small Models** below.
 - Tools and MCP:
@@ -296,12 +300,14 @@ Turn 4: LLM → {content: "Here's a comprehensive comparison of the iPhone 15 mo
 - Agentic loop:
   - `agentic_max_turns` maximum turns in the agentic loop (default 8)
   - `tool_search_max_calls` (default 3) caps `toolSearchTool` invocations per reply. Extra calls return a tool-error nudging the model to decide with what is already available.
+  - Cancellation: `run_reply_engine` accepts an optional `cancel_event` (`threading.Event`). The listener clears it before each dispatch and passes its `_llm_cancel_event`; STOP and Wispr barge-in set it via `reset_everything()`. The loop polls the event at safe boundaries (top of each turn, before each tool dispatch, after each tool result, before delivering the final reply) and returns an empty-string sentinel that suppresses TTS. This is turn/tool-boundary cancellation; a single in-flight LLM call is not torn down mid-generation.
 - Context injection:
   - `location_enabled` enables/disables location services
   - `location_ip_address` manual IP configuration for geolocation
   - `location_auto_detect` enables automatic IP detection (privacy consideration)
 - Output and debugging:
   - `voice_debug` toggles verbose stderr debug vs emoji console output.
+  - `tts_streaming_enabled` (default `True`, Piper only) synthesises and plays the reply sentence-by-sentence instead of synthesising the whole reply before any audio, cutting time-to-first-audio for multi-sentence replies. Contained in the TTS engine: the single `speak()` call and its callback contract are unchanged (playback-started fires once at the first sentence, completion once after the last); echo tracking still uses the full reply text; `interrupt()` stops after the current sentence. Chatterbox remains whole-text.
 
 ### Model-Size-Aware Prompts
 

@@ -175,6 +175,8 @@ def chat_with_messages(
     extra_options: Optional[Dict[str, Any]] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
     thinking: bool = False,
+    num_predict: Optional[int] = None,
+    temperature: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Send an arbitrary messages array to the LLM and return the raw response JSON.
@@ -188,6 +190,12 @@ def chat_with_messages(
         extra_options: Additional model options
         tools: Optional list of tools in OpenAI-compatible JSON schema format for native tool calling
         thinking: Enable thinking/reasoning mode
+        num_predict: Optional cap on generated tokens. Only sent when > 0; a
+            value of None or <= 0 means "no cap" and leaves the model default
+            (unbounded) untouched.
+        temperature: Optional sampling temperature. Sent verbatim when not None
+            (0.0 is a valid value meaning greedy decoding); None leaves the
+            model default untouched.
 
     Returns the parsed JSON response dict on success, or None on error/timeout.
     """
@@ -205,6 +213,15 @@ def chat_with_messages(
     if extra_options and isinstance(extra_options, dict):
         # Merge shallowly into options
         payload["options"].update(extra_options)
+
+    # Optional generation bounds/tuning. Only set when the caller passes a
+    # meaningful value so default behaviour stays byte-for-byte identical:
+    # an absent num_predict leaves generation length unbounded, an absent
+    # temperature leaves the model's own default in place.
+    if num_predict is not None and num_predict > 0:
+        payload["options"]["num_predict"] = int(num_predict)
+    if temperature is not None:
+        payload["options"]["temperature"] = float(temperature)
 
     # Add tools for native tool calling support (Ollama 0.4+)
     if tools and isinstance(tools, list) and len(tools) > 0:

@@ -491,6 +491,21 @@ def check_model_support() -> Optional[str]:
             if model == supported or base_model == supported_base:
                 return None
 
+        # Also accept any model the user has actually installed in Ollama: if
+        # it's pulled AND selected, don't nag about "official" support every
+        # startup (custom Modelfiles like qwen3.5:9b-8k would otherwise warn).
+        try:
+            import requests
+            base_url = config.get("ollama_base_url", "http://localhost:11434")
+            resp = requests.get(base_url.rstrip("/") + "/api/tags", timeout=2.0)
+            if resp.status_code == 200:
+                installed = {m.get("name", "") for m in resp.json().get("models", [])}
+                installed_bases = {n.split(":")[0] for n in installed if n}
+                if model in installed or base_model in installed_bases:
+                    return None
+        except Exception:
+            pass
+
         return model
     except Exception:
         return None
@@ -526,7 +541,7 @@ def show_unsupported_model_dialog(model_name: str) -> bool:
 
                 # Header
                 header = QLabel("⚠️ Using Unofficial Model")
-                header.setStyleSheet("font-size: 18px; font-weight: bold; color: #fbbf24;")
+                header.setStyleSheet("font-size: 18px; font-weight: bold; color: #7dd3fc;")
                 layout.addWidget(header)
 
                 # Description
@@ -791,7 +806,7 @@ class LogViewerWindow(QMainWindow):
 
         title = QLabel("📝 Jarvis Logs")
         title.setObjectName("title")
-        title.setStyleSheet("font-size: 20px; font-weight: 600; color: #fbbf24;")
+        title.setStyleSheet("font-size: 20px; font-weight: 600; color: #7dd3fc;")
         title_layout.addWidget(title)
 
         subtitle = QLabel("Real-time activity and debug output")
@@ -815,7 +830,7 @@ class LogViewerWindow(QMainWindow):
             }
             QPushButton:hover {
                 background-color: #3f3f46;
-                border-color: #f59e0b;
+                border-color: #22d3ee;
             }
         """)
         clear_btn.clicked.connect(self.clear_logs)
@@ -835,7 +850,7 @@ class LogViewerWindow(QMainWindow):
             }
             QPushButton:hover {
                 background-color: #3f3f46;
-                border-color: #f59e0b;
+                border-color: #22d3ee;
             }
         """)
         report_btn.clicked.connect(self._report_issue)
@@ -982,7 +997,7 @@ class MemoryViewerWindow(QMainWindow):
             title_label.setStyleSheet("""
                 font-size: 24px;
                 font-weight: 600;
-                color: #fbbf24;
+                color: #7dd3fc;
                 background: transparent;
                 margin-top: 16px;
             """)
@@ -1196,7 +1211,7 @@ class MemoryViewerWindow(QMainWindow):
                        height: 100vh; margin: 0; }}
                 .error {{ text-align: center; padding: 40px; }}
                 .icon {{ font-size: 64px; margin-bottom: 20px; }}
-                h1 {{ color: #fbbf24; margin-bottom: 16px; }}
+                h1 {{ color: #7dd3fc; margin-bottom: 16px; }}
                 p {{ color: #71717a; max-width: 400px; line-height: 1.6; }}
             </style></head>
             <body><div class="error">
@@ -1720,18 +1735,39 @@ class JarvisSystemTray:
             self.web_hud.activateWindow()
 
     def open_control_console(self) -> None:
-        """Show the Control Console — a native PyQt6 window hosting the React /panel UI."""
+        """Show the Control Console — a native PyQt6 window hosting the React /panel UI.
+
+        On the auto-open path from `start_daemon`, this is called in the same
+        event-loop tick as `self.web_hud.show()`. Constructing the
+        QWebEngineView inline would race the HUD's queued paint against the
+        Chromium GPU process; we defer the heavy work via singleShot(0) so the
+        HUD gets a chance to render first.
+        """
         if not hasattr(self, "console_window") or self.console_window is None:
-            try:
-                from desktop_app.web_console_window import JarvisConsoleWindow
-                self.console_window = JarvisConsoleWindow()
-            except Exception as e:
-                debug_log(f"failed to create console window: {e}", "desktop")
-                return
+            QTimer.singleShot(0, self._build_and_show_console)
+            return
+        self._show_existing_console()
+
+    def _build_and_show_console(self) -> None:
+        """Construct JarvisConsoleWindow on the event loop and show it."""
+        if hasattr(self, "console_window") and self.console_window is not None:
+            self._show_existing_console()
+            return
+        try:
+            from desktop_app.web_console_window import JarvisConsoleWindow
+            self.console_window = JarvisConsoleWindow()
+        except Exception as e:
+            debug_log(f"failed to create console window: {e}", "desktop")
+            self.console_window = None
+            return
+        self._show_existing_console()
+
+    def _show_existing_console(self) -> None:
+        if self.console_window is None:
+            return
         self.console_window.show()
         self.console_window.raise_()
         self.console_window.activateWindow()
-        # If it was minimized, restore.
         if self.console_window.isMinimized():
             self.console_window.showNormal()
 

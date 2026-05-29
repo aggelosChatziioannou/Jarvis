@@ -8,9 +8,11 @@ import ControlButton from './ControlButton';
 interface JarvisCardProps {
   state: VoiceState;
   isMuted: boolean;
+  query?: string;
   onMuteToggle: () => void;
   onStop: () => void;
   onStartDemo: () => void;
+  onTriggerNow: () => void;
 }
 
 // SVG Icons
@@ -44,10 +46,36 @@ function StopIcon() {
   );
 }
 
+function TriggerIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E8F4F8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  );
+}
+
 function MinimizeIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
       <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+
+function EyeOpenIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+      <line x1="1" y1="1" x2="23" y2="23" />
     </svg>
   );
 }
@@ -61,15 +89,30 @@ function CloseIcon() {
   );
 }
 
-export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onStartDemo }: JarvisCardProps) {
+function truncateQuery(text: string, maxWords = 24): string {
+  // Generous truncation — the display now wraps to 3 lines with ellipsis,
+  // so we only cut here as a safety net for runaway transcripts.
+  const words = text.trim().split(/\s+/);
+  if (words.length <= maxWords) return text;
+  return words.slice(0, maxWords).join(' ') + '…';
+}
+
+export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop, onStartDemo, onTriggerNow }: JarvisCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
-  const dotsRef = useRef<HTMLDivElement[]>([]);
   const borderTweenRef = useRef<gsap.core.Tween | null>(null);
   const [stopFlash, setStopFlash] = useState(false);
   const prevStateRef = useRef<VoiceState>('idle');
 
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const [showQuery, setShowQuery] = useState(() => {
+    try {
+      return localStorage.getItem('jarvis_show_query') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // We check window.hudMove on every drag — not at mount — because the
   // PyQt JS bridge injects it after the page loads, which can be AFTER
@@ -89,7 +132,7 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
       borderTweenRef.current = null;
     }
 
-    if (state === 'speaking' || state === 'thinking') {
+    if (state === 'speaking' || state === 'thinking' || state === 'synthesizing') {
       borderTweenRef.current = gsap.to(card, {
         boxShadow: '0 0 60px rgba(0, 212, 255, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5)',
         duration: 1.5,
@@ -104,20 +147,6 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
         ease: 'power2.out',
       });
     }
-  }, [state]);
-
-  // Brand dots animation
-  useEffect(() => {
-    const isActive = state !== 'idle';
-    dotsRef.current.forEach((dot, i) => {
-      if (!dot) return;
-      gsap.to(dot, {
-        backgroundColor: isActive ? '#00D4FF' : '#5A7182',
-        duration: 0.3,
-        delay: isActive ? i * 0.15 : 0,
-        ease: 'power2.out',
-      });
-    });
   }, [state]);
 
   // Stop flash effect
@@ -181,6 +210,19 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
     }
   }, []);
 
+  const handleToggleQuery = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowQuery((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('jarvis_show_query', String(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <div
       ref={cardRef}
@@ -212,7 +254,11 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
           justifyContent: 'space-between',
           alignItems: 'center',
           width: '100%',
-          marginBottom: 32,
+          // Tighter spacing when the query pill is visible so the card
+          // doesn't feel cramped; generous spacing when it's hidden so the
+          // waveform sits at a comfortable visual centre.
+          marginBottom: showQuery && state !== 'idle' && query ? 14 : 32,
+          transition: 'margin-bottom 0.3s ease',
         }}
       >
         <div
@@ -221,37 +267,55 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
           title="Drag to move"
         >
           <span
-            className="font-orbitron"
             style={{
-              fontSize: 11,
-              fontWeight: 500,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 12,
+              fontWeight: 600,
               color: 'rgba(0, 212, 255, 0.4)',
-              letterSpacing: '0.15em',
+              letterSpacing: '0.18em',
               textTransform: 'uppercase',
               cursor: 'move',
             }}
           >
             JARVIS
           </span>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {[0, 1, 2].map(i => (
-              <div
-                key={i}
-                ref={el => { if (el) dotsRef.current[i] = el; }}
-                style={{
-                  width: 4,
-                  height: 4,
-                  borderRadius: '50%',
-                  background: '#5A7182',
-                  transition: 'background-color 0.3s ease',
-                }}
-              />
-            ))}
-          </div>
         </div>
 
         {/* Window controls — always rendered; handlers no-op gracefully if no PyQt bridge */}
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 8 }}>
+            <button
+              onClick={handleToggleQuery}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={showQuery ? 'Hide query' : 'Show query'}
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                border: showQuery ? '1px solid rgba(0,212,255,0.2)' : '1px solid rgba(255,255,255,0.08)',
+                background: showQuery ? 'rgba(0,212,255,0.1)' : 'transparent',
+                color: showQuery ? '#00D4FF' : '#5A7182',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                padding: 0,
+              }}
+              onMouseEnter={(e) => {
+                if (!showQuery) {
+                  (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.06)';
+                  (e.currentTarget as HTMLButtonElement).style.color = '#E8F4F8';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!showQuery) {
+                  (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                  (e.currentTarget as HTMLButtonElement).style.color = '#5A7182';
+                }
+              }}
+            >
+              {showQuery ? <EyeOpenIcon /> : <EyeOffIcon />}
+            </button>
             <button
               onClick={handleMinimize}
               onMouseDown={(e) => e.stopPropagation()}
@@ -315,6 +379,58 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
           </div>
       </div>
 
+      {/* Query text display — readable, wrapped to up to 3 lines, with a
+          subtle background pill so it's visually separated from the JARVIS
+          wordmark above and the waveform below. Uses `-webkit-line-clamp` to
+          clip cleanly at 3 lines with an ellipsis when the transcript is long. */}
+      <div
+        style={{
+          width: '100%',
+          maxHeight: showQuery && state !== 'idle' && query ? 84 : 0,
+          opacity: showQuery && state !== 'idle' && query ? 1 : 0,
+          marginBottom: showQuery && state !== 'idle' && query ? 10 : 0,
+          overflow: 'hidden',
+          transition: 'opacity 0.3s ease, max-height 0.3s ease, margin-bottom 0.3s ease',
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: 10,
+            background: 'rgba(0, 212, 255, 0.06)',
+            border: '1px solid rgba(0, 212, 255, 0.18)',
+            boxShadow: 'inset 0 0 12px rgba(0, 212, 255, 0.04)',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 13,
+              fontWeight: 500,
+              color: '#FFFFFF',
+              textShadow: '0 0 6px rgba(0, 212, 255, 0.35)',
+              textAlign: 'center',
+              lineHeight: 1.35,
+              letterSpacing: '0.01em',
+              // 3-line clamp with ellipsis — works across modern Chromium
+              // (which the embedded QWebEngineView is built on).
+              display: '-webkit-box',
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: 'vertical' as const,
+              overflow: 'hidden',
+              wordBreak: 'break-word',
+              hyphens: 'auto',
+            }}
+          >
+            {truncateQuery(query || '')}
+          </div>
+        </div>
+      </div>
+
       {/* Middle - Waveform */}
       <WaveformRings state={state} />
 
@@ -331,6 +447,11 @@ export default function JarvisCard({ state, isMuted, onMuteToggle, onStop, onSta
           onClick={onMuteToggle}
           active={!isMuted}
           tooltip={isMuted ? 'Unmute (M)' : 'Mute (M)'}
+        />
+        <ControlButton
+          icon={<TriggerIcon />}
+          onClick={onTriggerNow}
+          tooltip="Trigger Now"
         />
         <ControlButton
           icon={<StopIcon />}

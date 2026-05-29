@@ -531,7 +531,7 @@ class SetupWizard(QWizard):
         self.setStyleSheet(JARVIS_THEME_STYLESHEET + icon_css + """
             /* Additional wizard-specific overrides */
             QLabel#title {
-                color: #fbbf24;
+                color: #7dd3fc;
                 font-size: 24px;
                 font-weight: bold;
             }
@@ -544,7 +544,7 @@ class SetupWizard(QWizard):
                 font-size: 14px;
             }
             QLabel#status-warning {
-                color: #fbbf24;
+                color: #7dd3fc;
                 font-size: 14px;
             }
             QLabel#status-error {
@@ -557,8 +557,8 @@ class SetupWizard(QWizard):
             }
             QPushButton#secondary:hover {
                 background-color: #1e222c;
-                border-color: #f59e0b;
-                color: #fbbf24;
+                border-color: #22d3ee;
+                color: #7dd3fc;
             }
             QPushButton#success {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -688,7 +688,7 @@ class WelcomePage(QWizardPage):
             if is_success:
                 status_label.setStyleSheet("font-size: 14px; color: #4ade80; background: transparent;")
             else:
-                status_label.setStyleSheet("font-size: 14px; color: #fbbf24; background: transparent;")
+                status_label.setStyleSheet("font-size: 14px; color: #7dd3fc; background: transparent;")
 
     def initializePage(self):
         """Called when page is shown."""
@@ -830,7 +830,7 @@ class OllamaInstallPage(QWizardPage):
         card_layout.setSpacing(12)
 
         instructions_title = QLabel("📥 Installation Instructions")
-        instructions_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        instructions_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         card_layout.addWidget(instructions_title)
         card_layout.addSpacing(8)
 
@@ -973,7 +973,7 @@ class OllamaServerPage(QWizardPage):
         card_layout.setSpacing(12)
 
         instructions_title = QLabel("🚀 Starting the Server")
-        instructions_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        instructions_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         card_layout.addWidget(instructions_title)
         card_layout.addSpacing(8)
 
@@ -1184,7 +1184,7 @@ class ModelsPage(QWizardPage):
         selection_layout.setSpacing(16)
 
         selection_title = QLabel("🎯 Choose Chat Model")
-        selection_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        selection_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         selection_layout.addWidget(selection_title)
         selection_layout.addSpacing(8)
 
@@ -1211,12 +1211,12 @@ class ModelsPage(QWizardPage):
                     line-height: 1.4;
                 }
                 QPushButton:hover {
-                    border-color: #f59e0b;
+                    border-color: #22d3ee;
                     background: #1e222c;
                 }
                 QPushButton:checked {
-                    border-color: #f59e0b;
-                    background: rgba(245, 158, 11, 0.1);
+                    border-color: #22d3ee;
+                    background: rgba(34, 211, 238, 0.1);
                 }
             """)
             btn.clicked.connect(lambda checked, m=model_id: self._on_model_selected(m))
@@ -1242,7 +1242,7 @@ class ModelsPage(QWizardPage):
         card_layout.setSpacing(12)
 
         models_title = QLabel("📦 Required Models")
-        models_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        models_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         card_layout.addWidget(models_title)
         card_layout.addSpacing(8)
 
@@ -1433,7 +1433,7 @@ class ModelsPage(QWizardPage):
         # Save the selected model to config first
         if not self._save_model_to_config():
             self.status_label.setText("⚠️ Could not save model selection to config. Continuing with installation...")
-            self.status_label.setStyleSheet("color: #fbbf24;")
+            self.status_label.setStyleSheet("color: #7dd3fc;")
 
         if not self._missing_models:
             self._is_complete = True
@@ -1511,7 +1511,7 @@ class ModelsPage(QWizardPage):
         """Skip model installation."""
         self._is_complete = True
         self.status_label.setText("⚠️ Skipped model installation. Jarvis may not work correctly without all models.")
-        self.status_label.setStyleSheet("color: #fbbf24;")
+        self.status_label.setStyleSheet("color: #7dd3fc;")
         self.completeChanged.emit()
 
     def isComplete(self) -> bool:
@@ -1613,7 +1613,7 @@ class WhisperSetupPage(QWizardPage):
         lang_layout.setSpacing(8)
 
         lang_title = QLabel("🌍 Language Support")
-        lang_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        lang_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #7dd3fc; background: transparent;")
         lang_layout.addWidget(lang_title)
 
         # Language toggle buttons
@@ -1642,13 +1642,13 @@ class WhisperSetupPage(QWizardPage):
                 font-size: 12px;
             }
             QPushButton:hover {
-                border-color: #f59e0b;
+                border-color: #22d3ee;
                 background: #1e222c;
             }
             QPushButton:checked {
-                border-color: #f59e0b;
-                background: rgba(245, 158, 11, 0.15);
-                color: #fbbf24;
+                border-color: #22d3ee;
+                background: rgba(34, 211, 238, 0.15);
+                color: #7dd3fc;
             }
         """
         self._english_btn.setStyleSheet(lang_btn_style)
@@ -1674,7 +1674,7 @@ class WhisperSetupPage(QWizardPage):
         selection_layout.setSpacing(4)
 
         selection_title = QLabel("🎯 Choose Model Size")
-        selection_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        selection_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #7dd3fc; background: transparent;")
         selection_layout.addWidget(selection_title)
 
         # Container for slider labels (will be rebuilt on language change)
@@ -1708,7 +1708,7 @@ class WhisperSetupPage(QWizardPage):
                 margin: 0;
             }
             QSlider::handle:horizontal {
-                background: #f59e0b;
+                background: #22d3ee;
                 border: none;
                 width: 16px;
                 height: 16px;
@@ -1716,10 +1716,10 @@ class WhisperSetupPage(QWizardPage):
                 border-radius: 8px;
             }
             QSlider::handle:horizontal:hover {
-                background: #fbbf24;
+                background: #7dd3fc;
             }
             QSlider::sub-page:horizontal {
-                background: rgba(245, 158, 11, 0.4);
+                background: rgba(34, 211, 238, 0.4);
                 border-radius: 2px;
             }
             QSlider::tick-mark {
@@ -1769,7 +1769,7 @@ class WhisperSetupPage(QWizardPage):
         mlx_layout.setSpacing(6)
 
         status_title = QLabel("📋 Requirements")
-        status_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        status_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #7dd3fc; background: transparent;")
         mlx_layout.addWidget(status_title)
 
         self.ffmpeg_status = self._create_status_row("🎬 FFmpeg", "Checking...")
@@ -2003,7 +2003,7 @@ class WhisperSetupPage(QWizardPage):
             if is_success:
                 status_label.setStyleSheet("font-size: 12px; color: #4ade80; background: transparent;")
             else:
-                status_label.setStyleSheet("font-size: 12px; color: #fbbf24; background: transparent;")
+                status_label.setStyleSheet("font-size: 12px; color: #7dd3fc; background: transparent;")
 
     def _save_whisper_model_to_config(self):
         """Save the selected whisper model to config file."""
@@ -2240,7 +2240,7 @@ class LocationPage(QWizardPage):
         card_layout.setSpacing(12)
 
         status_title = QLabel("🔍 Detection Status")
-        status_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        status_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         card_layout.addWidget(status_title)
         card_layout.addSpacing(8)
 
@@ -2259,7 +2259,7 @@ class LocationPage(QWizardPage):
         config_layout.setSpacing(12)
 
         config_title = QLabel("⚙️ Manual Configuration (Optional)")
-        config_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        config_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         config_layout.addWidget(config_title)
         config_layout.addSpacing(8)
 
@@ -2378,7 +2378,7 @@ class LocationPage(QWizardPage):
             self.test_result_label.setStyleSheet("color: #4ade80;")
         else:
             self.test_result_label.setText("⚠️ Could not detect public IP via DNS")
-            self.test_result_label.setStyleSheet("color: #fbbf24;")
+            self.test_result_label.setStyleSheet("color: #7dd3fc;")
 
     def _test_ip(self):
         """Test the entered IP address."""
@@ -2411,21 +2411,21 @@ class LocationPage(QWizardPage):
 
         if _is_private_ip(ip):
             self.test_result_label.setText("⚠️ This appears to be a private IP. Use your public IP instead.")
-            self.test_result_label.setStyleSheet("color: #fbbf24;")
+            self.test_result_label.setStyleSheet("color: #7dd3fc;")
             self.save_btn.setEnabled(False)
             self._validated_ip = None
             return
 
         if _is_cgnat_ip(ip):
             self.test_result_label.setText("⚠️ This is a CGNAT IP (100.64.0.0/10). Use your true public IP instead.")
-            self.test_result_label.setStyleSheet("color: #fbbf24;")
+            self.test_result_label.setStyleSheet("color: #7dd3fc;")
             self.save_btn.setEnabled(False)
             self._validated_ip = None
             return
 
         if not is_location_available():
             self.test_result_label.setText("⚠️ Cannot test: GeoLite2 database not installed")
-            self.test_result_label.setStyleSheet("color: #fbbf24;")
+            self.test_result_label.setStyleSheet("color: #7dd3fc;")
             self.save_btn.setEnabled(True)
             self._validated_ip = ip
             return
@@ -2434,7 +2434,7 @@ class LocationPage(QWizardPage):
 
         if "error" in location_info:
             self.test_result_label.setText("⚠️ IP not found in database. It may still work.")
-            self.test_result_label.setStyleSheet("color: #fbbf24;")
+            self.test_result_label.setStyleSheet("color: #7dd3fc;")
             self.save_btn.setEnabled(True)
             self._validated_ip = ip
         else:
@@ -2564,7 +2564,7 @@ class DictationPage(QWizardPage):
         hotkey_layout.setSpacing(12)
 
         hotkey_title = QLabel("⌨️ Dictation Hotkey")
-        hotkey_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        hotkey_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         hotkey_layout.addWidget(hotkey_title)
 
         hotkey_desc = QLabel(
@@ -2600,7 +2600,7 @@ class DictationPage(QWizardPage):
         tips_layout.setSpacing(8)
 
         tips_title = QLabel("💡 How it Works")
-        tips_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        tips_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         tips_layout.addWidget(tips_title)
 
         tips = QLabel(
@@ -2703,7 +2703,7 @@ class MCPPage(QWizardPage):
         # Node.js availability warning
         self._node_warning = QLabel(
             "⚠️  <b>Node.js not found.</b> The MCP servers below require Node.js to run. "
-            "<a href='https://nodejs.org/' style='color: #f59e0b;'>Download Node.js</a> "
+            "<a href='https://nodejs.org/' style='color: #22d3ee;'>Download Node.js</a> "
             "and restart Jarvis, or skip this page for now."
         )
         self._node_warning.setOpenExternalLinks(True)
@@ -2764,9 +2764,9 @@ class MCPPage(QWizardPage):
         tip.setWordWrap(True)
         tip.setStyleSheet(
             "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-            "stop:0 rgba(245, 158, 11, 0.12), stop:1 rgba(139, 92, 246, 0.08));"
-            "border: 1px solid rgba(245, 158, 11, 0.25);"
-            "border-radius: 8px; padding: 12px 16px; color: #fbbf24; font-size: 13px;"
+            "stop:0 rgba(34, 211, 238, 0.12), stop:1 rgba(139, 92, 246, 0.08));"
+            "border: 1px solid rgba(34, 211, 238, 0.25);"
+            "border-radius: 8px; padding: 12px 16px; color: #7dd3fc; font-size: 13px;"
         )
         layout.addWidget(tip)
 
@@ -2880,7 +2880,7 @@ class SearchProvidersPage(QWizardPage):
             "DuckDuckGo is rate-limited. Free tier: 2,000 queries/month. "
             "Get a key at "
             "<a href='https://api.search.brave.com/app/keys' "
-            "style='color: #f59e0b;'>api.search.brave.com</a>."
+            "style='color: #22d3ee;'>api.search.brave.com</a>."
         )
         brave_desc.setOpenExternalLinks(True)
         brave_desc.setWordWrap(True)
@@ -2928,9 +2928,9 @@ class SearchProvidersPage(QWizardPage):
         tip.setWordWrap(True)
         tip.setStyleSheet(
             "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-            "stop:0 rgba(245, 158, 11, 0.12), stop:1 rgba(139, 92, 246, 0.08));"
-            "border: 1px solid rgba(245, 158, 11, 0.25);"
-            "border-radius: 8px; padding: 12px 16px; color: #fbbf24; font-size: 13px;"
+            "stop:0 rgba(34, 211, 238, 0.12), stop:1 rgba(139, 92, 246, 0.08));"
+            "border: 1px solid rgba(34, 211, 238, 0.25);"
+            "border-radius: 8px; padding: 12px 16px; color: #7dd3fc; font-size: 13px;"
         )
         layout.addWidget(tip)
 
@@ -3038,7 +3038,7 @@ class CompletePage(QWizardPage):
         card_layout.setSpacing(12)
 
         tips_title = QLabel("💡 Quick Tips")
-        tips_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fbbf24;")
+        tips_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #7dd3fc;")
         card_layout.addWidget(tips_title)
         card_layout.addSpacing(8)
 
@@ -3058,12 +3058,12 @@ class CompletePage(QWizardPage):
         brain_tip.setWordWrap(True)
         brain_tip.setStyleSheet("""
             background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 rgba(245, 158, 11, 0.15), stop:1 rgba(139, 92, 246, 0.1));
-            border: 1px solid rgba(245, 158, 11, 0.3);
+                stop:0 rgba(34, 211, 238, 0.15), stop:1 rgba(139, 92, 246, 0.1));
+            border: 1px solid rgba(34, 211, 238, 0.3);
             border-radius: 8px;
             padding: 12px 16px;
             margin-top: 8px;
-            color: #fbbf24;
+            color: #7dd3fc;
             font-style: italic;
         """)
         card_layout.addWidget(brain_tip)

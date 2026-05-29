@@ -57,7 +57,8 @@ class JarvisState(Enum):
     IDLE = "idle"              # Awake and ready, waiting for wake word
     LISTENING = "listening"    # Actively listening (collecting or hot window)
     THINKING = "thinking"      # Processing query
-    SPEAKING = "speaking"      # Speaking response
+    SYNTHESIZING = "synthesizing"  # TTS generating audio waveform
+    SPEAKING = "speaking"      # Audio playback active
     DICTATING = "dictating"    # Hold-to-dictate recording active
     DICTATION_PROCESSING = "dictation_processing"  # Transcribing & pasting captured dictation
 
@@ -75,6 +76,7 @@ try:
         JarvisState.IDLE: "idle",
         JarvisState.LISTENING: "listening",
         JarvisState.THINKING: "thinking",
+        JarvisState.SYNTHESIZING: "synthesizing",
         JarvisState.SPEAKING: "speaking",
         JarvisState.DICTATING: "listening",
         JarvisState.DICTATION_PROCESSING: "thinking",
@@ -191,8 +193,8 @@ class LowPolyFaceWidget(QWidget):
     """
     
     # Colors
-    PRIMARY_COLOR = QColor("#fbbf24")  # Amber/gold - matches Jarvis theme
-    SECONDARY_COLOR = QColor("#f59e0b")  # Darker amber
+    PRIMARY_COLOR = QColor("#7dd3fc")  # Amber/gold - matches Jarvis theme
+    SECONDARY_COLOR = QColor("#22d3ee")  # Darker amber
     GLOW_COLOR = QColor("#fcd34d")  # Light amber for glow
     BG_COLOR = QColor("#0a0a0a")  # Near black background
     GRID_COLOR = QColor("#1f1f1f")  # Dark gray for background grid
@@ -473,7 +475,7 @@ class LowPolyFaceWidget(QWidget):
         if self._jarvis_state == JarvisState.ASLEEP:
             self._target_activation = 0.0
         else:
-            # IDLE, LISTENING, THINKING, SPEAKING, DICTATING, or DICTATION_PROCESSING - all should be awake
+            # IDLE, LISTENING, THINKING, SYNTHESIZING, SPEAKING, DICTATING, or DICTATION_PROCESSING - all should be awake
             self._target_activation = 1.0
 
         # Smooth activation transition
@@ -481,7 +483,7 @@ class LowPolyFaceWidget(QWidget):
         self._activation_level += activation_diff * 0.05  # Slow wake/sleep
 
         # Check if idle (when awake but not actively doing anything)
-        # ONLY IDLE state gets idle activities - not listening, thinking, or speaking
+        # ONLY IDLE state gets idle activities - not listening, thinking, synthesizing, or speaking
         is_idle = self._jarvis_state == JarvisState.IDLE and self._activation_level > 0.5
 
         # Base layer: Breathing animation (always active when awake)
@@ -561,8 +563,8 @@ class LowPolyFaceWidget(QWidget):
             if self._spinner_angle >= 360:
                 self._spinner_angle -= 360
 
-        # Soundwave animation (when speaking)
-        if self._jarvis_state == JarvisState.SPEAKING:
+        # Soundwave animation (when speaking or synthesizing)
+        if self._jarvis_state in (JarvisState.SPEAKING, JarvisState.SYNTHESIZING):
             # Animate waveform parameters for natural audio-like movement
             self._waveform_time += 0.12  # Speed of wave movement
             self._waveform_detail_offset += 0.08  # Speed of detail variations
@@ -574,6 +576,10 @@ class LowPolyFaceWidget(QWidget):
             # Occasionally change base frequency (simulates pitch changes in speech)
             if random.random() < 0.02:  # 2% chance per frame
                 self._waveform_frequency_base = 0.1 + random.random() * 0.15  # 0.1 to 0.25
+        elif self._jarvis_state == JarvisState.SYNTHESIZING:
+            # Minimal waveform drift during synthesis (preparing to speak)
+            self._waveform_amplitude += (0.15 - self._waveform_amplitude) * 0.05
+            self._waveform_time += 0.03
         else:
             # Decay waveform to flat line when not speaking
             self._waveform_amplitude *= 0.85

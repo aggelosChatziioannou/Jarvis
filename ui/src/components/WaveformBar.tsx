@@ -61,6 +61,19 @@ export default function WaveformBar({ state }: WaveformBarProps) {
         });
         tweensRef.current.push(tween);
       });
+    } else if (state === 'synthesizing') {
+      // Minimal subtle pulse (preparing to speak)
+      bars.forEach((bar, i) => {
+        const tween = gsap.to(bar, {
+          scaleY: 0.2 + Math.sin(i * 0.4) * 0.08,
+          duration: 2.0 + Math.random() * 0.5,
+          yoyo: true,
+          repeat: -1,
+          ease: 'sine.inOut',
+          delay: i * 0.03,
+        });
+        tweensRef.current.push(tween);
+      });
     } else if (state === 'speaking') {
       // Dynamic speech pattern
       bars.forEach((bar, i) => {
@@ -82,7 +95,7 @@ export default function WaveformBar({ state }: WaveformBarProps) {
     };
   }, [state]);
 
-  const barColor = state === 'listening' ? '#00E5A0' : '#FFB800';
+  const barColor = state === 'listening' ? '#00E5A0' : '#22d3ee';
 
   return (
     <div

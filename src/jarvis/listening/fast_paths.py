@@ -68,6 +68,30 @@ def _register(
     ))
 
 
+# ---------------------- Local (no MCP roundtrip) ----------------------
+# `_local` is a pseudo-server: the listener's _try_fast_path detects it and
+# computes the response in-process, bypassing the LLM entirely. Used for
+# trivial dynamic answers (current time, today's date) where the full
+# pipeline (intent judge → router → chat LLM) is pure overhead.
+
+# Time (now)
+_register(r"^(τι\s+ώρα|τι\s+ωρα)(\s+είναι|\s+ειναι)?\s*$", "_local", "time_now")
+_register(r"^what(?:'?s|\s+is)?\s+the\s+time\s*$", "_local", "time_now")
+_register(r"^what\s+time\s+is\s+it\s*$", "_local", "time_now")
+_register(r"^(?:tell\s+me\s+)?the\s+time\s*$", "_local", "time_now")
+
+# Date (today)
+_register(r"^(τι\s+μέρα|τι\s+μερα|τι\s+ημερομηνία|τι\s+ημερομηνια)(\s+είναι|\s+ειναι|\s+έχουμε|\s+εχουμε)?\s*$", "_local", "date_today")
+_register(r"^what(?:'?s|\s+is)?\s+(?:today'?s\s+)?(?:the\s+)?date\s*$", "_local", "date_today")
+_register(r"^what\s+day\s+is\s+(?:it|today)\s*$", "_local", "date_today")
+
+# Stop (when not already speaking — already handled mid-TTS by is_stop_command,
+# but cold-start "stop" would otherwise grind through the full pipeline). Use
+# response_override so it acks instantly and does nothing else.
+_register(r"^(σταμάτα|σταματα|σώπα|σωπα)\s*$", "_local", "noop", response_override="OK.")
+_register(r"^(stop|cancel|nevermind|never\s+mind|forget\s+it)\s*$", "_local", "noop", response_override="OK.")
+
+
 # ---------------------- Spotify (Greek + English) ----------------------
 # Action commands run in background thread + speak cached short ack.
 # Query commands wait for MCP and speak dynamic response.

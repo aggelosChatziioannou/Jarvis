@@ -18,17 +18,17 @@ COLORS = {
     "bg_card": "#161920",
     "bg_hover": "#1e222c",
     
-    "accent_primary": "#f59e0b",
-    "accent_secondary": "#fbbf24",
-    "accent_glow": "rgba(245, 158, 11, 0.15)",
-    "accent_muted": "#92400e",
+    "accent_primary": "#22d3ee",
+    "accent_secondary": "#7dd3fc",
+    "accent_glow": "rgba(34, 211, 238, 0.15)",
+    "accent_muted": "#0e7490",
     
     "text_primary": "#f4f4f5",
     "text_secondary": "#a1a1aa",
     "text_muted": "#71717a",
     
     "border": "#27272a",
-    "border_glow": "rgba(245, 158, 11, 0.3)",
+    "border_glow": "rgba(34, 211, 238, 0.3)",
 
     "success": "#22c55e",
     "success_light": "#4ade80",
@@ -44,7 +44,7 @@ COLORS = {
     "hud_cyan_light": "#22d3ee",
     "hud_cyan_glow": "rgba(6, 182, 212, 0.35)",
     "hud_panel_bg": "rgba(10, 11, 15, 0.92)",
-    "hud_grid": "rgba(245, 158, 11, 0.08)",
+    "hud_grid": "rgba(34, 211, 238, 0.08)",
 }
 
 
@@ -79,7 +79,7 @@ JARVIS_THEME_STYLESHEET = """
     QLabel#section_title {
         font-size: 16px;
         font-weight: bold;
-        color: #fbbf24;
+        color: #7dd3fc;
     }
     
     QTextEdit, QPlainTextEdit {
@@ -88,12 +88,12 @@ JARVIS_THEME_STYLESHEET = """
         border: 1px solid #27272a;
         border-radius: 10px;
         padding: 12px;
-        selection-background-color: rgba(245, 158, 11, 0.3);
-        selection-color: #fbbf24;
+        selection-background-color: rgba(34, 211, 238, 0.3);
+        selection-color: #7dd3fc;
     }
     
     QTextEdit:focus, QPlainTextEdit:focus {
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
     
     QLineEdit {
@@ -102,11 +102,11 @@ JARVIS_THEME_STYLESHEET = """
         border: 1px solid #27272a;
         border-radius: 8px;
         padding: 8px 12px;
-        selection-background-color: rgba(245, 158, 11, 0.3);
+        selection-background-color: rgba(34, 211, 238, 0.3);
     }
     
     QLineEdit:focus {
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
     
     QLineEdit::placeholder {
@@ -124,12 +124,12 @@ JARVIS_THEME_STYLESHEET = """
     
     QPushButton:hover {
         background-color: #1e222c;
-        border-color: #f59e0b;
-        color: #fbbf24;
+        border-color: #22d3ee;
+        color: #7dd3fc;
     }
     
     QPushButton:pressed {
-        background-color: rgba(245, 158, 11, 0.15);
+        background-color: rgba(34, 211, 238, 0.15);
     }
     
     QPushButton:disabled {
@@ -140,7 +140,7 @@ JARVIS_THEME_STYLESHEET = """
     
     QPushButton#primary {
         background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 #f59e0b, stop:1 #d97706);
+            stop:0 #22d3ee, stop:1 #0891b2);
         color: #0a0b0f;
         border: none;
         font-weight: 600;
@@ -148,7 +148,7 @@ JARVIS_THEME_STYLESHEET = """
     
     QPushButton#primary:hover {
         background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-            stop:0 #fbbf24, stop:1 #f59e0b);
+            stop:0 #7dd3fc, stop:1 #22d3ee);
     }
     
     QPushButton#primary:disabled {
@@ -178,7 +178,7 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QComboBox:hover {
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
     
     QComboBox::drop-down {
@@ -199,8 +199,8 @@ JARVIS_THEME_STYLESHEET = """
         color: #f4f4f5;
         border: 1px solid #27272a;
         border-radius: 8px;
-        selection-background-color: rgba(245, 158, 11, 0.15);
-        selection-color: #fbbf24;
+        selection-background-color: rgba(34, 211, 238, 0.15);
+        selection-color: #7dd3fc;
     }
     
     QCheckBox {
@@ -218,12 +218,12 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QCheckBox::indicator:hover {
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
     
     QCheckBox::indicator:checked {
-        background-color: #f59e0b;
-        border-color: #f59e0b;
+        background-color: #22d3ee;
+        border-color: #22d3ee;
     }
     
     QRadioButton {
@@ -241,12 +241,12 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QRadioButton::indicator:hover {
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
     
     QRadioButton::indicator:checked {
-        background-color: #f59e0b;
-        border-color: #f59e0b;
+        background-color: #22d3ee;
+        border-color: #22d3ee;
     }
     
     QProgressBar {
@@ -259,7 +259,7 @@ JARVIS_THEME_STYLESHEET = """
     
     QProgressBar::chunk {
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-            stop:0 #f59e0b, stop:1 #fbbf24);
+            stop:0 #22d3ee, stop:1 #7dd3fc);
         border-radius: 5px;
     }
     
@@ -282,7 +282,7 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QScrollBar::handle:vertical:hover {
-        background-color: #f59e0b;
+        background-color: #22d3ee;
     }
     
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -302,7 +302,7 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QScrollBar::handle:horizontal:hover {
-        background-color: #f59e0b;
+        background-color: #22d3ee;
     }
     
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
@@ -349,7 +349,7 @@ JARVIS_THEME_STYLESHEET = """
     
     QTabBar::tab:selected {
         background-color: #161920;
-        color: #fbbf24;
+        color: #7dd3fc;
         border-color: #27272a;
         border-bottom-color: #161920;
     }
@@ -368,7 +368,7 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QSpinBox:focus, QDoubleSpinBox:focus {
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
     
     QSpinBox::up-button, QDoubleSpinBox::up-button,
@@ -380,7 +380,7 @@ JARVIS_THEME_STYLESHEET = """
 
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
     QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
-        background-color: #f59e0b;
+        background-color: #22d3ee;
     }
 
     
@@ -398,8 +398,8 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QListWidget::item:selected {
-        background-color: rgba(245, 158, 11, 0.15);
-        color: #fbbf24;
+        background-color: rgba(34, 211, 238, 0.15);
+        color: #7dd3fc;
     }
     
     QListWidget::item:hover:!selected {
@@ -436,8 +436,8 @@ JARVIS_THEME_STYLESHEET = """
     }
     
     QMenu::item:selected {
-        background-color: rgba(245, 158, 11, 0.15);
-        color: #fbbf24;
+        background-color: rgba(34, 211, 238, 0.15);
+        color: #7dd3fc;
     }
     
     QMenu::separator {
@@ -468,17 +468,17 @@ JARVIS_THEME_STYLESHEET = """
     /* The outer chrome of the frameless HUD window */
     QWidget#hud_root {
         background-color: rgba(10, 11, 15, 245);
-        border: 1px solid rgba(245, 158, 11, 0.45);
+        border: 1px solid rgba(34, 211, 238, 0.45);
         border-radius: 10px;
     }
 
     /* Title bar across the top — drag region + brand text */
     QFrame#hud_title_bar {
         background-color: rgba(18, 20, 26, 220);
-        border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+        border-bottom: 1px solid rgba(34, 211, 238, 0.35);
     }
     QLabel#hud_title_brand {
-        color: #fbbf24;
+        color: #7dd3fc;
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 14px;
         font-weight: 700;
@@ -499,7 +499,7 @@ JARVIS_THEME_STYLESHEET = """
     }
     QPushButton#hud_title_btn:hover {
         color: #f4f4f5;
-        background-color: rgba(245, 158, 11, 0.10);
+        background-color: rgba(34, 211, 238, 0.10);
     }
     QPushButton#hud_title_btn_close:hover {
         color: #f4f4f5;
@@ -509,11 +509,11 @@ JARVIS_THEME_STYLESHEET = """
     /* Right column: live feed + system panel */
     QFrame#hud_feed_panel, QFrame#hud_system_panel {
         background-color: rgba(18, 20, 26, 180);
-        border: 1px solid rgba(245, 158, 11, 0.18);
+        border: 1px solid rgba(34, 211, 238, 0.18);
         border-radius: 6px;
     }
     QLabel#hud_panel_header {
-        color: #fbbf24;
+        color: #7dd3fc;
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 11px;
         font-weight: 700;
@@ -527,7 +527,7 @@ JARVIS_THEME_STYLESHEET = """
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 11px;
         padding: 4px 8px;
-        selection-background-color: rgba(245, 158, 11, 0.30);
+        selection-background-color: rgba(34, 211, 238, 0.30);
     }
     QLabel#hud_telemetry_row {
         color: #22d3ee;
@@ -544,9 +544,9 @@ JARVIS_THEME_STYLESHEET = """
 
     /* Activation gauge + state pill */
     QLabel#hud_state_pill {
-        color: #fbbf24;
-        background-color: rgba(245, 158, 11, 0.12);
-        border: 1px solid rgba(245, 158, 11, 0.50);
+        color: #7dd3fc;
+        background-color: rgba(34, 211, 238, 0.12);
+        border: 1px solid rgba(34, 211, 238, 0.50);
         border-radius: 10px;
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 10px;
@@ -558,7 +558,7 @@ JARVIS_THEME_STYLESHEET = """
     /* Control bar across the bottom */
     QFrame#hud_control_bar {
         background-color: rgba(18, 20, 26, 220);
-        border-top: 1px solid rgba(245, 158, 11, 0.35);
+        border-top: 1px solid rgba(34, 211, 238, 0.35);
     }
     QPushButton#hud_stop {
         background-color: #b91c1c;
@@ -578,9 +578,9 @@ JARVIS_THEME_STYLESHEET = """
         background-color: #991b1b;
     }
     QPushButton#hud_secondary_btn {
-        background-color: rgba(245, 158, 11, 0.10);
-        color: #fbbf24;
-        border: 1px solid rgba(245, 158, 11, 0.50);
+        background-color: rgba(34, 211, 238, 0.10);
+        color: #7dd3fc;
+        border: 1px solid rgba(34, 211, 238, 0.50);
         border-radius: 6px;
         padding: 8px 14px;
         font-family: 'Consolas', 'Courier New', monospace;
@@ -588,10 +588,10 @@ JARVIS_THEME_STYLESHEET = """
         letter-spacing: 2px;
     }
     QPushButton#hud_secondary_btn:hover {
-        background-color: rgba(245, 158, 11, 0.20);
+        background-color: rgba(34, 211, 238, 0.20);
     }
     QPushButton#hud_secondary_btn:pressed {
-        background-color: rgba(245, 158, 11, 0.30);
+        background-color: rgba(34, 211, 238, 0.30);
     }
     QLabel#hud_weather {
         color: #22d3ee;

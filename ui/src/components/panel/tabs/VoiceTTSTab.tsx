@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Trash2, Music } from 'lucide-react';
+import { Trash2, Gauge } from 'lucide-react';
 import { api, type TTSCacheStats } from '@/lib/api';
 import { SaveBar } from './WakeWordTab';
 
+/**
+ * Voice (TTS) settings. The system uses Piper by default — a local, near-instant
+ * voice engine. Only practical controls are exposed: which engine, and how fast
+ * Jarvis speaks. Advanced per-engine tuning lives in config.json.
+ */
 export default function VoiceTTSTab() {
-  const [engine, setEngine] = useState<'chatterbox' | 'piper'>('chatterbox');
-  const [exaggeration, setExaggeration] = useState(1.0);
-  const [cfgWeight, setCfgWeight] = useState(2.0);
-  const [voicePath, setVoicePath] = useState('');
+  const [engine, setEngine] = useState<'piper' | 'chatterbox'>('piper');
+  // Piper length_scale: <1.0 = faster speech, >1.0 = slower. Default 0.65.
+  const [speed, setSpeed] = useState(0.65);
   const [stats, setStats] = useState<TTSCacheStats>({ hits: 0, misses: 0, size_bytes: 0, count: 0 });
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -16,10 +20,8 @@ export default function VoiceTTSTab() {
     api
       .getConfig()
       .then((cfg) => {
-        setEngine((cfg.tts_engine as 'chatterbox' | 'piper') ?? 'chatterbox');
-        setExaggeration(Number(cfg.tts_chatterbox_exaggeration ?? 1.0));
-        setCfgWeight(Number(cfg.tts_chatterbox_cfg_weight ?? 2.0));
-        setVoicePath(String(cfg.tts_chatterbox_audio_prompt ?? ''));
+        setEngine((cfg.tts_engine as 'piper' | 'chatterbox') ?? 'piper');
+        setSpeed(Number(cfg.tts_piper_length_scale ?? 0.65));
       })
       .catch(() => {});
     api.ttsCacheStats().then(setStats).catch(() => {});
@@ -28,9 +30,7 @@ export default function VoiceTTSTab() {
   const save = async () => {
     await api.patchConfig({
       tts_engine: engine,
-      tts_chatterbox_exaggeration: exaggeration,
-      tts_chatterbox_cfg_weight: cfgWeight,
-      tts_chatterbox_audio_prompt: voicePath,
+      tts_piper_length_scale: speed,
     });
     setDirty(false);
     setSavedAt(Date.now());
@@ -48,35 +48,41 @@ export default function VoiceTTSTab() {
     return `${(b / 1024 / 1024).toFixed(1)} MB`;
   };
 
+  const ENGINES: { id: 'piper' | 'chatterbox'; label: string; hint: string }[] = [
+    { id: 'piper', label: 'Piper', hint: 'Fast & local (recommended)' },
+    { id: 'chatterbox', label: 'Chatterbox', hint: 'Higher quality · slower · uses GPU' },
+  ];
+
+  // Speed slider: left = faster (low length_scale), right = slower (high).
+  const speedPct = ((speed - 0.5) / (1.5 - 0.5)) * 100;
+  const speedLabel = speed <= 0.7 ? 'Fast' : speed >= 1.1 ? 'Slow' : 'Normal';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 700 }}>
       <Card>
-        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7dd3fc', display: 'block', marginBottom: 16 }}>
-          TTS Engine
-        </span>
-        <div style={{ display: 'flex', gap: 12 }}>
-          {(['chatterbox', 'piper'] as const).map((eng) => (
+        <span style={labelStyle}>Voice Engine</span>
+        <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+          {ENGINES.map((eng) => (
             <button
-              key={eng}
+              key={eng.id}
               onClick={() => {
-                setEngine(eng);
+                setEngine(eng.id);
                 setDirty(true);
               }}
               style={{
                 flex: 1,
-                padding: '12px 20px',
+                padding: '14px 18px',
                 borderRadius: 10,
-                border: `1px solid ${engine === eng ? 'rgba(34, 211, 238, 0.4)' : 'rgba(255,255,255,0.08)'}`,
-                background: engine === eng ? 'rgba(34, 211, 238, 0.1)' : 'rgba(255,255,255,0.02)',
-                color: engine === eng ? '#22d3ee' : '#5A7182',
-                fontSize: 13,
-                fontWeight: 500,
+                textAlign: 'left',
+                border: `1px solid ${engine === eng.id ? 'rgba(34, 211, 238, 0.4)' : 'rgba(255,255,255,0.08)'}`,
+                background: engine === eng.id ? 'rgba(34, 211, 238, 0.1)' : 'rgba(255,255,255,0.02)',
+                color: engine === eng.id ? '#22d3ee' : '#8aa0b2',
                 cursor: 'pointer',
-                textTransform: 'capitalize',
                 transition: 'all 0.2s',
               }}
             >
-              {eng}
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{eng.label}</div>
+              <div style={{ fontSize: 11, color: '#5A7182', marginTop: 4 }}>{eng.hint}</div>
             </button>
           ))}
         </div>
@@ -84,105 +90,42 @@ export default function VoiceTTSTab() {
 
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-          <Music size={16} color="#22d3ee" />
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7dd3fc' }}>
-            Voice Clone
+          <Gauge size={16} color="#22d3ee" />
+          <span style={labelStyle}>Speaking Speed</span>
+          <span style={{ marginLeft: 'auto', color: '#22d3ee', fontSize: 12, fontFamily: 'monospace' }}>
+            {speedLabel} · {speed.toFixed(2)}
           </span>
         </div>
         <input
-          type="text"
-          value={voicePath}
+          type="range"
+          min={0.5}
+          max={1.5}
+          step={0.05}
+          value={speed}
           onChange={(e) => {
-            setVoicePath(e.target.value);
+            setSpeed(Number(e.target.value));
             setDirty(true);
           }}
-          placeholder="C:\path\to\voice_sample.wav"
-          style={{
-            width: '100%',
-            background: 'rgba(8, 14, 28, 0.6)',
-            border: '1px solid rgba(34, 211, 238, 0.15)',
-            borderRadius: 8,
-            padding: '8px 12px',
-            color: '#e6f1ff',
-            fontSize: 12,
-            fontFamily: 'monospace',
-            outline: 'none',
-          }}
+          style={sliderStyle(speedPct)}
         />
-        <p style={{ fontSize: 11, color: '#5A7182', marginTop: 6 }}>
-          Path to a 5–15 second WAV file. Chatterbox will clone this voice for all replies.
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+          <span style={{ fontSize: 11, color: '#5A7182' }}>← Faster</span>
+          <span style={{ fontSize: 11, color: '#5A7182' }}>Slower →</span>
+        </div>
+        <p style={{ fontSize: 11, color: '#5A7182', marginTop: 8 }}>
+          Applies to Piper. Lower = quicker replies.
         </p>
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        <Card>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <label style={{ color: '#7dd3fc', fontSize: 12 }}>Exaggeration</label>
-              <span style={{ color: '#22d3ee', fontSize: 11, fontFamily: 'monospace' }}>{exaggeration.toFixed(1)}</span>
-            </div>
-            <input
-              type="range"
-              min={0.5}
-              max={2}
-              step={0.1}
-              value={exaggeration}
-              onChange={(e) => {
-                setExaggeration(Number(e.target.value));
-                setDirty(true);
-              }}
-              style={sliderStyle(((exaggeration - 0.5) / 1.5) * 100)}
-            />
-          </div>
-        </Card>
-
-        <Card>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <label style={{ color: '#7dd3fc', fontSize: 12 }}>CFG Weight</label>
-              <span style={{ color: '#22d3ee', fontSize: 11, fontFamily: 'monospace' }}>{cfgWeight.toFixed(1)}</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={5}
-              step={0.1}
-              value={cfgWeight}
-              onChange={(e) => {
-                setCfgWeight(Number(e.target.value));
-                setDirty(true);
-              }}
-              style={sliderStyle(((cfgWeight - 1) / 4) * 100)}
-            />
-          </div>
-        </Card>
-      </div>
-
       <Card>
-        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#7dd3fc', display: 'block', marginBottom: 16 }}>
-          TTS Cache
-        </span>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+        <span style={labelStyle}>TTS Cache</span>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, margin: '16px 0' }}>
           <StatBox label="Hits" value={String(stats.hits)} color="#34d399" />
           <StatBox label="Misses" value={String(stats.misses)} color="#fbbf24" />
           <StatBox label="Entries" value={String(stats.count)} color="#22d3ee" />
           <StatBox label="Size" value={fmtSize(stats.size_bytes)} color="#22d3ee" />
         </div>
-        <button
-          onClick={clearCache}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '8px 14px',
-            borderRadius: 8,
-            border: '1px solid rgba(248, 113, 113, 0.2)',
-            background: 'rgba(248, 113, 113, 0.05)',
-            color: '#f87171',
-            fontSize: 12,
-            cursor: 'pointer',
-          }}
-        >
+        <button onClick={clearCache} style={clearBtnStyle}>
           <Trash2 size={14} />
           Clear Cache
         </button>
@@ -192,6 +135,27 @@ export default function VoiceTTSTab() {
     </div>
   );
 }
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '0.1em',
+  textTransform: 'uppercase',
+  color: '#7dd3fc',
+};
+
+const clearBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 14px',
+  borderRadius: 8,
+  border: '1px solid rgba(248, 113, 113, 0.2)',
+  background: 'rgba(248, 113, 113, 0.05)',
+  color: '#f87171',
+  fontSize: 12,
+  cursor: 'pointer',
+};
 
 function sliderStyle(pct: number): React.CSSProperties {
   return {
@@ -220,9 +184,7 @@ function StatBox({ label, value, color }: { label: string; value: string; color:
       <div style={{ fontSize: 18, fontWeight: 600, color, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>
         {value}
       </div>
-      <div style={{ fontSize: 10, color: '#5A7182', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-        {label}
-      </div>
+      <div style={{ fontSize: 10, color: '#5A7182', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
     </div>
   );
 }

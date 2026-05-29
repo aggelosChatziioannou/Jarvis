@@ -1,0 +1,1500 @@
+{"text": "μπορείς να βγάλε screenshot τώρα", "intent": "system_control"}
+{"text": "timer for 2 hours", "intent": "timer_set"}
+{"text": "play Νίκος Πορτοκάλογλου", "intent": "spotify_play"}
+{"text": "begin a timer of 20 λεπτά", "intent": "timer_set"}
+{"text": "τι ώρα είναι στην Tokyo", "intent": "time_current"}
+{"text": "ε ησύχασε ευχαριστώ", "intent": "stop"}
+{"text": "τι καιρό κάνει στην Θεσσαλονίκη", "intent": "weather_current"}
+{"text": "τερμάτισε το Photoshop", "intent": "app_close"}
+{"text": "τι λες για τον Διονύσης Σαββόπουλος", "intent": "general_chat"}
+{"text": "close Chrome", "intent": "app_close"}
+{"text": "remind me in 2 hours", "intent": "timer_set"}
+{"text": "βάλε Adele στο spotify", "intent": "spotify_play"}
+{"text": "what's the weather in Ρώμη", "intent": "weather_current"}
+{"text": "ώρα στην Λονδίνο", "intent": "time_current"}
+{"text": "stop OBS", "intent": "app_close"}
+{"text": "shut down the computer", "intent": "system_control"}
+{"text": "time in Volos", "intent": "time_current"}
+{"text": "play Smells Like Teen Spirit", "intent": "spotify_play"}
+{"text": "παίξε Ονειρεύομαι από Παύλος Σιδηρόπουλος", "intent": "spotify_play"}
+{"text": "παίξε την playlist Workout Mix", "intent": "spotify_play"}
+{"text": "άνοιξε το Chrome", "intent": "app_launch"}
+{"text": "ποιο τραγούδι είναι αυτό", "intent": "spotify_query"}
+{"text": "what's the weather in Volos", "intent": "weather_current"}
+{"text": "can you what's today's date", "intent": "time_date"}
+{"text": "stop Chrome", "intent": "app_close"}
+{"text": "ώρα στην Θεσσαλονίκη", "intent": "time_current"}
+{"text": "please lock my pc for me", "intent": "system_control"}
+{"text": "παίξε μου μουσική", "intent": "spotify_play"}
+{"text": "what's the time in Tokyo", "intent": "time_current"}
+{"text": "what", "intent": "clarification"}
+{"text": "wake me at noon", "intent": "alarm_set"}
+{"text": "άνοιξε το OBS", "intent": "app_launch"}
+{"text": "start a timer for 15 minutes", "intent": "timer_set"}
+{"text": "how's the weather in Ιωάννινα", "intent": "weather_current"}
+{"text": "πες μου ένα ανέκδοτο", "intent": "general_chat"}
+{"text": "φόρτωσε το Slack", "intent": "app_launch"}
+{"text": "η πρόγνωση για αύριο", "intent": "weather_forecast"}
+{"text": "time in Berlin", "intent": "time_current"}
+{"text": "take a screenshot", "intent": "system_control"}
+{"text": "what's the time in Athens", "intent": "time_current"}
+{"text": "previous", "intent": "spotify_control"}
+{"text": "could you pardon", "intent": "clarification"}
+{"text": "τερμάτισε εξαναγκαστικά το VS Code", "intent": "app_close"}
+{"text": "shush thanks", "intent": "stop"}
+{"text": "what's the weather like tomorrow in Παρίσι", "intent": "weather_forecast"}
+{"text": "next", "intent": "spotify_control"}
+{"text": "play some Σωκράτης Μάλαμας", "intent": "spotify_play"}
+{"text": "ενεργοποίησε το Slack", "intent": "app_launch"}
+{"text": "please reboot please", "intent": "system_control"}
+{"text": "wake me up at 11 το βράδυ", "intent": "alarm_set"}
+{"text": "set a timer for 30 δευτερόλεπτα", "intent": "timer_set"}
+{"text": "ξεκίνα μουσική", "intent": "spotify_play"}
+{"text": "close OBS", "intent": "app_close"}
+{"text": "what time is it now", "intent": "time_current"}
+{"text": "τι ήταν αυτό ευχαριστώ", "intent": "clarification"}
+{"text": "αντίστροφη μέτρηση 2 ώρες", "intent": "timer_set"}
+{"text": "alright what's today's date please", "intent": "time_date"}
+{"text": "can you repeat", "intent": "clarification"}
+{"text": "quieter", "intent": "spotify_control"}
+{"text": "σβήσε τον υπολογιστή", "intent": "system_control"}
+{"text": "please can you repeat right now", "intent": "clarification"}
+{"text": "ε κάνε like το τραγούδι ευχαριστώ", "intent": "spotify_control"}
+{"text": "ξυπνητήρι στις 11 το βράδυ παρακαλώ", "intent": "alarm_set"}
+{"text": "παρακαλώ σταμάτα σε παρακαλώ", "intent": "stop"}
+{"text": "set an alarm for 7 am", "intent": "alarm_set"}
+{"text": "άνοιξε την εφαρμογή Word", "intent": "app_launch"}
+{"text": "πες μου για αυτό το τραγούδι", "intent": "spotify_query"}
+{"text": "τι καιρό θα κάνει αύριο στην Rome", "intent": "weather_forecast"}
+{"text": "stop Word", "intent": "app_close"}
+{"text": "is this Νίκος Πορτοκάλογλου", "intent": "spotify_query"}
+{"text": "jarvis δυνατά", "intent": "spotify_control"}
+{"text": "play my Chill Vibes playlist", "intent": "spotify_play"}
+{"text": "are you a robot", "intent": "general_chat"}
+{"text": "timer for 30 δευτερόλεπτα", "intent": "timer_set"}
+{"text": "what's the time in Λονδίνο", "intent": "time_current"}
+{"text": "what's the weather like tomorrow in Καβάλα", "intent": "weather_forecast"}
+{"text": "θα χιονίσει αυτό το σαββατοκύριακο", "intent": "weather_forecast"}
+{"text": "πρόγνωση για την Ρώμη", "intent": "weather_forecast"}
+{"text": "what's the forecast for Thessaloniki", "intent": "weather_forecast"}
+{"text": "κάνε restart", "intent": "system_control"}
+{"text": "increase brightness", "intent": "system_control"}
+{"text": "what's the weather in Πάτρα", "intent": "weather_current"}
+{"text": "shut down Excel", "intent": "app_close"}
+{"text": "ξεκίνα να παίζεις Coldplay", "intent": "spotify_play"}
+{"text": "jarvis πώς πάει ευχαριστώ", "intent": "general_chat"}
+{"text": "who wrote this song", "intent": "spotify_query"}
+{"text": "okay what's tomorrow's date", "intent": "time_date"}
+{"text": "ένταση συστήματος πάνω παρακαλώ", "intent": "system_control"}
+{"text": "αντίστροφη μέτρηση μισή ώρα", "intent": "timer_set"}
+{"text": "θέλω να χρησιμοποιήσω το Discord", "intent": "app_launch"}
+{"text": "άνοιξε το Spotify", "intent": "app_launch"}
+{"text": "θέλω ξυπνητήρι στις 5 το πρωί", "intent": "alarm_set"}
+{"text": "can you i didn't hear you right now", "intent": "clarification"}
+{"text": "παρακαλώ ένταση συστήματος πάνω τώρα", "intent": "system_control"}
+{"text": "ανέβασε την ένταση", "intent": "spotify_control"}
+{"text": "i'm feeling sad", "intent": "general_chat"}
+{"text": "what's the weather", "intent": "weather_current"}
+{"text": "πρόγνωση για την Ρόδο", "intent": "weather_forecast"}
+{"text": "κλείσε ολόκληρο το Calculator", "intent": "app_close"}
+{"text": "time in Athens", "intent": "time_current"}
+{"text": "is this Eminem", "intent": "spotify_query"}
+{"text": "begin a timer of 15 minutes", "intent": "timer_set"}
+{"text": "βάλε ανακάτεμα", "intent": "spotify_control"}
+{"text": "is this Kendrick Lamar", "intent": "spotify_query"}
+{"text": "πρόγνωση για την Λάρισα", "intent": "weather_forecast"}
+{"text": "τι ώρα είναι στην Volos", "intent": "time_current"}
+{"text": "βάλε χρονόμετρο για 2 hours", "intent": "timer_set"}
+{"text": "start playing Kendrick Lamar", "intent": "spotify_play"}
+{"text": "could you is today a holiday thanks", "intent": "time_date"}
+{"text": "hey jarvis louder please for me", "intent": "clarification"}
+{"text": "ξεκίνα χρονόμετρο για 30 δευτερόλεπτα", "intent": "timer_set"}
+{"text": "βγες από το Slack", "intent": "app_close"}
+{"text": "τι λες για τον Taylor Swift", "intent": "general_chat"}
+{"text": "wake me in 20 λεπτά", "intent": "timer_set"}
+{"text": "open Word", "intent": "app_launch"}
+{"text": "hey jarvis what's today's date please", "intent": "time_date"}
+{"text": "what's the weather like tomorrow in Ηράκλειο", "intent": "weather_forecast"}
+{"text": "μπορείς να τι ημερομηνία έχουμε τώρα", "intent": "time_date"}
+{"text": "jarvis cancel please", "intent": "stop"}
+{"text": "what do you think of Adele", "intent": "general_chat"}
+{"text": "alarm for 3 pm", "intent": "alarm_set"}
+{"text": "παίξε το Είμαι Αητός", "intent": "spotify_play"}
+{"text": "kill Photoshop", "intent": "app_close"}
+{"text": "βάλε το ξυπνητήρι στις 3 pm", "intent": "alarm_set"}
+{"text": "what's the forecast for Larissa", "intent": "weather_forecast"}
+{"text": "βάλε το άλμπουμ Thriller", "intent": "spotify_play"}
+{"text": "βάλε το ξυπνητήρι στις 11 το βράδυ", "intent": "alarm_set"}
+{"text": "fire up OBS", "intent": "app_launch"}
+{"text": "boot up VS Code", "intent": "app_launch"}
+{"text": "alright stop it right now", "intent": "stop"}
+{"text": "what do you think of Billie Eilish", "intent": "general_chat"}
+{"text": "παρακαλώ είναι αργία σήμερα τώρα", "intent": "time_date"}
+{"text": "τι λες για τον Πυξ Λαξ", "intent": "general_chat"}
+{"text": "ε κλείσε το shuffle τώρα", "intent": "spotify_control"}
+{"text": "βάλε χρονόμετρο για 10 minutes", "intent": "timer_set"}
+{"text": "pardon", "intent": "clarification"}
+{"text": "countdown for 10 minutes", "intent": "timer_set"}
+{"text": "what's the time in Ιωάννινα", "intent": "time_current"}
+{"text": "play Πυξ Λαξ", "intent": "spotify_play"}
+{"text": "speak up", "intent": "clarification"}
+{"text": "ωραία πώς λέγεται αυτό το τραγούδι", "intent": "spotify_query"}
+{"text": "ησυχία", "intent": "stop"}
+{"text": "τι ώρα είναι στην London", "intent": "time_current"}
+{"text": "can you silence thanks", "intent": "stop"}
+{"text": "who is the artist please", "intent": "spotify_query"}
+{"text": "open Slack", "intent": "app_launch"}
+{"text": "εντάξει σταμάτα ευχαριστώ", "intent": "stop"}
+{"text": "ε ένταση συστήματος πάνω", "intent": "system_control"}
+{"text": "τι καιρό θα κάνει αύριο στην Χανιά", "intent": "weather_forecast"}
+{"text": "let's hear The Beatles", "intent": "spotify_play"}
+{"text": "remind me in 15 minutes", "intent": "timer_set"}
+{"text": "τι ώρα είναι στην Thessaloniki", "intent": "time_current"}
+{"text": "will it rain tomorrow", "intent": "weather_forecast"}
+{"text": "timer for μισή ώρα", "intent": "timer_set"}
+{"text": "okay what's the date", "intent": "time_date"}
+{"text": "ξυπνητήρι στις μεσημέρι παρακαλώ", "intent": "alarm_set"}
+{"text": "can you what's the date for me", "intent": "time_date"}
+{"text": "δεν χρειάζομαι άλλο το Calculator", "intent": "app_close"}
+{"text": "κλείσε ολόκληρο το Word", "intent": "app_close"}
+{"text": "ένα χρονόμετρο 10 minutes", "intent": "timer_set"}
+{"text": "τι ώρα είναι στην Athens", "intent": "time_current"}
+{"text": "πώς είναι ο καιρός", "intent": "weather_current"}
+{"text": "i want to use Chrome", "intent": "app_launch"}
+{"text": "what's currently playing on spotify", "intent": "spotify_query"}
+{"text": "παρακαλώ επανέλαβέ το τώρα", "intent": "clarification"}
+{"text": "βγάλε screenshot ευχαριστώ", "intent": "system_control"}
+{"text": "ξεκίνα χρονόμετρο για 45 λεπτά", "intent": "timer_set"}
+{"text": "μπορείς να τι μέρα είναι σήμερα", "intent": "time_date"}
+{"text": "okay turn on dark mode right now", "intent": "system_control"}
+{"text": "stop", "intent": "stop"}
+{"text": "φτιάξε ένα ξυπνητήρι για 7 am", "intent": "alarm_set"}
+{"text": "alarm at 8:30 το πρωί please", "intent": "alarm_set"}
+{"text": "σταμάτα τώρα", "intent": "stop"}
+{"text": "sorry what right now", "intent": "clarification"}
+{"text": "μπορείς να τι μέρα έχουμε", "intent": "time_date"}
+{"text": "begin a timer of 10 λεπτά", "intent": "timer_set"}
+{"text": "βάλε Άννα Βίσση", "intent": "spotify_play"}
+{"text": "εντάξει άσε το τώρα", "intent": "stop"}
+{"text": "μπορείς να τι μέρα έχουμε ευχαριστώ", "intent": "time_date"}
+{"text": "βάλε ξυπνητήρι για 8:30 am", "intent": "alarm_set"}
+{"text": "τι ώρα είναι στην Ρώμη", "intent": "time_current"}
+{"text": "μπορείς να ανέβασε φωτεινότητα", "intent": "system_control"}
+{"text": "παρακαλώ ποια ημερομηνία είναι σε παρακαλώ", "intent": "time_date"}
+{"text": "how's the weather in Rome", "intent": "weather_current"}
+{"text": "τι ώρα είναι", "intent": "time_current"}
+{"text": "i need a timer for 30 seconds", "intent": "timer_set"}
+{"text": "time in Patras", "intent": "time_current"}
+{"text": "turn on shuffle", "intent": "spotify_control"}
+{"text": "δεν χρειάζομαι άλλο το Photoshop", "intent": "app_close"}
+{"text": "ένταση συστήματος κάτω", "intent": "system_control"}
+{"text": "remind me in 10 λεπτά", "intent": "timer_set"}
+{"text": "i want to use Discord", "intent": "app_launch"}
+{"text": "resume", "intent": "spotify_control"}
+{"text": "i want to listen to Eminem", "intent": "spotify_play"}
+{"text": "what's the weather like tomorrow in Ιωάννινα", "intent": "weather_forecast"}
+{"text": "boot up Discord", "intent": "app_launch"}
+{"text": "wake me up at 7 το πρωί", "intent": "alarm_set"}
+{"text": "ωραία πες το πιο αργά τώρα", "intent": "clarification"}
+{"text": "time in New York", "intent": "time_current"}
+{"text": "βάλε το σε επανάληψη", "intent": "spotify_control"}
+{"text": "πάρε στιγμιότυπο οθόνης", "intent": "system_control"}
+{"text": "play Ζήτω το ελληνικό τραγούδι by Arctic Monkeys", "intent": "spotify_play"}
+{"text": "κλείσε το Excel", "intent": "app_close"}
+{"text": "mute", "intent": "spotify_control"}
+{"text": "pause spotify", "intent": "spotify_control"}
+{"text": "exit VS Code", "intent": "app_close"}
+{"text": "βγες από το Photoshop", "intent": "app_close"}
+{"text": "κλείσε το Photoshop", "intent": "app_close"}
+{"text": "τρέξε το Notepad", "intent": "app_launch"}
+{"text": "ποια ημερομηνία είναι", "intent": "time_date"}
+{"text": "θα βρέξει αύριο", "intent": "weather_forecast"}
+{"text": "never mind", "intent": "stop"}
+{"text": "what's the time in Πάτρα", "intent": "time_current"}
+{"text": "ε τι ημερομηνία έχουμε ευχαριστώ", "intent": "time_date"}
+{"text": "τι καιρό θα κάνει αύριο στην Λονδίνο", "intent": "weather_forecast"}
+{"text": "resume playback", "intent": "spotify_control"}
+{"text": "alright what date is it for me", "intent": "time_date"}
+{"text": "ξεκίνησε το VS Code", "intent": "app_launch"}
+{"text": "time in London", "intent": "time_current"}
+{"text": "θα χρειαστώ μπουφάν", "intent": "weather_current"}
+{"text": "ωραία ποια ημέρα ήταν χθες", "intent": "time_date"}
+{"text": "θέλω να χρησιμοποιήσω το Chrome", "intent": "app_launch"}
+{"text": "παίξε το Ζήτω το ελληνικό τραγούδι", "intent": "spotify_play"}
+{"text": "πιο σιγά", "intent": "spotify_control"}
+{"text": "quit Steam", "intent": "app_close"}
+{"text": "θέλω να χρησιμοποιήσω το Slack", "intent": "app_launch"}
+{"text": "play my Discover Weekly playlist", "intent": "spotify_play"}
+{"text": "χρειάζομαι χρονόμετρο για 10 minutes", "intent": "timer_set"}
+{"text": "χαμήλωσε φωτεινότητα", "intent": "system_control"}
+{"text": "εντάξει σβήσε τον υπολογιστή σε παρακαλώ", "intent": "system_control"}
+{"text": "jarvis is today a holiday thanks", "intent": "time_date"}
+{"text": "πώς είναι ο καιρός στην Χανιά", "intent": "weather_current"}
+{"text": "play Imagine", "intent": "spotify_play"}
+{"text": "okay pardon thanks", "intent": "clarification"}
+{"text": "what's the forecast for Ηράκλειο", "intent": "weather_forecast"}
+{"text": "what do you think of Eleftheria Arvanitaki", "intent": "general_chat"}
+{"text": "is this Arctic Monkeys", "intent": "spotify_query"}
+{"text": "βάλε Eleftheria Arvanitaki", "intent": "spotify_play"}
+{"text": "weather in Ηράκλειο", "intent": "weather_current"}
+{"text": "συνέχισε", "intent": "spotify_control"}
+{"text": "θύμισέ μου σε 45 minutes", "intent": "timer_set"}
+{"text": "πρόγνωση για την Χανιά", "intent": "weather_forecast"}
+{"text": "παίξε λίγο Διονύσης Σαββόπουλος", "intent": "spotify_play"}
+{"text": "παρακαλώ βάλε ένταση στο 50 παρακαλώ", "intent": "spotify_control"}
+{"text": "louder please", "intent": "clarification"}
+{"text": "είναι αυτό ο Σωκράτης Μάλαμας", "intent": "spotify_query"}
+{"text": "begin a timer of 20 minutes", "intent": "timer_set"}
+{"text": "πιο δυνατά παρακαλώ παρακαλώ", "intent": "clarification"}
+{"text": "τι μέρα έχουμε σε παρακαλώ", "intent": "time_date"}
+{"text": "άνοιξε το Calculator", "intent": "app_launch"}
+{"text": "what's the forecast for Paris", "intent": "weather_forecast"}
+{"text": "what's the forecast", "intent": "weather_forecast"}
+{"text": "παρακαλώ αποσυνδέσου τώρα", "intent": "system_control"}
+{"text": "what's the time in Berlin", "intent": "time_current"}
+{"text": "ε αποθήκευσε το τραγούδι ευχαριστώ", "intent": "spotify_control"}
+{"text": "ε άλλη μια φορά ευχαριστώ", "intent": "clarification"}
+{"text": "ώρα στην Χανιά", "intent": "time_current"}
+{"text": "jarvis πέρνα στο επόμενο παρακαλώ", "intent": "spotify_control"}
+{"text": "set an alarm for 5 το πρωί", "intent": "alarm_set"}
+{"text": "πρόγνωση για την Θεσσαλονίκη", "intent": "weather_forecast"}
+{"text": "τι καιρό θα κάνει αύριο", "intent": "weather_forecast"}
+{"text": "ένταση συστήματος πάνω", "intent": "system_control"}
+{"text": "σταμάτα ευχαριστώ", "intent": "stop"}
+{"text": "καιρός το σαββατοκύριακο", "intent": "weather_forecast"}
+{"text": "please abort please", "intent": "stop"}
+{"text": "launch Chrome", "intent": "app_launch"}
+{"text": "παίζει μουσική τώρα", "intent": "spotify_query"}
+{"text": "load Chrome", "intent": "app_launch"}
+{"text": "jarvis επόμενο κομμάτι ευχαριστώ", "intent": "spotify_control"}
+{"text": "ώρα στην Ιωάννινα", "intent": "time_current"}
+{"text": "τι καιρό θα κάνει αύριο στην Βόλο", "intent": "weather_forecast"}
+{"text": "jarvis είναι αργία σήμερα ευχαριστώ", "intent": "time_date"}
+{"text": "how's the weather in Tokyo", "intent": "weather_current"}
+{"text": "γεια jarvis τι μέρα είναι σήμερα παρακαλώ", "intent": "time_date"}
+{"text": "can you shush", "intent": "stop"}
+{"text": "what's the temperature in Θεσσαλονίκη", "intent": "weather_current"}
+{"text": "κλείσε ολόκληρο το VS Code", "intent": "app_close"}
+{"text": "say that again", "intent": "clarification"}
+{"text": "play Adele on spotify", "intent": "spotify_play"}
+{"text": "μπορείς να άσε το παρακαλώ", "intent": "stop"}
+{"text": "είσαι ρομπότ", "intent": "general_chat"}
+{"text": "what's the forecast for Patras", "intent": "weather_forecast"}
+{"text": "open the VS Code app", "intent": "app_launch"}
+{"text": "σώπασε", "intent": "stop"}
+{"text": "open OBS", "intent": "app_launch"}
+{"text": "πρόγνωση για την Παρίσι", "intent": "weather_forecast"}
+{"text": "τι καιρό κάνει στην Heraklion", "intent": "weather_current"}
+{"text": "σίγαση συστήματος", "intent": "system_control"}
+{"text": "σίγαση τώρα", "intent": "spotify_control"}
+{"text": "βάλε Coldplay στο spotify", "intent": "spotify_play"}
+{"text": "τρέξε το OBS", "intent": "app_launch"}
+{"text": "ευχαριστώ", "intent": "general_chat"}
+{"text": "how warm is it", "intent": "weather_current"}
+{"text": "what's the forecast for Ιωάννινα", "intent": "weather_forecast"}
+{"text": "what's the forecast for Berlin", "intent": "weather_forecast"}
+{"text": "παρακαλώ επανέλαβέ το ευχαριστώ", "intent": "clarification"}
+{"text": "please what's in my queue please", "intent": "spotify_query"}
+{"text": "είναι αυτό ο Kendrick Lamar", "intent": "spotify_query"}
+{"text": "is today a holiday", "intent": "time_date"}
+{"text": "is this Coldplay", "intent": "spotify_query"}
+{"text": "πώς λέγεται αυτό το τραγούδι", "intent": "spotify_query"}
+{"text": "μη μιλάς", "intent": "stop"}
+{"text": "weather for the week", "intent": "weather_forecast"}
+{"text": "what's the time in Θεσσαλονίκη", "intent": "time_current"}
+{"text": "ενεργοποίησε το Chrome", "intent": "app_launch"}
+{"text": "πρόγνωση για την Athens", "intent": "weather_forecast"}
+{"text": "πες το πάλι", "intent": "clarification"}
+{"text": "repeat off", "intent": "spotify_control"}
+{"text": "close Slack", "intent": "app_close"}
+{"text": "close the Spotify app", "intent": "app_close"}
+{"text": "βάλε τη λίστα Discover Weekly", "intent": "spotify_play"}
+{"text": "άνοιξε το Discord", "intent": "app_launch"}
+{"text": "alright who wrote this song right now", "intent": "spotify_query"}
+{"text": "βάλε το ξυπνητήρι στις 7 το πρωί", "intent": "alarm_set"}
+{"text": "queue up Σε θέλω", "intent": "spotify_play"}
+{"text": "set an alarm for 5 in the morning", "intent": "alarm_set"}
+{"text": "πρόγνωση για την Καβάλα", "intent": "weather_forecast"}
+{"text": "begin a timer of 1 ώρα", "intent": "timer_set"}
+{"text": "start a timer for 2 hours", "intent": "timer_set"}
+{"text": "i need an alarm at 11 το βράδυ", "intent": "alarm_set"}
+{"text": "wake me up at μεσημέρι", "intent": "alarm_set"}
+{"text": "hello", "intent": "general_chat"}
+{"text": "γεια jarvis πώς λέγεται αυτό το τραγούδι παρακαλώ", "intent": "spotify_query"}
+{"text": "i want to use VS Code", "intent": "app_launch"}
+{"text": "σου αρέσει η μουσική", "intent": "general_chat"}
+{"text": "καιρός στην Καβάλα", "intent": "weather_current"}
+{"text": "what's the forecast for Rome", "intent": "weather_forecast"}
+{"text": "exit Steam", "intent": "app_close"}
+{"text": "ώρα στην Ρώμη", "intent": "time_current"}
+{"text": "set the alarm to 5 το πρωί", "intent": "alarm_set"}
+{"text": "βάλε ξυπνητήρι για noon", "intent": "alarm_set"}
+{"text": "set the alarm to 3 το μεσημέρι", "intent": "alarm_set"}
+{"text": "είναι αυτό ο Eminem", "intent": "spotify_query"}
+{"text": "fire up Slack", "intent": "app_launch"}
+{"text": "γεια jarvis πώς λέγεται αυτό το τραγούδι", "intent": "spotify_query"}
+{"text": "ωραία τι ημερομηνία είναι αύριο ευχαριστώ", "intent": "time_date"}
+{"text": "tell me the time", "intent": "time_current"}
+{"text": "πόσοι βαθμοί στην Παρίσι", "intent": "weather_current"}
+{"text": "ε δεν κατάλαβα", "intent": "clarification"}
+{"text": "ωραία ποιος το έγραψε", "intent": "spotify_query"}
+{"text": "play the song Είμαι Αητός", "intent": "spotify_play"}
+{"text": "βγες από το Excel", "intent": "app_close"}
+{"text": "τι καιρό κάνει στην Patras", "intent": "weather_current"}
+{"text": "αντίστροφη μέτρηση 10 λεπτά", "intent": "timer_set"}
+{"text": "what's the forecast for Heraklion", "intent": "weather_forecast"}
+{"text": "hey jarvis pause the music for me", "intent": "spotify_control"}
+{"text": "φτιάξε ένα ξυπνητήρι για 3 το μεσημέρι", "intent": "alarm_set"}
+{"text": "okay stop", "intent": "stop"}
+{"text": "ξυπνητήρι για μεσημέρι", "intent": "alarm_set"}
+{"text": "τι ώρα είναι στην Rome", "intent": "time_current"}
+{"text": "φτιάξε ένα ξυπνητήρι για 5 το πρωί", "intent": "alarm_set"}
+{"text": "καλημέρα", "intent": "general_chat"}
+{"text": "σταμάτα", "intent": "stop"}
+{"text": "ώρα στην Λάρισα", "intent": "time_current"}
+{"text": "alarm at 7 το πρωί please", "intent": "alarm_set"}
+{"text": "please tell me today's date right now", "intent": "time_date"}
+{"text": "jarvis lock the computer right now", "intent": "system_control"}
+{"text": "κλείσε τον υπολογιστή", "intent": "system_control"}
+{"text": "stop the music", "intent": "spotify_control"}
+{"text": "what's the time in Αθήνα", "intent": "time_current"}
+{"text": "could you system volume up right now", "intent": "system_control"}
+{"text": "άνοιξε την εφαρμογή Discord", "intent": "app_launch"}
+{"text": "start a timer for 1 ώρα", "intent": "timer_set"}
+{"text": "αρκετά", "intent": "stop"}
+{"text": "could you no more for me", "intent": "stop"}
+{"text": "do you like music", "intent": "general_chat"}
+{"text": "ξεκίνησε το Slack", "intent": "app_launch"}
+{"text": "what's the temperature in Rome", "intent": "weather_current"}
+{"text": "what's the weather like tomorrow in Larissa", "intent": "weather_forecast"}
+{"text": "τι λες για τον Eleftheria Arvanitaki", "intent": "general_chat"}
+{"text": "τι παίζει τώρα στο spotify", "intent": "spotify_query"}
+{"text": "what's the weather like tomorrow in Αθήνα", "intent": "weather_forecast"}
+{"text": "can you reboot please", "intent": "system_control"}
+{"text": "set a timer for 20 minutes", "intent": "timer_set"}
+{"text": "χρονόμετρο για 30 seconds", "intent": "timer_set"}
+{"text": "wake me in μισή ώρα", "intent": "timer_set"}
+{"text": "εντάξει ξέχασέ το σε παρακαλώ", "intent": "stop"}
+{"text": "άνοιξε το Slack", "intent": "app_launch"}
+{"text": "hey jarvis lock my pc right now", "intent": "system_control"}
+{"text": "start VS Code", "intent": "app_launch"}
+{"text": "is this Πυξ Λαξ", "intent": "spotify_query"}
+{"text": "launch VS Code", "intent": "app_launch"}
+{"text": "παίξε το Ονειρεύομαι", "intent": "spotify_play"}
+{"text": "play the album Ρεμπέτικα τραγούδια", "intent": "spotify_play"}
+{"text": "ώρα στην Καβάλα", "intent": "time_current"}
+{"text": "χρειάζομαι χρονόμετρο για 15 minutes", "intent": "timer_set"}
+{"text": "please put the computer to sleep please", "intent": "system_control"}
+{"text": "ώρα στην Heraklion", "intent": "time_current"}
+{"text": "βάλε τη λίστα Επικά Rock", "intent": "spotify_play"}
+{"text": "φόρτωσε το Chrome", "intent": "app_launch"}
+{"text": "τι καιρό κάνει στην Tokyo", "intent": "weather_current"}
+{"text": "ωραία ξέχασέ το ευχαριστώ", "intent": "stop"}
+{"text": "start a timer for 5 minutes", "intent": "timer_set"}
+{"text": "γεια jarvis κάνε αποσύνδεση παρακαλώ", "intent": "system_control"}
+{"text": "πώς είναι ο καιρός στην Rome", "intent": "weather_current"}
+{"text": "βάλε λίγο Eleftheria Arvanitaki", "intent": "spotify_play"}
+{"text": "let's have a chat thanks", "intent": "general_chat"}
+{"text": "hey jarvis pause the music", "intent": "spotify_control"}
+{"text": "καιρός στην Larissa", "intent": "weather_current"}
+{"text": "ώρα στην Ηράκλειο", "intent": "time_current"}
+{"text": "παρακαλώ από ποια χρονιά είναι", "intent": "spotify_query"}
+{"text": "χρειάζομαι χρονόμετρο για 15 λεπτά", "intent": "timer_set"}
+{"text": "is this Adele", "intent": "spotify_query"}
+{"text": "ξυπνητήρι για 3 pm", "intent": "alarm_set"}
+{"text": "could you can you repeat thanks", "intent": "clarification"}
+{"text": "could you what date is it please", "intent": "time_date"}
+{"text": "ωραία ποια ημερομηνία είναι", "intent": "time_date"}
+{"text": "ξεκίνα το Chrome", "intent": "app_launch"}
+{"text": "πρόγνωση για την Λονδίνο", "intent": "weather_forecast"}
+{"text": "τι ημερομηνία είναι αύριο", "intent": "time_date"}
+{"text": "τι καιρό κάνει στην Paris", "intent": "weather_current"}
+{"text": "θέλω ξυπνητήρι στις 11 pm", "intent": "alarm_set"}
+{"text": "should i bring an umbrella tomorrow", "intent": "weather_forecast"}
+{"text": "τι λες για τον Coldplay", "intent": "general_chat"}
+{"text": "hey jarvis i didn't understand please", "intent": "clarification"}
+{"text": "could you what day is it please", "intent": "time_date"}
+{"text": "jarvis what was that thanks", "intent": "clarification"}
+{"text": "σ' αγαπώ", "intent": "general_chat"}
+{"text": "can you stop it", "intent": "stop"}
+{"text": "wake me at 3 το μεσημέρι", "intent": "alarm_set"}
+{"text": "πες μου κάτι ενδιαφέρον", "intent": "general_chat"}
+{"text": "exit Slack", "intent": "app_close"}
+{"text": "βάλε Tool", "intent": "spotify_play"}
+{"text": "alarm for 11 το βράδυ", "intent": "alarm_set"}
+{"text": "πες μου την ημερομηνία σε παρακαλώ", "intent": "time_date"}
+{"text": "τι ώρα είναι στην Παρίσι", "intent": "time_current"}
+{"text": "turn off dark mode for me", "intent": "system_control"}
+{"text": "begin a timer of 2 hours", "intent": "timer_set"}
+{"text": "resume right now", "intent": "spotify_control"}
+{"text": "ξυπνητήρι στις 7 am παρακαλώ", "intent": "alarm_set"}
+{"text": "φόρτωσε το Spotify", "intent": "app_launch"}
+{"text": "πρόγνωση για την Ηράκλειο", "intent": "weather_forecast"}
+{"text": "ένταση κάτω", "intent": "spotify_control"}
+{"text": "γεια jarvis ένταση συστήματος κάτω τώρα", "intent": "system_control"}
+{"text": "ωραία βάλε τον υπολογιστή σε αναμονή", "intent": "system_control"}
+{"text": "restart the computer", "intent": "system_control"}
+{"text": "hey jarvis what date is tomorrow for me", "intent": "time_date"}
+{"text": "μπορείς να σταμάτα ευχαριστώ", "intent": "stop"}
+{"text": "jarvis τι έχω στην ουρά τώρα", "intent": "spotify_query"}
+{"text": "jarvis επανεκκίνηση παρακαλώ", "intent": "system_control"}
+{"text": "what day is it", "intent": "time_date"}
+{"text": "okay lower brightness", "intent": "system_control"}
+{"text": "ξεκίνα χρονόμετρο για 15 minutes", "intent": "timer_set"}
+{"text": "please power off", "intent": "system_control"}
+{"text": "force quit Chrome", "intent": "app_close"}
+{"text": "time in Rome", "intent": "time_current"}
+{"text": "βάλε Pink Floyd", "intent": "spotify_play"}
+{"text": "what's the forecast for Ρώμη", "intent": "weather_forecast"}
+{"text": "πώς είναι ο καιρός στην Λάρισα", "intent": "weather_current"}
+{"text": "ξυπνητήρι για 11 pm", "intent": "alarm_set"}
+{"text": "jarvis ένταση συστήματος πάνω σε παρακαλώ", "intent": "system_control"}
+{"text": "επανάληψη", "intent": "spotify_control"}
+{"text": "γεια jarvis μπορείς να επαναλάβεις σε παρακαλώ", "intent": "clarification"}
+{"text": "ώρα στην Volos", "intent": "time_current"}
+{"text": "play some The Beatles", "intent": "spotify_play"}
+{"text": "πώς είναι ο καιρός στην Ιωάννινα", "intent": "weather_current"}
+{"text": "εντάξει σβήσε τον υπολογιστή ευχαριστώ", "intent": "system_control"}
+{"text": "countdown for 5 minutes", "intent": "timer_set"}
+{"text": "παρακαλώ σταμάτα τώρα", "intent": "stop"}
+{"text": "wake me up at noon", "intent": "alarm_set"}
+{"text": "hey jarvis speak up for me", "intent": "clarification"}
+{"text": "2 ώρες timer please", "intent": "timer_set"}
+{"text": "βάλε μπρος το Notepad", "intent": "app_launch"}
+{"text": "what's the weather like tomorrow in Heraklion", "intent": "weather_forecast"}
+{"text": "εντάξει σίγαση συστήματος παρακαλώ", "intent": "system_control"}
+{"text": "alright i had a great day for me", "intent": "general_chat"}
+{"text": "είναι αυτό ο Goin Through", "intent": "spotify_query"}
+{"text": "what's the time in Patras", "intent": "time_current"}
+{"text": "φόρτωσε το Photoshop", "intent": "app_launch"}
+{"text": "άνοιξε την εφαρμογή Spotify", "intent": "app_launch"}
+{"text": "pardon for me", "intent": "clarification"}
+{"text": "πρόγνωση για την London", "intent": "weather_forecast"}
+{"text": "hush", "intent": "stop"}
+{"text": "enough", "intent": "stop"}
+{"text": "alright system volume up for me", "intent": "system_control"}
+{"text": "ώρα στην New York", "intent": "time_current"}
+{"text": "cancel", "intent": "stop"}
+{"text": "κλείσε το Word", "intent": "app_close"}
+{"text": "what's the time in Rome", "intent": "time_current"}
+{"text": "χρονόμετρο για 2 hours", "intent": "timer_set"}
+{"text": "θέλω να χρησιμοποιήσω το Word", "intent": "app_launch"}
+{"text": "what year is this song from", "intent": "spotify_query"}
+{"text": "πόσοι βαθμοί στην Paris", "intent": "weather_current"}
+{"text": "παρακαλώ σταμάτα τώρα σε παρακαλώ", "intent": "stop"}
+{"text": "jarvis system volume up right now", "intent": "system_control"}
+{"text": "τερμάτισε το Chrome", "intent": "app_close"}
+{"text": "βάλε ένα χρονόμετρο για 10 λεπτά", "intent": "timer_set"}
+{"text": "what do you think of Goin Through", "intent": "general_chat"}
+{"text": "what date is tomorrow", "intent": "time_date"}
+{"text": "είναι αυτό ο Taylor Swift", "intent": "spotify_query"}
+{"text": "ξύπνα με σε 15 λεπτά", "intent": "timer_set"}
+{"text": "δεν χρειάζομαι άλλο το Steam", "intent": "app_close"}
+{"text": "alright stop right now", "intent": "stop"}
+{"text": "ωραία πώς λέγεται αυτό το τραγούδι παρακαλώ", "intent": "spotify_query"}
+{"text": "τι καιρό θα κάνει αύριο στην Πάτρα", "intent": "weather_forecast"}
+{"text": "πώς είναι ο καιρός στην Παρίσι", "intent": "weather_current"}
+{"text": "καιρός την εβδομάδα", "intent": "weather_forecast"}
+{"text": "βάλε ένταση στο 50", "intent": "spotify_control"}
+{"text": "βάλε λίγη μουσική", "intent": "spotify_play"}
+{"text": "what's the time in Heraklion", "intent": "time_current"}
+{"text": "παρακαλώ βαριέμαι τώρα", "intent": "general_chat"}
+{"text": "τι ώρα είναι στην Χανιά", "intent": "time_current"}
+{"text": "βάλε ξυπνητήρι για 5 το πρωί", "intent": "alarm_set"}
+{"text": "wake me at 11 pm", "intent": "alarm_set"}
+{"text": "force quit Notepad", "intent": "app_close"}
+{"text": "κλείδωσε τον υπολογιστή", "intent": "system_control"}
+{"text": "please what date is tomorrow please", "intent": "time_date"}
+{"text": "what's the time in Χανιά", "intent": "time_current"}
+{"text": "δεν κατάλαβα", "intent": "clarification"}
+{"text": "τι καιρό θα κάνει αύριο στην Larissa", "intent": "weather_forecast"}
+{"text": "i want to listen to Eleftheria Arvanitaki", "intent": "spotify_play"}
+{"text": "shut up", "intent": "stop"}
+{"text": "what's tomorrow's date", "intent": "time_date"}
+{"text": "ε τι ημερομηνία είναι αύριο σε παρακαλώ", "intent": "time_date"}
+{"text": "wake me up at 7 am", "intent": "alarm_set"}
+{"text": "βάλε ένα χρονόμετρο για 15 minutes", "intent": "timer_set"}
+{"text": "εντάξει μπορείς να επαναλάβεις ευχαριστώ", "intent": "clarification"}
+{"text": "ένα χρονόμετρο 20 minutes", "intent": "timer_set"}
+{"text": "βάλε Σωκράτης Μάλαμας στο spotify", "intent": "spotify_play"}
+{"text": "άσε το", "intent": "stop"}
+{"text": "ωραία καλημέρα τώρα", "intent": "general_chat"}
+{"text": "could you no more thanks", "intent": "stop"}
+{"text": "open up Spotify", "intent": "app_launch"}
+{"text": "how's the weather today", "intent": "weather_current"}
+{"text": "wake me at 7 am", "intent": "alarm_set"}
+{"text": "τι καιρό θα κάνει αύριο στην Paris", "intent": "weather_forecast"}
+{"text": "what's the time in Larissa", "intent": "time_current"}
+{"text": "what do you think of Bad Bunny", "intent": "general_chat"}
+{"text": "repeat that", "intent": "clarification"}
+{"text": "who are you", "intent": "general_chat"}
+{"text": "open up Photoshop", "intent": "app_launch"}
+{"text": "what time is it", "intent": "time_current"}
+{"text": "please sleep for me", "intent": "system_control"}
+{"text": "hey jarvis turn it down please", "intent": "spotify_control"}
+{"text": "alarm at 5 in the morning please", "intent": "alarm_set"}
+{"text": "shut down Photoshop", "intent": "app_close"}
+{"text": "remind me in μισή ώρα", "intent": "timer_set"}
+{"text": "please pardon right now", "intent": "clarification"}
+{"text": "please one more time", "intent": "clarification"}
+{"text": "let's have a chat", "intent": "general_chat"}
+{"text": "any recommendations", "intent": "general_chat"}
+{"text": "αντίστροφη μέτρηση 45 λεπτά", "intent": "timer_set"}
+{"text": "could you zip it", "intent": "stop"}
+{"text": "προηγούμενο τραγούδι", "intent": "spotify_control"}
+{"text": "wake me in 1 hour", "intent": "timer_set"}
+{"text": "γύρνα πίσω ένα τραγούδι", "intent": "spotify_control"}
+{"text": "τερμάτισε εξαναγκαστικά το Discord", "intent": "app_close"}
+{"text": "i need a timer for 5 λεπτά", "intent": "timer_set"}
+{"text": "μπορείς να τι ήταν αυτό παρακαλώ", "intent": "clarification"}
+{"text": "alright what's the date please", "intent": "time_date"}
+{"text": "countdown for 20 minutes", "intent": "timer_set"}
+{"text": "what's the weather like tomorrow in Berlin", "intent": "weather_forecast"}
+{"text": "βάλε ξυπνητήρι για 8:30 το πρωί", "intent": "alarm_set"}
+{"text": "what's the time in Volos", "intent": "time_current"}
+{"text": "can you is the music playing for me", "intent": "spotify_query"}
+{"text": "set an alarm for 3 το μεσημέρι", "intent": "alarm_set"}
+{"text": "εντάξει πες μου την ημερομηνία", "intent": "time_date"}
+{"text": "put the computer to sleep", "intent": "system_control"}
+{"text": "κλείσε το shuffle", "intent": "spotify_control"}
+{"text": "jarvis καληνύχτα τώρα", "intent": "general_chat"}
+{"text": "ξεκίνα το Steam", "intent": "app_launch"}
+{"text": "fire up Word", "intent": "app_launch"}
+{"text": "τι μέρα έχουμε", "intent": "time_date"}
+{"text": "ξεκίνα χρονόμετρο για 20 minutes", "intent": "timer_set"}
+{"text": "ξύπνα με στις 7 am", "intent": "alarm_set"}
+{"text": "είναι αυτό ο Διονύσης Σαββόπουλος", "intent": "spotify_query"}
+{"text": "okay be quiet right now", "intent": "stop"}
+{"text": "θέλω ξυπνητήρι στις μεσημέρι", "intent": "alarm_set"}
+{"text": "please what day was yesterday for me", "intent": "time_date"}
+{"text": "can you what album is this from for me", "intent": "spotify_query"}
+{"text": "can you shut down the computer right now", "intent": "system_control"}
+{"text": "προηγούμενο", "intent": "spotify_control"}
+{"text": "jarvis never mind thanks", "intent": "stop"}
+{"text": "τερμάτισε εξαναγκαστικά το Calculator", "intent": "app_close"}
+{"text": "δεν χρειάζομαι άλλο το Excel", "intent": "app_close"}
+{"text": "σταμάτα τη μουσική", "intent": "spotify_control"}
+{"text": "ξυπνητήρι για 7 am", "intent": "alarm_set"}
+{"text": "από ποιο άλμπουμ είναι", "intent": "spotify_query"}
+{"text": "i'm done with Chrome", "intent": "app_close"}
+{"text": "start the OBS application", "intent": "app_launch"}
+{"text": "η ώρα", "intent": "time_current"}
+{"text": "έχεις την ώρα", "intent": "time_current"}
+{"text": "what's the forecast for Χανιά", "intent": "weather_forecast"}
+{"text": "βάλε χρονόμετρο για 5 λεπτά", "intent": "timer_set"}
+{"text": "i need a timer for 10 minutes", "intent": "timer_set"}
+{"text": "time in Αθήνα", "intent": "time_current"}
+{"text": "μπορείς να σου αρέσει η μουσική", "intent": "general_chat"}
+{"text": "εντάξει είναι αργία σήμερα σε παρακαλώ", "intent": "time_date"}
+{"text": "τι λες για τον Metallica", "intent": "general_chat"}
+{"text": "τι καιρό θα κάνει αύριο στην Καβάλα", "intent": "weather_forecast"}
+{"text": "θέλω μουσική", "intent": "spotify_play"}
+{"text": "shuffle on", "intent": "spotify_control"}
+{"text": "stop talking", "intent": "stop"}
+{"text": "turn off shuffle", "intent": "spotify_control"}
+{"text": "μπορείς να πες το ξανά τώρα", "intent": "clarification"}
+{"text": "ποιος είναι ο καλλιτέχνης σε παρακαλώ", "intent": "spotify_query"}
+{"text": "ξύπνα με στις μεσημέρι", "intent": "alarm_set"}
+{"text": "force quit OBS", "intent": "app_close"}
+{"text": "timer for 20 minutes", "intent": "timer_set"}
+{"text": "μπορείς να επαναλάβεις", "intent": "clarification"}
+{"text": "σταμάτα το Chrome", "intent": "app_close"}
+{"text": "what's the date today", "intent": "time_date"}
+{"text": "what do you think of Διονύσης Σαββόπουλος", "intent": "general_chat"}
+{"text": "what's the weather like tomorrow in Rome", "intent": "weather_forecast"}
+{"text": "ώρα στην Thessaloniki", "intent": "time_current"}
+{"text": "launch OBS", "intent": "app_launch"}
+{"text": "ώρα στην Αθήνα", "intent": "time_current"}
+{"text": "time in Λονδίνο", "intent": "time_current"}
+{"text": "what do you think of Coldplay", "intent": "general_chat"}
+{"text": "what's the temperature", "intent": "weather_current"}
+{"text": "what's the forecast for Λάρισα", "intent": "weather_forecast"}
+{"text": "fire up Spotify", "intent": "app_launch"}
+{"text": "play the album Νύχτα μαγική", "intent": "spotify_play"}
+{"text": "τι ώρα είναι στην Larissa", "intent": "time_current"}
+{"text": "jarvis βγάλε το σκούρο θέμα παρακαλώ", "intent": "system_control"}
+{"text": "πόσοι βαθμοί στην Θεσσαλονίκη", "intent": "weather_current"}
+{"text": "βάλε το ξυπνητήρι στις 3 το μεσημέρι", "intent": "alarm_set"}
+{"text": "ξύπνα με στις 11 pm", "intent": "alarm_set"}
+{"text": "αποθήκευσε το τραγούδι", "intent": "spotify_control"}
+{"text": "ε πες μου κάτι ενδιαφέρον σε παρακαλώ", "intent": "general_chat"}
+{"text": "repeat this song", "intent": "spotify_control"}
+{"text": "what's the temperature in Ιωάννινα", "intent": "weather_current"}
+{"text": "weather for the weekend", "intent": "weather_forecast"}
+{"text": "alarm for 5 το πρωί", "intent": "alarm_set"}
+{"text": "τι καιρό κάνει στην Αθήνα", "intent": "weather_current"}
+{"text": "είναι αυτό ο Billie Eilish", "intent": "spotify_query"}
+{"text": "mute the system for me", "intent": "system_control"}
+{"text": "could you what's currently playing on spotify thanks", "intent": "spotify_query"}
+{"text": "alright what date is tomorrow", "intent": "time_date"}
+{"text": "alright what's tomorrow's date right now", "intent": "time_date"}
+{"text": "jarvis mute the system for me", "intent": "system_control"}
+{"text": "πρόγνωση για την Rome", "intent": "weather_forecast"}
+{"text": "abort", "intent": "stop"}
+{"text": "τι καιρό θα κάνει αύριο στην Ρόδο", "intent": "weather_forecast"}
+{"text": "no more", "intent": "stop"}
+{"text": "play Φραγκοσυριανή by Arctic Monkeys", "intent": "spotify_play"}
+{"text": "alright lower brightness right now", "intent": "system_control"}
+{"text": "wake me in 20 minutes", "intent": "timer_set"}
+{"text": "πες το ξανά", "intent": "clarification"}
+{"text": "εντάξει πάρε στιγμιότυπο οθόνης τώρα", "intent": "system_control"}
+{"text": "is the music playing", "intent": "spotify_query"}
+{"text": "jarvis what day of the week is it right now", "intent": "time_date"}
+{"text": "μπορείς να βάλε ανακάτεμα σε παρακαλώ", "intent": "spotify_control"}
+{"text": "βάλε το τραγούδι Hotel California", "intent": "spotify_play"}
+{"text": "please screenshot please for me", "intent": "system_control"}
+{"text": "ξανά ευχαριστώ", "intent": "clarification"}
+{"text": "what's the time", "intent": "time_current"}
+{"text": "stop Photoshop", "intent": "app_close"}
+{"text": "βάλε ένταση στο 50 παρακαλώ", "intent": "spotify_control"}
+{"text": "five day forecast", "intent": "weather_forecast"}
+{"text": "κάνει κρύο", "intent": "weather_current"}
+{"text": "πες το πιο αργά", "intent": "clarification"}
+{"text": "πόσο πάει η ώρα", "intent": "time_current"}
+{"text": "ξυπνητήρι για 8:30 am", "intent": "alarm_set"}
+{"text": "καιρός στην Πάτρα", "intent": "weather_current"}
+{"text": "hush please", "intent": "stop"}
+{"text": "μπορείς να πιο σιγά σε παρακαλώ", "intent": "spotify_control"}
+{"text": "reboot", "intent": "system_control"}
+{"text": "κάνε like το τραγούδι", "intent": "spotify_control"}
+{"text": "βάλε μπρος το Excel", "intent": "app_launch"}
+{"text": "ξύπνα με σε 30 δευτερόλεπτα", "intent": "timer_set"}
+{"text": "is this Pink Floyd", "intent": "spotify_query"}
+{"text": "what date is it", "intent": "time_date"}
+{"text": "βάλε Taylor Swift στο spotify", "intent": "spotify_play"}
+{"text": "alarm at 11 pm please", "intent": "alarm_set"}
+{"text": "open up VS Code", "intent": "app_launch"}
+{"text": "weather in Ρώμη", "intent": "weather_current"}
+{"text": "hey jarvis volume up", "intent": "spotify_control"}
+{"text": "weather forecast", "intent": "weather_forecast"}
+{"text": "terminate Photoshop", "intent": "app_close"}
+{"text": "παίξε το Φραγκοσυριανή", "intent": "spotify_play"}
+{"text": "τι παίζει", "intent": "spotify_query"}
+{"text": "έχει ήλιο", "intent": "weather_current"}
+{"text": "επόμενο", "intent": "spotify_control"}
+{"text": "is this Taylor Swift", "intent": "spotify_query"}
+{"text": "pause the music", "intent": "spotify_control"}
+{"text": "άκυρο", "intent": "stop"}
+{"text": "volume down", "intent": "spotify_control"}
+{"text": "φτάνει", "intent": "stop"}
+{"text": "create an alarm for μεσημέρι", "intent": "alarm_set"}
+{"text": "i want to use Excel", "intent": "app_launch"}
+{"text": "play Ζήτω το ελληνικό τραγούδι by Διονύσης Σαββόπουλος", "intent": "spotify_play"}
+{"text": "what's the weather in New York", "intent": "weather_current"}
+{"text": "τι καιρό θα κάνει αύριο στην Ιωάννινα", "intent": "weather_forecast"}
+{"text": "can you huh", "intent": "clarification"}
+{"text": "close Spotify", "intent": "app_close"}
+{"text": "exit Calculator", "intent": "app_close"}
+{"text": "wake me up at 5 in the morning", "intent": "alarm_set"}
+{"text": "τι μέρα είναι σήμερα ευχαριστώ", "intent": "time_date"}
+{"text": "τι λες για τον Bad Bunny", "intent": "general_chat"}
+{"text": "start Calculator", "intent": "app_launch"}
+{"text": "queue up Είμαι Αητός", "intent": "spotify_play"}
+{"text": "βάλε ξυπνητήρι για μεσημέρι", "intent": "alarm_set"}
+{"text": "ξύπνα με στις 5 in the morning", "intent": "alarm_set"}
+{"text": "τι ημερομηνία έχουμε", "intent": "time_date"}
+{"text": "run Calculator", "intent": "app_launch"}
+{"text": "please shut up", "intent": "stop"}
+{"text": "ποια μέρα της εβδομάδας είναι", "intent": "time_date"}
+{"text": "ε πιο δυνατά", "intent": "clarification"}
+{"text": "close the Notepad app", "intent": "app_close"}
+{"text": "is this Radiohead", "intent": "spotify_query"}
+{"text": "πιο δυνατά παρακαλώ", "intent": "clarification"}
+{"text": "jarvis come again right now", "intent": "clarification"}
+{"text": "μπορείς να μπορείς να το πεις ξανά παρακαλώ", "intent": "clarification"}
+{"text": "εντάξει πες το ξανά ευχαριστώ", "intent": "clarification"}
+{"text": "ξεκίνα να παίζεις Billie Eilish", "intent": "spotify_play"}
+{"text": "βάλε ξυπνητήρι για 11 το βράδυ", "intent": "alarm_set"}
+{"text": "thanks", "intent": "general_chat"}
+{"text": "play Stairway to Heaven by Διονύσης Σαββόπουλος", "intent": "spotify_play"}
+{"text": "καιρός στην Ρόδο", "intent": "weather_current"}
+{"text": "είναι αυτό ο Pink Floyd", "intent": "spotify_query"}
+{"text": "is this Billie Eilish", "intent": "spotify_query"}
+{"text": "πόσοι βαθμοί στην Rome", "intent": "weather_current"}
+{"text": "is it sunny", "intent": "weather_current"}
+{"text": "σώπα", "intent": "stop"}
+{"text": "what's the weather like tomorrow in Paris", "intent": "weather_forecast"}
+{"text": "τι καιρό θα κάνει αύριο στην Tokyo", "intent": "weather_forecast"}
+{"text": "what's the weather like tomorrow in Ρόδο", "intent": "weather_forecast"}
+{"text": "what's the date", "intent": "time_date"}
+{"text": "πάψε", "intent": "stop"}
+{"text": "καιρός για αύριο", "intent": "weather_forecast"}
+{"text": "σταμάτα αμέσως", "intent": "stop"}
+{"text": "what song is this", "intent": "spotify_query"}
+{"text": "hey jarvis turn the volume up please", "intent": "spotify_control"}
+{"text": "good night", "intent": "general_chat"}
+{"text": "ξεκίνα να παίζεις Παύλος Σιδηρόπουλος", "intent": "spotify_play"}
+{"text": "ώρα στην Βόλο", "intent": "time_current"}
+{"text": "τερμάτισε το VS Code", "intent": "app_close"}
+{"text": "launch Word", "intent": "app_launch"}
+{"text": "timer for 45 λεπτά", "intent": "timer_set"}
+{"text": "jarvis βαριέμαι", "intent": "general_chat"}
+{"text": "βάλε τη λίστα Liked Songs", "intent": "spotify_play"}
+{"text": "is it going to rain tomorrow", "intent": "weather_forecast"}
+{"text": "jarvis τι μέρα έχουμε τώρα", "intent": "time_date"}
+{"text": "τι είπες", "intent": "clarification"}
+{"text": "what's the forecast for Παρίσι", "intent": "weather_forecast"}
+{"text": "τι καιρό θα κάνει αύριο στην Berlin", "intent": "weather_forecast"}
+{"text": "επόμενο τραγούδι", "intent": "spotify_control"}
+{"text": "τι λες για τον Eminem", "intent": "general_chat"}
+{"text": "continue playing", "intent": "spotify_control"}
+{"text": "τι καιρό θα κάνει αύριο στην Thessaloniki", "intent": "weather_forecast"}
+{"text": "can you turn off shuffle please", "intent": "spotify_control"}
+{"text": "turn the volume up", "intent": "spotify_control"}
+{"text": "what's the time in Παρίσι", "intent": "time_current"}
+{"text": "ώρα παρακαλώ", "intent": "time_current"}
+{"text": "βάλε το ξυπνητήρι στις 8:30 am", "intent": "alarm_set"}
+{"text": "τι ώρα είναι στην Αθήνα", "intent": "time_current"}
+{"text": "φτιάξε ένα ξυπνητήρι για 8:30 το πρωί", "intent": "alarm_set"}
+{"text": "i need a timer for μισή ώρα", "intent": "timer_set"}
+{"text": "φτιάξε ένα ξυπνητήρι για noon", "intent": "alarm_set"}
+{"text": "weather in Volos", "intent": "weather_current"}
+{"text": "ώρα στην Tokyo", "intent": "time_current"}
+{"text": "alright what's the name of this song thanks", "intent": "spotify_query"}
+{"text": "what's the time in Καβάλα", "intent": "time_current"}
+{"text": "από ποια χρονιά είναι", "intent": "spotify_query"}
+{"text": "hey please", "intent": "general_chat"}
+{"text": "time in Paris", "intent": "time_current"}
+{"text": "καιρός στην Berlin", "intent": "weather_current"}
+{"text": "what's the weather like tomorrow in Χανιά", "intent": "weather_forecast"}
+{"text": "ε πες το ξανά σε παρακαλώ", "intent": "clarification"}
+{"text": "load VS Code", "intent": "app_launch"}
+{"text": "σίγαση", "intent": "spotify_control"}
+{"text": "jarvis next track please", "intent": "spotify_control"}
+{"text": "ξύπνα με σε 10 minutes", "intent": "timer_set"}
+{"text": "play Stairway to Heaven", "intent": "spotify_play"}
+{"text": "jarvis μη μιλάς σε παρακαλώ", "intent": "stop"}
+{"text": "βγες από το Discord", "intent": "app_close"}
+{"text": "βάλε shuffle", "intent": "spotify_control"}
+{"text": "is this Διονύσης Σαββόπουλος", "intent": "spotify_query"}
+{"text": "time in Παρίσι", "intent": "time_current"}
+{"text": "what's the name of this song", "intent": "spotify_query"}
+{"text": "ε βάλε το σε επανάληψη παρακαλώ", "intent": "spotify_control"}
+{"text": "save this track", "intent": "spotify_control"}
+{"text": "jarvis επανέλαβέ το", "intent": "clarification"}
+{"text": "what album is this from", "intent": "spotify_query"}
+{"text": "terminate Discord", "intent": "app_close"}
+{"text": "ξεκίνησε το Calculator", "intent": "app_launch"}
+{"text": "βάλε ένα χρονόμετρο για 30 seconds", "intent": "timer_set"}
+{"text": "could you next song for me", "intent": "spotify_control"}
+{"text": "παίξε το Imagine", "intent": "spotify_play"}
+{"text": "πόσοι βαθμοί στην Καβάλα", "intent": "weather_current"}
+{"text": "what's the weather like tomorrow in Πάτρα", "intent": "weather_forecast"}
+{"text": "τερμάτισε εξαναγκαστικά το Photoshop", "intent": "app_close"}
+{"text": "weather in Λονδίνο", "intent": "weather_current"}
+{"text": "γεια jarvis ξέχασέ το σε παρακαλώ", "intent": "stop"}
+{"text": "hey", "intent": "general_chat"}
+{"text": "φόρτωσε το Excel", "intent": "app_launch"}
+{"text": "what do you think of Queen", "intent": "general_chat"}
+{"text": "turn off dark mode", "intent": "system_control"}
+{"text": "σταμάτα το Excel", "intent": "app_close"}
+{"text": "stop Spotify", "intent": "app_close"}
+{"text": "what's the time in Βόλο", "intent": "time_current"}
+{"text": "system volume down", "intent": "system_control"}
+{"text": "okay silence thanks", "intent": "stop"}
+{"text": "γεια jarvis μην μιλάς άλλο", "intent": "stop"}
+{"text": "είναι αυτό ο Queen", "intent": "spotify_query"}
+{"text": "is this Παύλος Σιδηρόπουλος", "intent": "spotify_query"}
+{"text": "what's the weather in Καβάλα", "intent": "weather_current"}
+{"text": "can you speak up for me", "intent": "clarification"}
+{"text": "βάλε μπρος το Photoshop", "intent": "app_launch"}
+{"text": "ανέβασε φωτεινότητα σε παρακαλώ", "intent": "system_control"}
+{"text": "γεια jarvis τι είπες σε παρακαλώ", "intent": "clarification"}
+{"text": "ωραία τι ήταν αυτό τώρα", "intent": "clarification"}
+{"text": "can you what's the date today thanks", "intent": "time_date"}
+{"text": "τι μέρα είναι σήμερα", "intent": "time_date"}
+{"text": "what do you think of Άννα Βίσση", "intent": "general_chat"}
+{"text": "ας πούμε δυο κουβέντες", "intent": "general_chat"}
+{"text": "ποιος το τραγουδάει τώρα", "intent": "spotify_query"}
+{"text": "i need an alarm at noon", "intent": "alarm_set"}
+{"text": "what was that", "intent": "clarification"}
+{"text": "play Ζήτω το ελληνικό τραγούδι", "intent": "spotify_play"}
+{"text": "time in Λάρισα", "intent": "time_current"}
+{"text": "is this Bad Bunny", "intent": "spotify_query"}
+{"text": "set the alarm to 8:30 am", "intent": "alarm_set"}
+{"text": "ωραία βαριέμαι σε παρακαλώ", "intent": "general_chat"}
+{"text": "φτιάξε ένα ξυπνητήρι για 5 in the morning", "intent": "alarm_set"}
+{"text": "weather in Βόλο", "intent": "weather_current"}
+{"text": "είναι αυτό ο Πυξ Λαξ", "intent": "spotify_query"}
+{"text": "run OBS", "intent": "app_launch"}
+{"text": "who sings this", "intent": "spotify_query"}
+{"text": "is this Metallica", "intent": "spotify_query"}
+{"text": "close Photoshop", "intent": "app_close"}
+{"text": "εντάξει τι μέρα είναι σήμερα παρακαλώ", "intent": "time_date"}
+{"text": "can you power off", "intent": "system_control"}
+{"text": "forget it", "intent": "stop"}
+{"text": "good morning", "intent": "general_chat"}
+{"text": "start playing Bad Bunny", "intent": "spotify_play"}
+{"text": "τι λες για τον Billie Eilish", "intent": "general_chat"}
+{"text": "πάυσε το spotify", "intent": "spotify_control"}
+{"text": "is this Άννα Βίσση", "intent": "spotify_query"}
+{"text": "μπορείς να μη μιλάς παρακαλώ", "intent": "stop"}
+{"text": "jarvis ένταση συστήματος κάτω ευχαριστώ", "intent": "system_control"}
+{"text": "βάλε το ξυπνητήρι στις 11 pm", "intent": "alarm_set"}
+{"text": "μπορείς να τι μέρα έχουμε σε παρακαλώ", "intent": "time_date"}
+{"text": "πέρνα στο επόμενο", "intent": "spotify_control"}
+{"text": "set a timer for 10 minutes", "intent": "timer_set"}
+{"text": "είναι αυτό ο Παύλος Σιδηρόπουλος", "intent": "spotify_query"}
+{"text": "γεια jarvis σβήσε τον υπολογιστή παρακαλώ", "intent": "system_control"}
+{"text": "how's the weather in Ηράκλειο", "intent": "weather_current"}
+{"text": "πες μου την ημερομηνία", "intent": "time_date"}
+{"text": "how's the weather in Καβάλα", "intent": "weather_current"}
+{"text": "ξύπνα με σε 1 hour", "intent": "timer_set"}
+{"text": "weather in Ρόδο", "intent": "weather_current"}
+{"text": "okay what album is this from please", "intent": "spotify_query"}
+{"text": "άνοιξε την εφαρμογή Notepad", "intent": "app_launch"}
+{"text": "πώς σε λένε", "intent": "general_chat"}
+{"text": "i didn't hear you", "intent": "clarification"}
+{"text": "okay what day of the week is it", "intent": "time_date"}
+{"text": "open up Excel", "intent": "app_launch"}
+{"text": "jarvis ένταση κάτω ευχαριστώ", "intent": "spotify_control"}
+{"text": "launch Calculator", "intent": "app_launch"}
+{"text": "μπορείς να μην μιλάς άλλο ευχαριστώ", "intent": "stop"}
+{"text": "μπορείς να σίγαση συστήματος ευχαριστώ", "intent": "system_control"}
+{"text": "play some chill music", "intent": "spotify_play"}
+{"text": "ξυπνητήρι στις 3 pm παρακαλώ", "intent": "alarm_set"}
+{"text": "lock my pc", "intent": "system_control"}
+{"text": "i need a timer for 45 minutes", "intent": "timer_set"}
+{"text": "set an alarm for μεσημέρι", "intent": "alarm_set"}
+{"text": "κλείσε την εφαρμογή Notepad", "intent": "app_close"}
+{"text": "τι έχω στην ουρά", "intent": "spotify_query"}
+{"text": "θύμισέ μου σε 45 λεπτά", "intent": "timer_set"}
+{"text": "set a 1 hour timer", "intent": "timer_set"}
+{"text": "ένταση πάνω", "intent": "spotify_control"}
+{"text": "ξεκίνα να παίζεις Σωκράτης Μάλαμας", "intent": "spotify_play"}
+{"text": "πιο δυνατά", "intent": "clarification"}
+{"text": "next track", "intent": "spotify_control"}
+{"text": "ξύπνα με σε 45 minutes", "intent": "timer_set"}
+{"text": "γεια jarvis τι μέρα έχουμε τώρα", "intent": "time_date"}
+{"text": "βάλε ένα χρονόμετρο για 15 λεπτά", "intent": "timer_set"}
+{"text": "alarm at μεσημέρι please", "intent": "alarm_set"}
+{"text": "play some Άννα Βίσση", "intent": "spotify_play"}
+{"text": "open the Word app", "intent": "app_launch"}
+{"text": "run VS Code", "intent": "app_launch"}
+{"text": "παρακαλώ ένταση συστήματος πάνω παρακαλώ", "intent": "system_control"}
+{"text": "create an alarm for 5 το πρωί", "intent": "alarm_set"}
+{"text": "current weather", "intent": "weather_current"}
+{"text": "άνοιξε το Word", "intent": "app_launch"}
+{"text": "αποσυνδέσου", "intent": "system_control"}
+{"text": "start playing Eminem", "intent": "spotify_play"}
+{"text": "time in Ηράκλειο", "intent": "time_current"}
+{"text": "χρονόμετρο για 45 λεπτά", "intent": "timer_set"}
+{"text": "ωραία πάψε", "intent": "stop"}
+{"text": "επανέλαβέ το", "intent": "clarification"}
+{"text": "γεια jarvis πιο δυνατά σε παρακαλώ", "intent": "clarification"}
+{"text": "exit Word", "intent": "app_close"}
+{"text": "what's the weather in Λάρισα", "intent": "weather_current"}
+{"text": "who is the artist", "intent": "spotify_query"}
+{"text": "τι ήταν αυτό", "intent": "clarification"}
+{"text": "βάλε το τραγούδι Wonderwall", "intent": "spotify_play"}
+{"text": "ανακάτεψε τα τραγούδια του Νίκος Πορτοκάλογλου", "intent": "spotify_play"}
+{"text": "lock the computer", "intent": "system_control"}
+{"text": "can you can you repeat", "intent": "clarification"}
+{"text": "παρακαλώ κλείσε το shuffle ευχαριστώ", "intent": "spotify_control"}
+{"text": "can you what's tomorrow's date thanks", "intent": "time_date"}
+{"text": "jarvis let's have a chat please", "intent": "general_chat"}
+{"text": "βάλε το άλμπουμ The Dark Side of the Moon", "intent": "spotify_play"}
+{"text": "σταμάτα να μιλάς", "intent": "stop"}
+{"text": "time in Βόλο", "intent": "time_current"}
+{"text": "what do you think of Drake", "intent": "general_chat"}
+{"text": "play Διονύσης Σαββόπουλος on spotify", "intent": "spotify_play"}
+{"text": "δεν χρειάζομαι άλλο το Slack", "intent": "app_close"}
+{"text": "please stop right now for me", "intent": "stop"}
+{"text": "jarvis τι μέρα είναι σήμερα τώρα", "intent": "time_date"}
+{"text": "is this Goin Through", "intent": "spotify_query"}
+{"text": "ξέχνα το", "intent": "stop"}
+{"text": "timer for 10 λεπτά", "intent": "timer_set"}
+{"text": "πρόγνωση για την Patras", "intent": "weather_forecast"}
+{"text": "νιώθω λυπημένος", "intent": "general_chat"}
+{"text": "κλείσε την εφαρμογή Discord", "intent": "app_close"}
+{"text": "παίξε χαλαρή μουσική", "intent": "spotify_play"}
+{"text": "ώρα στην Paris", "intent": "time_current"}
+{"text": "quit Spotify", "intent": "app_close"}
+{"text": "τερμάτισε το Excel", "intent": "app_close"}
+{"text": "pause", "intent": "spotify_control"}
+{"text": "εντάξει ξέχασέ το ευχαριστώ", "intent": "stop"}
+{"text": "i need an alarm at 7 το πρωί", "intent": "alarm_set"}
+{"text": "what day of the week is it", "intent": "time_date"}
+{"text": "could you say that again", "intent": "clarification"}
+{"text": "βάλε το ξυπνητήρι στις 5 το πρωί", "intent": "alarm_set"}
+{"text": "σταμάτα το Spotify", "intent": "app_close"}
+{"text": "κρυώνει έξω", "intent": "weather_current"}
+{"text": "skip this song", "intent": "spotify_control"}
+{"text": "jarvis speak up for me", "intent": "clarification"}
+{"text": "τι να φάω για βραδινό", "intent": "general_chat"}
+{"text": "please thank you right now", "intent": "general_chat"}
+{"text": "wake me at 7 το πρωί", "intent": "alarm_set"}
+{"text": "countdown for 15 λεπτά", "intent": "timer_set"}
+{"text": "i need an alarm at 5 in the morning", "intent": "alarm_set"}
+{"text": "what's the temperature in New York", "intent": "weather_current"}
+{"text": "can you enough for me", "intent": "stop"}
+{"text": "πώς είναι ο καιρός στην Heraklion", "intent": "weather_current"}
+{"text": "βάλε ένα χρονόμετρο για 2 ώρες", "intent": "timer_set"}
+{"text": "set volume to 50", "intent": "spotify_control"}
+{"text": "screenshot please", "intent": "system_control"}
+{"text": "γεια σου", "intent": "general_chat"}
+{"text": "next song", "intent": "spotify_control"}
+{"text": "force quit VS Code", "intent": "app_close"}
+{"text": "τερμάτισε εξαναγκαστικά το Steam", "intent": "app_close"}
+{"text": "set an alarm for 11 pm", "intent": "alarm_set"}
+{"text": "start the Notepad application", "intent": "app_launch"}
+{"text": "τι ώρα είναι στην Ιωάννινα", "intent": "time_current"}
+{"text": "τι κάνεις", "intent": "general_chat"}
+{"text": "play my Greek Hits playlist", "intent": "spotify_play"}
+{"text": "hey jarvis pardon thanks", "intent": "clarification"}
+{"text": "ξεκίνα το Calculator", "intent": "app_launch"}
+{"text": "okay louder thanks", "intent": "spotify_control"}
+{"text": "παίξε Ζήτω το ελληνικό τραγούδι από Πυξ Λαξ", "intent": "spotify_play"}
+{"text": "τι καιρό κάνει στην Καβάλα", "intent": "weather_current"}
+{"text": "time in Thessaloniki", "intent": "time_current"}
+{"text": "set an alarm for 11 το βράδυ", "intent": "alarm_set"}
+{"text": "exit Photoshop", "intent": "app_close"}
+{"text": "καμιά πρόταση", "intent": "general_chat"}
+{"text": "what do you think of Eminem", "intent": "general_chat"}
+{"text": "can you cancel thanks", "intent": "stop"}
+{"text": "i had a great day", "intent": "general_chat"}
+{"text": "volume up", "intent": "spotify_control"}
+{"text": "can you shut down the computer thanks", "intent": "system_control"}
+{"text": "begin a timer of 5 minutes", "intent": "timer_set"}
+{"text": "γεια jarvis ποια ημέρα ήταν χθες παρακαλώ", "intent": "time_date"}
+{"text": "βάλε το άλμπουμ Nevermind", "intent": "spotify_play"}
+{"text": "τι ώρα είναι στην Βόλο", "intent": "time_current"}
+{"text": "what's the weather like tomorrow in Λάρισα", "intent": "weather_forecast"}
+{"text": "is it cold outside", "intent": "weather_current"}
+{"text": "one more time", "intent": "clarification"}
+{"text": "open the OBS app", "intent": "app_launch"}
+{"text": "βγάλε screenshot", "intent": "system_control"}
+{"text": "stop Notepad", "intent": "app_close"}
+{"text": "alright what day of the week is it thanks", "intent": "time_date"}
+{"text": "ορίστε", "intent": "clarification"}
+{"text": "ενεργοποίησε το Discord", "intent": "app_launch"}
+{"text": "unmute", "intent": "spotify_control"}
+{"text": "set a timer for 45 minutes", "intent": "timer_set"}
+{"text": "can you lock the computer please", "intent": "system_control"}
+{"text": "stop Calculator", "intent": "app_close"}
+{"text": "fire up Chrome", "intent": "app_launch"}
+{"text": "ποιος είσαι", "intent": "general_chat"}
+{"text": "stop it", "intent": "stop"}
+{"text": "τι ώρα είναι στην Berlin", "intent": "time_current"}
+{"text": "fire up Discord", "intent": "app_launch"}
+{"text": "τι ώρα είναι στην Patras", "intent": "time_current"}
+{"text": "shuffle off", "intent": "spotify_control"}
+{"text": "βάλε το ξυπνητήρι στις 5 in the morning", "intent": "alarm_set"}
+{"text": "βάλε χρονόμετρο για 20 minutes", "intent": "timer_set"}
+{"text": "what did you say", "intent": "clarification"}
+{"text": "how's the weather in Αθήνα", "intent": "weather_current"}
+{"text": "τι ώρα είναι στην Ρόδο", "intent": "time_current"}
+{"text": "ωραία ποιο τραγούδι είναι αυτό παρακαλώ", "intent": "spotify_query"}
+{"text": "φτιάξε ένα ξυπνητήρι για 7 το πρωί", "intent": "alarm_set"}
+{"text": "συγγνώμη τι", "intent": "clarification"}
+{"text": "παίξε το Wonderwall", "intent": "spotify_play"}
+{"text": "play me some music", "intent": "spotify_play"}
+{"text": "ώρα στην Ρόδο", "intent": "time_current"}
+{"text": "could you say that again right now", "intent": "clarification"}
+{"text": "set a timer for 15 λεπτά", "intent": "timer_set"}
+{"text": "stop right now", "intent": "stop"}
+{"text": "start playing Διονύσης Σαββόπουλος", "intent": "spotify_play"}
+{"text": "i need a timer for 10 λεπτά", "intent": "timer_set"}
+{"text": "time please", "intent": "time_current"}
+{"text": "what's the forecast for Θεσσαλονίκη", "intent": "weather_forecast"}
+{"text": "δεν χρειάζομαι άλλο το Spotify", "intent": "app_close"}
+{"text": "tell me a joke", "intent": "general_chat"}
+{"text": "open up Slack", "intent": "app_launch"}
+{"text": "ωραία σίγαση συστήματος παρακαλώ", "intent": "system_control"}
+{"text": "close the Slack app", "intent": "app_close"}
+{"text": "how are you", "intent": "general_chat"}
+{"text": "βάλε ένα χρονόμετρο για 1 hour", "intent": "timer_set"}
+{"text": "ε τι μέρα έχουμε ευχαριστώ", "intent": "time_date"}
+{"text": "what's the weather like tomorrow in Patras", "intent": "weather_forecast"}
+{"text": "γεια jarvis ξέχνα το ευχαριστώ", "intent": "stop"}
+{"text": "κλείσε ολόκληρο το OBS", "intent": "app_close"}
+{"text": "πρόγνωση για την Volos", "intent": "weather_forecast"}
+{"text": "εντάξει πιο δυνατά τώρα", "intent": "clarification"}
+{"text": "wake me in 15 λεπτά", "intent": "timer_set"}
+{"text": "sleep", "intent": "system_control"}
+{"text": "i need an alarm at 3 pm", "intent": "alarm_set"}
+{"text": "wake me at 5 in the morning", "intent": "alarm_set"}
+{"text": "παύσε", "intent": "stop"}
+{"text": "put on Greek Hits", "intent": "spotify_play"}
+{"text": "say it again", "intent": "clarification"}
+{"text": "άνοιξε το Steam", "intent": "app_launch"}
+{"text": "alright halt right now", "intent": "stop"}
+{"text": "εντάξει πες μου την ημερομηνία τώρα", "intent": "time_date"}
+{"text": "δεν χρειάζομαι άλλο το Word", "intent": "app_close"}
+{"text": "ωραία κάνε restart", "intent": "system_control"}
+{"text": "thank you", "intent": "general_chat"}
+{"text": "i need an alarm at 8:30 το πρωί", "intent": "alarm_set"}
+{"text": "σταμάτα τώρα σε παρακαλώ", "intent": "stop"}
+{"text": "start the Steam application", "intent": "app_launch"}
+{"text": "okay what's the date today for me", "intent": "time_date"}
+{"text": "hey jarvis next track", "intent": "spotify_control"}
+{"text": "είναι αυτό ο Coldplay", "intent": "spotify_query"}
+{"text": "βάλε ξυπνητήρι για 5 in the morning", "intent": "alarm_set"}
+{"text": "πρόγνωση για την Paris", "intent": "weather_forecast"}
+{"text": "ξεκίνα το Excel", "intent": "app_launch"}
+{"text": "παρακαλώ κάνε restart παρακαλώ", "intent": "system_control"}
+{"text": "ενεργοποίησε το Word", "intent": "app_launch"}
+{"text": "okay restart the computer please", "intent": "system_control"}
+{"text": "εντάξει κάνε αποσύνδεση παρακαλώ", "intent": "system_control"}
+{"text": "κλείσε ολόκληρο το Spotify", "intent": "app_close"}
+{"text": "what's the time in Thessaloniki", "intent": "time_current"}
+{"text": "skip", "intent": "spotify_control"}
+{"text": "what's the time in Ρόδο", "intent": "time_current"}
+{"text": "hey jarvis what day of the week is it for me", "intent": "time_date"}
+{"text": "go back a song", "intent": "spotify_control"}
+{"text": "φτιάξε ένα ξυπνητήρι για 3 pm", "intent": "alarm_set"}
+{"text": "could you zip it thanks", "intent": "stop"}
+{"text": "run Slack", "intent": "app_launch"}
+{"text": "stop Slack", "intent": "app_close"}
+{"text": "start a timer for μισή ώρα", "intent": "timer_set"}
+{"text": "βάλε το ξυπνητήρι στις 8:30 το πρωί", "intent": "alarm_set"}
+{"text": "start the Chrome application", "intent": "app_launch"}
+{"text": "please thank you", "intent": "general_chat"}
+{"text": "γεια", "intent": "general_chat"}
+{"text": "ε τι ήταν αυτό τώρα", "intent": "clarification"}
+{"text": "τι καιρό θα κάνει αύριο στην Heraklion", "intent": "weather_forecast"}
+{"text": "alright what song is this for me", "intent": "spotify_query"}
+{"text": "πώς πάει", "intent": "general_chat"}
+{"text": "τι λες για τον Pink Floyd", "intent": "general_chat"}
+{"text": "what do you think of Arctic Monkeys", "intent": "general_chat"}
+{"text": "what's the weather in Athens", "intent": "weather_current"}
+{"text": "φτιάξε ένα ξυπνητήρι για 8:30 am", "intent": "alarm_set"}
+{"text": "alright that's enough please", "intent": "stop"}
+{"text": "what's the weather like tomorrow in Volos", "intent": "weather_forecast"}
+{"text": "create an alarm for 7 το πρωί", "intent": "alarm_set"}
+{"text": "ξυπνητήρι στις 8:30 am παρακαλώ", "intent": "alarm_set"}
+{"text": "πες μου τη σημερινή ημερομηνία", "intent": "time_date"}
+{"text": "θύμισέ μου σε 1 ώρα", "intent": "timer_set"}
+{"text": "καιρός στην Αθήνα", "intent": "weather_current"}
+{"text": "start the Excel application", "intent": "app_launch"}
+{"text": "μπορείς να τι έχω στην ουρά", "intent": "spotify_query"}
+{"text": "queue up Ζήτω το ελληνικό τραγούδι", "intent": "spotify_play"}
+{"text": "πρόγνωση για την Tokyo", "intent": "weather_forecast"}
+{"text": "συνέχισε την αναπαραγωγή", "intent": "spotify_control"}
+{"text": "could you what's the name of this song thanks", "intent": "spotify_query"}
+{"text": "play some Νίκος Πορτοκάλογλου", "intent": "spotify_play"}
+{"text": "jarvis repeat off thanks", "intent": "spotify_control"}
+{"text": "jarvis πες μου την ημερομηνία ευχαριστώ", "intent": "time_date"}
+{"text": "πόσοι βαθμοί στην Βόλο", "intent": "weather_current"}
+{"text": "μην μιλάς άλλο", "intent": "stop"}
+{"text": "ξεκίνα χρονόμετρο για 30 seconds", "intent": "timer_set"}
+{"text": "άνοιξε την εφαρμογή Calculator", "intent": "app_launch"}
+{"text": "εντάξει σταμάτα", "intent": "stop"}
+{"text": "τι καιρό έχει", "intent": "weather_current"}
+{"text": "τρέξε το Spotify", "intent": "app_launch"}
+{"text": "log me out", "intent": "system_control"}
+{"text": "what do you think of Pink Floyd", "intent": "general_chat"}
+{"text": "countdown for 20 λεπτά", "intent": "timer_set"}
+{"text": "εντάξει άκυρο παρακαλώ", "intent": "stop"}
+{"text": "start the Word application", "intent": "app_launch"}
+{"text": "ξύπνα με στις 11 το βράδυ", "intent": "alarm_set"}
+{"text": "forecast for tomorrow", "intent": "weather_forecast"}
+{"text": "τι καιρό θα κάνει αύριο στην Θεσσαλονίκη", "intent": "weather_forecast"}
+{"text": "play Drake on spotify", "intent": "spotify_play"}
+{"text": "χρειάζομαι χρονόμετρο για 5 minutes", "intent": "timer_set"}
+{"text": "εντάξει πες μου την ημερομηνία ευχαριστώ", "intent": "time_date"}
+{"text": "what's playing", "intent": "spotify_query"}
+{"text": "wake me in 2 ώρες", "intent": "timer_set"}
+{"text": "ε δεν κατάλαβα τι είπες ευχαριστώ", "intent": "clarification"}
+{"text": "jarvis κλείσε το shuffle τώρα", "intent": "spotify_control"}
+{"text": "κλείσε ολόκληρο το Photoshop", "intent": "app_close"}
+{"text": "shut down Word", "intent": "app_close"}
+{"text": "zip it", "intent": "stop"}
+{"text": "could you what's tomorrow's date right now", "intent": "time_date"}
+{"text": "huh", "intent": "clarification"}
+{"text": "that's enough", "intent": "stop"}
+{"text": "jarvis ορίστε παρακαλώ", "intent": "clarification"}
+{"text": "can you take a screenshot thanks", "intent": "system_control"}
+{"text": "πόσοι βαθμοί είναι", "intent": "weather_current"}
+{"text": "what do you think of Παύλος Σιδηρόπουλος", "intent": "general_chat"}
+{"text": "χρονόμετρο για 20 minutes", "intent": "timer_set"}
+{"text": "i need an alarm at 8:30 am", "intent": "alarm_set"}
+{"text": "μπορείς να τι μέρα έχουμε τώρα", "intent": "time_date"}
+{"text": "please what day is it thanks", "intent": "time_date"}
+{"text": "καιρός τις επόμενες μέρες", "intent": "weather_forecast"}
+{"text": "weather in Λάρισα", "intent": "weather_current"}
+{"text": "ενεργοποίησε το OBS", "intent": "app_launch"}
+{"text": "μπορείς να από ποια χρονιά είναι σε παρακαλώ", "intent": "spotify_query"}
+{"text": "αντίστροφη μέτρηση 1 ώρα", "intent": "timer_set"}
+{"text": "ε σταμάτα αμέσως παρακαλώ", "intent": "stop"}
+{"text": "κάνει ζέστη έξω", "intent": "weather_current"}
+{"text": "ξανά", "intent": "clarification"}
+{"text": "βαριέμαι", "intent": "general_chat"}
+{"text": "ξέχασέ το", "intent": "stop"}
+{"text": "τι ώρα είναι στην Λονδίνο", "intent": "time_current"}
+{"text": "what's the weather like tomorrow in Tokyo", "intent": "weather_forecast"}
+{"text": "τερμάτισε εξαναγκαστικά το Notepad", "intent": "app_close"}
+{"text": "time in Ρώμη", "intent": "time_current"}
+{"text": "εντάξει τι παίζει τώρα στο spotify ευχαριστώ", "intent": "spotify_query"}
+{"text": "time in Tokyo", "intent": "time_current"}
+{"text": "what's the weather like tomorrow in Athens", "intent": "weather_forecast"}
+{"text": "play music on spotify", "intent": "spotify_play"}
+{"text": "time in Larissa", "intent": "time_current"}
+{"text": "μπορείς να ξέχασέ το παρακαλώ", "intent": "stop"}
+{"text": "turn on dark mode", "intent": "system_control"}
+{"text": "what's today's date", "intent": "time_date"}
+{"text": "ξύπνα με σε 10 λεπτά", "intent": "timer_set"}
+{"text": "create an alarm for 5 in the morning", "intent": "alarm_set"}
+{"text": "hey jarvis shush please", "intent": "stop"}
+{"text": "jarvis what album is this from thanks", "intent": "spotify_query"}
+{"text": "παρακαλώ είναι αργία σήμερα παρακαλώ", "intent": "time_date"}
+{"text": "τι λες για τον Νίκος Πορτοκάλογλου", "intent": "general_chat"}
+{"text": "play Παύλος Σιδηρόπουλος", "intent": "spotify_play"}
+{"text": "γεια jarvis τι μέρα έχουμε ευχαριστώ", "intent": "time_date"}
+{"text": "γεια jarvis ένταση πάνω παρακαλώ", "intent": "spotify_control"}
+{"text": "είναι αυτό ο Arctic Monkeys", "intent": "spotify_query"}
+{"text": "φόρτωσε το Discord", "intent": "app_launch"}
+{"text": "i need an alarm at 11 pm", "intent": "alarm_set"}
+{"text": "please one more time thanks", "intent": "clarification"}
+{"text": "can you what's your name", "intent": "general_chat"}
+{"text": "τι καιρό θα κάνει αύριο στην Παρίσι", "intent": "weather_forecast"}
+{"text": "reboot for me", "intent": "system_control"}
+{"text": "please what album is this from thanks", "intent": "spotify_query"}
+{"text": "set the alarm to noon", "intent": "alarm_set"}
+{"text": "παρακαλώ σταμάτα αμέσως ευχαριστώ", "intent": "stop"}
+{"text": "i'm bored", "intent": "general_chat"}
+{"text": "βάλε Eminem στο spotify", "intent": "spotify_play"}
+{"text": "πρόγνωση για την Larissa", "intent": "weather_forecast"}
+{"text": "θύμισέ μου σε μισή ώρα", "intent": "timer_set"}
+{"text": "τι ώρα είναι στην Θεσσαλονίκη", "intent": "time_current"}
+{"text": "what's the weather like tomorrow in Βόλο", "intent": "weather_forecast"}
+{"text": "come again for me", "intent": "clarification"}
+{"text": "is this The Beatles", "intent": "spotify_query"}
+{"text": "τρέξε το Steam", "intent": "app_launch"}
+{"text": "μπορείς να ποια μέρα της εβδομάδας είναι τώρα", "intent": "time_date"}
+{"text": "set the alarm to 11 το βράδυ", "intent": "alarm_set"}
+{"text": "quit Discord", "intent": "app_close"}
+{"text": "εντάξει αρκετά σε παρακαλώ", "intent": "stop"}
+{"text": "βάλε Πυξ Λαξ στο spotify", "intent": "spotify_play"}
+{"text": "like this song", "intent": "spotify_control"}
+{"text": "τι καιρό κάνει στην Larissa", "intent": "weather_current"}
+{"text": "πρόγνωση για την Heraklion", "intent": "weather_forecast"}
+{"text": "μπορείς να ησυχία σε παρακαλώ", "intent": "stop"}
+{"text": "i want to use OBS", "intent": "app_launch"}
+{"text": "ωραία αποσυνδέσου τώρα", "intent": "system_control"}
+{"text": "okay what day was yesterday right now", "intent": "time_date"}
+{"text": "what's the weather in Παρίσι", "intent": "weather_current"}
+{"text": "βάλε Coldplay", "intent": "spotify_play"}
+{"text": "δεν χρειάζομαι άλλο το Chrome", "intent": "app_close"}
+{"text": "τι λες για τον Arctic Monkeys", "intent": "general_chat"}
+{"text": "what's your name", "intent": "general_chat"}
+{"text": "what do you think of Σωκράτης Μάλαμας", "intent": "general_chat"}
+{"text": "τι καιρό θα κάνει αύριο στην Λάρισα", "intent": "weather_forecast"}
+{"text": "τι λες για τον Radiohead", "intent": "general_chat"}
+{"text": "παρακαλώ χαμήλωσε ευχαριστώ", "intent": "spotify_control"}
+{"text": "i want to listen to Taylor Swift", "intent": "spotify_play"}
+{"text": "βάλε το τραγούδι Stairway to Heaven", "intent": "spotify_play"}
+{"text": "i love you", "intent": "general_chat"}
+{"text": "could you turn the volume up thanks", "intent": "spotify_control"}
+{"text": "τι καιρό κάνει στην Λάρισα", "intent": "weather_current"}
+{"text": "i want to listen to Kendrick Lamar", "intent": "spotify_play"}
+{"text": "βάλε μπρος το Steam", "intent": "app_launch"}
+{"text": "what should i have for dinner", "intent": "general_chat"}
+{"text": "is this Tool", "intent": "spotify_query"}
+{"text": "do i need a jacket", "intent": "weather_current"}
+{"text": "jarvis τι μέρα έχουμε σε παρακαλώ", "intent": "time_date"}
+{"text": "τι λες για τον Adele", "intent": "general_chat"}
+{"text": "play Billie Eilish", "intent": "spotify_play"}
+{"text": "πάυσε τη μουσική", "intent": "spotify_control"}
+{"text": "καιρός στην Rome", "intent": "weather_current"}
+{"text": "ας ακούσουμε Kendrick Lamar", "intent": "spotify_play"}
+{"text": "okay what thanks", "intent": "clarification"}
+{"text": "βρέχει", "intent": "weather_current"}
+{"text": "how's the weather in Θεσσαλονίκη", "intent": "weather_current"}
+{"text": "ώρα στην Patras", "intent": "time_current"}
+{"text": "what's the forecast for Tokyo", "intent": "weather_forecast"}
+{"text": "εντάξει παύσε τώρα", "intent": "stop"}
+{"text": "please stop it thanks", "intent": "stop"}
+{"text": "weather in Patras", "intent": "weather_current"}
+{"text": "επανεκκίνηση", "intent": "system_control"}
+{"text": "is this Queen", "intent": "spotify_query"}
+{"text": "what's the weather like", "intent": "weather_current"}
+{"text": "could you reboot please", "intent": "system_control"}
+{"text": "τι καιρό κάνει", "intent": "weather_current"}
+{"text": "ένα χρονόμετρο 30 δευτερόλεπτα", "intent": "timer_set"}
+{"text": "πρόγνωση για την Ιωάννινα", "intent": "weather_forecast"}
+{"text": "time in Πάτρα", "intent": "time_current"}
+{"text": "πρόγνωση για την New York", "intent": "weather_forecast"}
+{"text": "queue up Bohemian Rhapsody", "intent": "spotify_play"}
+{"text": "please what's today's date for me", "intent": "time_date"}
+{"text": "ώρα στην Παρίσι", "intent": "time_current"}
+{"text": "please what date is it please", "intent": "time_date"}
+{"text": "παίξε λίγο Taylor Swift", "intent": "spotify_play"}
+{"text": "πώς είναι ο καιρός στην London", "intent": "weather_current"}
+{"text": "ξεκίνα να παίζεις Arctic Monkeys", "intent": "spotify_play"}
+{"text": "could you system volume up thanks", "intent": "system_control"}
+{"text": "ξύπνα με σε 45 λεπτά", "intent": "timer_set"}
+{"text": "είναι αυτό ο Metallica", "intent": "spotify_query"}
+{"text": "what's the forecast for Athens", "intent": "weather_forecast"}
+{"text": "ξεκίνησε το Steam", "intent": "app_launch"}
+{"text": "what's the weather in Patras", "intent": "weather_current"}
+{"text": "exit Spotify", "intent": "app_close"}
+{"text": "αντίστροφη μέτρηση 5 minutes", "intent": "timer_set"}
+{"text": "alarm for noon", "intent": "alarm_set"}
+{"text": "πες μου μια ιστορία", "intent": "general_chat"}
+{"text": "start playing Drake", "intent": "spotify_play"}
+{"text": "καληνύχτα", "intent": "general_chat"}
+{"text": "is this Drake", "intent": "spotify_query"}
+{"text": "μπορείς να τι ημερομηνία έχουμε ευχαριστώ", "intent": "time_date"}
+{"text": "what's the forecast for Πάτρα", "intent": "weather_forecast"}
+{"text": "kill Slack", "intent": "app_close"}
+{"text": "παρακαλώ άλλη μια φορά τώρα", "intent": "clarification"}
+{"text": "hey jarvis is today a holiday for me", "intent": "time_date"}
+{"text": "lower brightness", "intent": "system_control"}
+{"text": "μπορείς να πες το ξανά ευχαριστώ", "intent": "clarification"}
+{"text": "could you never mind", "intent": "stop"}
+{"text": "βάλε ένα χρονόμετρο για 2 hours", "intent": "timer_set"}
+{"text": "power off", "intent": "system_control"}
+{"text": "please lock the computer for me", "intent": "system_control"}
+{"text": "είναι αυτό ο Eleftheria Arvanitaki", "intent": "spotify_query"}
+{"text": "δεν σε άκουσα", "intent": "clarification"}
+{"text": "loop this track", "intent": "spotify_control"}
+{"text": "άνοιξε την εφαρμογή Slack", "intent": "app_launch"}
+{"text": "δεν κατάλαβα τώρα", "intent": "clarification"}
+{"text": "πόσοι βαθμοί στην Ρώμη", "intent": "weather_current"}
+{"text": "χρειάζομαι χρονόμετρο για 1 ώρα", "intent": "timer_set"}
+{"text": "i want to listen to Παύλος Σιδηρόπουλος", "intent": "spotify_play"}
+{"text": "come again", "intent": "clarification"}
+{"text": "δυνατά", "intent": "spotify_control"}
+{"text": "what do you think of Νίκος Πορτοκάλογλου", "intent": "general_chat"}
+{"text": "time in Καβάλα", "intent": "time_current"}
+{"text": "can you what did you say right now", "intent": "clarification"}
+{"text": "what's the temperature in Larissa", "intent": "weather_current"}
+{"text": "ξυπνητήρι στις 5 in the morning παρακαλώ", "intent": "alarm_set"}
+{"text": "what's the weather in Ηράκλειο", "intent": "weather_current"}
+{"text": "πρόγνωση καιρού", "intent": "weather_forecast"}
+{"text": "πόσοι βαθμοί στην Ιωάννινα", "intent": "weather_current"}
+{"text": "silence", "intent": "stop"}
+{"text": "i didn't catch that", "intent": "clarification"}
+{"text": "can you good morning please", "intent": "general_chat"}
+{"text": "τι καιρό κάνει στην Berlin", "intent": "weather_current"}
+{"text": "open Chrome", "intent": "app_launch"}
+{"text": "αντίστροφη μέτρηση 2 hours", "intent": "timer_set"}
+{"text": "ξύπνα με στις 3 το μεσημέρι", "intent": "alarm_set"}
+{"text": "play rock music", "intent": "spotify_play"}
+{"text": "turn it down", "intent": "spotify_control"}
+{"text": "previous song", "intent": "spotify_control"}
+{"text": "κλείσε ολόκληρο το Steam", "intent": "app_close"}
+{"text": "γεια jarvis ποια ημέρα ήταν χθες σε παρακαλώ", "intent": "time_date"}
+{"text": "current time", "intent": "time_current"}
+{"text": "τι καιρό θα κάνει αύριο στην Αθήνα", "intent": "weather_forecast"}
+{"text": "ξύπνα με στις 7 το πρωί", "intent": "alarm_set"}
+{"text": "put on Παύλος Σιδηρόπουλος", "intent": "spotify_play"}
+{"text": "what's the forecast for Λονδίνο", "intent": "weather_forecast"}
+{"text": "ο καιρός σήμερα", "intent": "weather_current"}
+{"text": "ποιος το έγραψε", "intent": "spotify_query"}
+{"text": "θύμισέ μου σε 5 minutes", "intent": "timer_set"}
+{"text": "τι καιρό θα κάνει αύριο στην Athens", "intent": "weather_forecast"}
+{"text": "τερμάτισε εξαναγκαστικά το OBS", "intent": "app_close"}
+{"text": "tell me today's date", "intent": "time_date"}
+{"text": "ξεκίνησε το Discord", "intent": "app_launch"}
+{"text": "γεια jarvis τι ημερομηνία έχουμε τώρα", "intent": "time_date"}
+{"text": "alright mute the system right now", "intent": "system_control"}
+{"text": "σταμάτα το Photoshop", "intent": "app_close"}
+{"text": "γεια jarvis μπορείς να το πεις ξανά παρακαλώ", "intent": "clarification"}
+{"text": "ποια ημέρα ήταν χθες", "intent": "time_date"}
+{"text": "σταμάτα το Slack", "intent": "app_close"}
+{"text": "nevermind", "intent": "stop"}
+{"text": "start Slack", "intent": "app_launch"}
+{"text": "kill Calculator", "intent": "app_close"}
+{"text": "παίξε Πυξ Λαξ", "intent": "spotify_play"}
+{"text": "είναι αυτό ο Νίκος Πορτοκάλογλου", "intent": "spotify_query"}
+{"text": "πρόγνωση για την Αθήνα", "intent": "weather_forecast"}
+{"text": "sorry what", "intent": "clarification"}
+{"text": "άλλη μια φορά", "intent": "clarification"}
+{"text": "halt", "intent": "stop"}
+{"text": "μπορείς να σίγαση συστήματος σε παρακαλώ", "intent": "system_control"}
+{"text": "alarm for 11 pm", "intent": "alarm_set"}
+{"text": "hey jarvis is today a holiday right now", "intent": "time_date"}
+{"text": "πες μου την ώρα", "intent": "time_current"}
+{"text": "θα πάρω ομπρέλα αύριο", "intent": "weather_forecast"}
+{"text": "τι ώρα είναι στην Καβάλα", "intent": "time_current"}
+{"text": "what's up", "intent": "general_chat"}
+{"text": "tell me about this song", "intent": "spotify_query"}
+{"text": "fire up VS Code", "intent": "app_launch"}
+{"text": "ώρα στην Rome", "intent": "time_current"}
+{"text": "shut down Calculator", "intent": "app_close"}
+{"text": "βάλε τη λίστα Ελληνικά Hits", "intent": "spotify_play"}
+{"text": "run Word", "intent": "app_launch"}
+{"text": "what's the weather in Ιωάννινα", "intent": "weather_current"}
+{"text": "okay tell me today's date thanks", "intent": "time_date"}
+{"text": "okay turn the volume up please", "intent": "spotify_control"}
+{"text": "ωραία βγάλε το σκούρο θέμα ευχαριστώ", "intent": "system_control"}
+{"text": "what do you think of Daft Punk", "intent": "general_chat"}
+{"text": "alright system volume down for me", "intent": "system_control"}
+{"text": "μπορείς να συνέχισε την αναπαραγωγή τώρα", "intent": "spotify_control"}
+{"text": "could you like this song right now", "intent": "spotify_control"}
+{"text": "ησύχασε", "intent": "stop"}
+{"text": "weather in Thessaloniki", "intent": "weather_current"}
+{"text": "είναι αυτό ο Radiohead", "intent": "spotify_query"}
+{"text": "tell me a story", "intent": "general_chat"}
+{"text": "kill OBS", "intent": "app_close"}
+{"text": "open the Chrome app", "intent": "app_launch"}
+{"text": "close Steam", "intent": "app_close"}
+{"text": "βάλε λίγο Bad Bunny", "intent": "spotify_play"}
+{"text": "συνέχισε την αναπαραγωγή ευχαριστώ", "intent": "spotify_control"}
+{"text": "what's the forecast for London", "intent": "weather_forecast"}
+{"text": "hey jarvis cancel right now", "intent": "stop"}
+{"text": "will it snow this weekend", "intent": "weather_forecast"}
+{"text": "βγάλε το σκούρο θέμα", "intent": "system_control"}
+{"text": "ξύπνα με στις 3 pm", "intent": "alarm_set"}
+{"text": "ωραία άσε το παρακαλώ", "intent": "stop"}
+{"text": "what's the weather like tomorrow in New York", "intent": "weather_forecast"}
+{"text": "ώρα στην Athens", "intent": "time_current"}
+{"text": "okay what's the date thanks", "intent": "time_date"}
+{"text": "είναι αυτό ο Άννα Βίσση", "intent": "spotify_query"}
+{"text": "system volume up", "intent": "system_control"}
+{"text": "create an alarm for 8:30 am", "intent": "alarm_set"}
+{"text": "jarvis ποια ημερομηνία είναι", "intent": "time_date"}
+{"text": "is this Daft Punk", "intent": "spotify_query"}
+{"text": "παίξε λίγο Queen", "intent": "spotify_play"}
+{"text": "hey jarvis what's playing for me", "intent": "spotify_query"}
+{"text": "βάλε τον υπολογιστή σε αναμονή", "intent": "system_control"}
+{"text": "κλείσε το Chrome", "intent": "app_close"}
+{"text": "can you one more time thanks", "intent": "clarification"}
+{"text": "μπορείς να το πεις ξανά", "intent": "clarification"}
+{"text": "κλείδωσέ τον", "intent": "system_control"}
+{"text": "πώς είναι ο καιρός στην Αθήνα", "intent": "weather_current"}
+{"text": "jarvis σ' αγαπώ τώρα", "intent": "general_chat"}
+{"text": "i need a timer for 15 minutes", "intent": "timer_set"}
+{"text": "είναι αυτό ο Drake", "intent": "spotify_query"}
+{"text": "weather tomorrow", "intent": "weather_forecast"}
+{"text": "terminate Excel", "intent": "app_close"}
+{"text": "δεν κατάλαβα τι είπες", "intent": "clarification"}
+{"text": "ανέβασε φωτεινότητα", "intent": "system_control"}
+{"text": "εντάξει παίζει μουσική τώρα παρακαλώ", "intent": "spotify_query"}
+{"text": "10 λεπτά timer please", "intent": "timer_set"}
+{"text": "be quiet", "intent": "stop"}
+{"text": "is today a holiday for me", "intent": "time_date"}
+{"text": "kill VS Code", "intent": "app_close"}
+{"text": "load Excel", "intent": "app_launch"}
+{"text": "ωραία τι κάνεις", "intent": "general_chat"}
+{"text": "20 minutes timer please", "intent": "timer_set"}
+{"text": "how's the weather in Athens", "intent": "weather_current"}
+{"text": "τερμάτισε το Calculator", "intent": "app_close"}
+{"text": "tell me something interesting", "intent": "general_chat"}
+{"text": "τι καιρό κάνει στην Πάτρα", "intent": "weather_current"}
+{"text": "how's the weather in Βόλο", "intent": "weather_current"}
+{"text": "alright what's the date today please", "intent": "time_date"}
+{"text": "i didn't understand", "intent": "clarification"}
+{"text": "hey jarvis what's today's date right now", "intent": "time_date"}
+{"text": "add to my liked songs", "intent": "spotify_control"}
+{"text": "could you tell me a story thanks", "intent": "general_chat"}
+{"text": "wake me up at 11 pm", "intent": "alarm_set"}
+{"text": "what's the time in Paris", "intent": "time_current"}
+{"text": "could you thanks thanks", "intent": "general_chat"}
+{"text": "παίξε Σε θέλω από Kendrick Lamar", "intent": "spotify_play"}
+{"text": "can you i didn't hear you please", "intent": "clarification"}
+{"text": "σταμάτα το OBS", "intent": "app_close"}
+{"text": "πώς είναι ο καιρός στην Καβάλα", "intent": "weather_current"}
+{"text": "παρακαλώ ορίστε σε παρακαλώ", "intent": "clarification"}
+{"text": "ξεκίνα χρονόμετρο για 15 λεπτά", "intent": "timer_set"}
+{"text": "jarvis φτάνει παρακαλώ", "intent": "stop"}
+{"text": "κάνε αποσύνδεση", "intent": "system_control"}
+{"text": "play the album Thriller", "intent": "spotify_play"}
+{"text": "τι λες για τον Goin Through", "intent": "general_chat"}
+{"text": "ώρα στην Berlin", "intent": "time_current"}
+{"text": "ξανά αυτό το τραγούδι", "intent": "spotify_control"}
+{"text": "please can you repeat thanks", "intent": "clarification"}
+{"text": "exit Notepad", "intent": "app_close"}
+{"text": "ανακάτεψε τα τραγούδια του Radiohead", "intent": "spotify_play"}
+{"text": "could you forget it right now", "intent": "stop"}
+{"text": "how's the weather in Paris", "intent": "weather_current"}
+{"text": "force quit Word", "intent": "app_close"}
+{"text": "quiet", "intent": "stop"}
+{"text": "βγες από το Spotify", "intent": "app_close"}
+{"text": "τι λες για τον The Beatles", "intent": "general_chat"}
+{"text": "ξύπνα με στις 8:30 am", "intent": "alarm_set"}
+{"text": "play Wonderwall", "intent": "spotify_play"}
+{"text": "εντάξει πες μου ένα ανέκδοτο", "intent": "general_chat"}
+{"text": "ώρα στην London", "intent": "time_current"}
+{"text": "τι ώρα είναι τώρα", "intent": "time_current"}
+{"text": "είναι αυτό ο Tool", "intent": "spotify_query"}
+{"text": "δεν σε άκουσα ευχαριστώ", "intent": "clarification"}
+{"text": "σταμάτα το Notepad", "intent": "app_close"}
+{"text": "play the song Ζήτω το ελληνικό τραγούδι", "intent": "spotify_play"}
+{"text": "can you louder please right now", "intent": "clarification"}
+{"text": "please what day was yesterday", "intent": "time_date"}
+{"text": "okay i didn't understand", "intent": "clarification"}
+{"text": "βάλε σκούρο θέμα", "intent": "system_control"}
+{"text": "can you log me out right now", "intent": "system_control"}
+{"text": "ξεκίνα το Photoshop", "intent": "app_launch"}
+{"text": "εντάξει ποιος το έγραψε σε παρακαλώ", "intent": "spotify_query"}
+{"text": "weather in Καβάλα", "intent": "weather_current"}
+{"text": "παύση", "intent": "spotify_control"}
+{"text": "εντάξει δεν κατάλαβα τι είπες παρακαλώ", "intent": "clarification"}
+{"text": "say that again thanks", "intent": "clarification"}
+{"text": "mute the system", "intent": "system_control"}
+{"text": "time in Ιωάννινα", "intent": "time_current"}
+{"text": "is this Σωκράτης Μάλαμας", "intent": "spotify_query"}
+{"text": "weather in Ιωάννινα", "intent": "weather_current"}
+{"text": "κλείσε ολόκληρο το Discord", "intent": "app_close"}
+{"text": "what's the time in Λάρισα", "intent": "time_current"}
+{"text": "what do you think of Πυξ Λαξ", "intent": "general_chat"}
+{"text": "γεια jarvis ποια ημερομηνία είναι παρακαλώ", "intent": "time_date"}
+{"text": "be quiet for me", "intent": "stop"}
+{"text": "terminate Slack", "intent": "app_close"}
+{"text": "τι λες για τον Daft Punk", "intent": "general_chat"}
+{"text": "play Stairway to Heaven by The Beatles", "intent": "spotify_play"}
+{"text": "set the alarm to 7 am", "intent": "alarm_set"}
+{"text": "please what song is this for me", "intent": "spotify_query"}
+{"text": "ποιος το τραγουδάει", "intent": "spotify_query"}
+{"text": "okay speak up for me", "intent": "clarification"}
+{"text": "okay what's currently playing on spotify please", "intent": "spotify_query"}
+{"text": "χρειάζομαι χρονόμετρο για 1 hour", "intent": "timer_set"}
+{"text": "πόσοι βαθμοί στην Λάρισα", "intent": "weather_current"}
+{"text": "jarvis πες το πάλι", "intent": "clarification"}
+{"text": "θέλω να χρησιμοποιήσω το Notepad", "intent": "app_launch"}
+{"text": "κλείσε το Slack", "intent": "app_close"}
+{"text": "βάλε μπρος το OBS", "intent": "app_launch"}
+{"text": "παρακαλώ δεν σε άκουσα", "intent": "clarification"}
+{"text": "καιρός στην Athens", "intent": "weather_current"}
+{"text": "είναι αυτό ο Adele", "intent": "spotify_query"}
+{"text": "είναι αυτό ο Bad Bunny", "intent": "spotify_query"}
+{"text": "is it hot outside", "intent": "weather_current"}
+{"text": "τι λες για τον Παύλος Σιδηρόπουλος", "intent": "general_chat"}
+{"text": "μπορείς να βγάλε screenshot παρακαλώ", "intent": "system_control"}
+{"text": "ωραία ένταση πάνω παρακαλώ", "intent": "spotify_control"}
+{"text": "πέρασα ωραία σήμερα", "intent": "general_chat"}
+{"text": "τι ώρα είναι στην Ηράκλειο", "intent": "time_current"}
+{"text": "πόσοι βαθμοί στην Volos", "intent": "weather_current"}
+{"text": "σταμάτα το Word", "intent": "app_close"}
+{"text": "close Calculator", "intent": "app_close"}
+{"text": "χαμήλωσε", "intent": "spotify_control"}
+{"text": "επόμενο κομμάτι", "intent": "spotify_control"}
+{"text": "shush", "intent": "stop"}
+{"text": "ξυπνητήρι στις 5 το πρωί παρακαλώ", "intent": "alarm_set"}
+{"text": "βάλε ξυπνητήρι για 7 am", "intent": "alarm_set"}
+{"text": "how's the weather in London", "intent": "weather_current"}
+{"text": "previous track", "intent": "spotify_control"}
+{"text": "τερμάτισε το Spotify", "intent": "app_close"}
+{"text": "παρακαλώ ησύχασε τώρα", "intent": "stop"}
+{"text": "είναι αργία σήμερα", "intent": "time_date"}
+{"text": "louder", "intent": "spotify_control"}
+{"text": "what's the weather in Βόλο", "intent": "weather_current"}
+{"text": "what day was yesterday", "intent": "time_date"}
+{"text": "hey jarvis what's the date today right now", "intent": "time_date"}
+{"text": "jarvis τι ημερομηνία είναι αύριο παρακαλώ", "intent": "time_date"}
+{"text": "set a 5 minutes timer", "intent": "timer_set"}
+{"text": "σταμάτα το VS Code", "intent": "app_close"}
+{"text": "ε άκυρο τώρα", "intent": "stop"}
+{"text": "φόρτωσε το Calculator", "intent": "app_launch"}
+{"text": "ποιος είναι ο καλλιτέχνης", "intent": "spotify_query"}
+{"text": "χρονόμετρο για 15 λεπτά", "intent": "timer_set"}
+{"text": "ωραία ένταση συστήματος πάνω τώρα", "intent": "system_control"}
+{"text": "εντάξει ποια ημέρα ήταν χθες", "intent": "time_date"}
+{"text": "jarvis γύρνα πίσω ένα τραγούδι ευχαριστώ", "intent": "spotify_control"}
+{"text": "what's in my queue", "intent": "spotify_query"}
+{"text": "please stop right now right now", "intent": "stop"}
+{"text": "τι καιρό κάνει στην New York", "intent": "weather_current"}
+{"text": "boot up Notepad", "intent": "app_launch"}
+{"text": "alright system volume up thanks", "intent": "system_control"}
+{"text": "είναι αυτό ο The Beatles", "intent": "spotify_query"}
+{"text": "jarvis huh please", "intent": "clarification"}
+{"text": "stop Steam", "intent": "app_close"}
+{"text": "what's the time in London", "intent": "time_current"}
+{"text": "terminate Notepad", "intent": "app_close"}
+{"text": "is it raining", "intent": "weather_current"}
+{"text": "alarm at 5 το πρωί please", "intent": "alarm_set"}
+{"text": "ε αποσυνδέσου παρακαλώ", "intent": "system_control"}
+{"text": "do you have the time", "intent": "time_current"}

@@ -1,0 +1,17 @@
+{
+  "alarm_set": 0,
+  "app_close": 1,
+  "app_launch": 2,
+  "clarification": 3,
+  "general_chat": 4,
+  "spotify_control": 5,
+  "spotify_play": 6,
+  "spotify_query": 7,
+  "stop": 8,
+  "system_control": 9,
+  "time_current": 10,
+  "time_date": 11,
+  "timer_set": 12,
+  "weather_current": 13,
+  "weather_forecast": 14
+}

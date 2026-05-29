@@ -1642,11 +1642,12 @@ def update_diary_from_dialogue_memory(
 
     Returns the summary ID if successful, None otherwise.
     """
-    debug_log(f"update_diary_from_dialogue_memory called: force={force}", "memory")
-
-    if not force and not dialogue_memory.should_update_diary():
-        debug_log("diary update skipped: should_update_diary=False and force=False", "memory")
+    should_update = force or dialogue_memory.should_update_diary()
+    if not should_update:
+        # Silent NO-OP: don't spam logs for unchanged state
         return None
+
+    debug_log(f"diary update started (force={force}, pending chunks pending)", "memory")
 
     try:
         # Atomically capture pending chunks AND the snapshot timestamp.
@@ -1662,11 +1663,12 @@ def update_diary_from_dialogue_memory(
         pending_chunks, snapshot_timestamp = (
             dialogue_memory.get_pending_chunks_with_snapshot()
         )
-        debug_log(f"diary update: got {len(pending_chunks)} pending chunks from dialogue_memory", "memory")
 
         if not pending_chunks:
             debug_log("diary update skipped: no pending chunks in dialogue_memory", "memory")
             return None
+
+        debug_log(f"diary update: processing {len(pending_chunks)} pending chunks", "memory")
 
         # Update the daily conversation summary
         # This is the slow operation (LLM call) during which new messages might arrive

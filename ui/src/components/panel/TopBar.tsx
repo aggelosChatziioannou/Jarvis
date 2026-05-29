@@ -22,33 +22,16 @@ function callBridge(action: 'minimize' | 'maximize' | 'close'): boolean {
 }
 
 function WindowButton({ variant }: { variant: 'minimize' | 'maximize' | 'close' }) {
-  const colors = {
-    minimize: '#7dd3fc',
-    maximize: '#7dd3fc',
-    close: '#f87171',
-  };
-
-  const icons = {
-    minimize: <rect x="4" y="11" width="12" height="2" rx="1" fill={colors.minimize} />,
-    maximize: (
-      <rect x="3" y="3" width="14" height="14" rx="2" stroke={colors.maximize} strokeWidth="1.5" fill="none" />
-    ),
-    close: (
-      <>
-        <line x1="5" y1="5" x2="15" y2="15" stroke={colors.close} strokeWidth="1.5" strokeLinecap="round" />
-        <line x1="15" y1="5" x2="5" y2="15" stroke={colors.close} strokeWidth="1.5" strokeLinecap="round" />
-      </>
-    ),
-  };
+  const hoverBg = variant === 'close' ? 'rgba(252,129,129,0.15)' : 'rgba(255,255,255,0.06)';
 
   return (
     <button
       onClick={() => callBridge(variant)}
       title={variant.charAt(0).toUpperCase() + variant.slice(1)}
       style={{
-        width: 32,
-        height: 32,
-        borderRadius: 8,
+        width: 28,
+        height: 28,
+        borderRadius: 6,
         background: 'transparent',
         border: 'none',
         cursor: 'pointer',
@@ -58,73 +41,91 @@ function WindowButton({ variant }: { variant: 'minimize' | 'maximize' | 'close' 
         transition: 'background 0.2s',
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLButtonElement).style.background =
-          variant === 'close' ? 'rgba(248, 113, 113, 0.12)' : 'rgba(255,255,255,0.05)';
+        (e.currentTarget as HTMLButtonElement).style.background = hoverBg;
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
       }}
     >
-      <svg width="20" height="20" viewBox="0 0 20 20">
-        {icons[variant]}
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        {variant === 'minimize' && (
+          <line x1="2" y1="8" x2="14" y2="8" stroke="white" strokeWidth="1" strokeLinecap="round" />
+        )}
+        {variant === 'maximize' && (
+          <rect x="2" y="2" width="12" height="12" rx="1" stroke="white" strokeWidth="1" />
+        )}
+        {variant === 'close' && (
+          <>
+            <line x1="3" y1="3" x2="13" y2="13" stroke="#fc8181" strokeWidth="1" strokeLinecap="round" />
+            <line x1="13" y1="3" x2="3" y2="13" stroke="#fc8181" strokeWidth="1" strokeLinecap="round" />
+          </>
+        )}
       </svg>
     </button>
   );
 }
 
 export default function TopBar() {
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, [role="button"], [role="link"], [contenteditable="true"]')) return;
+    const w = window as unknown as Record<string, unknown>;
+    if (typeof w.consoleStartSystemMove === 'function') {
+      e.preventDefault();
+      (w.consoleStartSystemMove as () => void)();
+    }
+  };
+
   return (
     <div
-      id="native-hide-window-controls"
+      id="console-title-bar"
+      onMouseDown={handleMouseDown}
       style={{
-        height: 48,
-        background: 'rgba(8, 14, 28, 0.9)',
-        borderBottom: '1px solid rgba(34, 211, 238, 0.08)',
+        height: 32,
+        background: 'rgba(10, 14, 26, 0.9)',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        borderBottom: '1px solid rgba(79, 209, 197, 0.08)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 16px',
+        padding: '0 12px',
         flexShrink: 0,
         position: 'relative',
-        zIndex: 2,
+        zIndex: 10,
+        userSelect: 'none',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Link
           to="/"
           style={{
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            gap: 6,
           }}
         >
           <span
             className="font-orbitron"
             style={{
-              fontSize: 12,
+              fontSize: 11,
               fontWeight: 600,
-              letterSpacing: '0.2em',
-              color: '#22d3ee',
+              letterSpacing: '0.18em',
+              color: '#4fd1c5',
+              textShadow: '0 0 8px rgba(79, 209, 197, 0.35)',
             }}
           >
             JARVIS
           </span>
         </Link>
-        <span style={{ color: 'rgba(125, 211, 252, 0.3)', fontSize: 12 }}>·</span>
-        <span
-          style={{
-            fontSize: 12,
-            color: '#7dd3fc',
-            letterSpacing: '0.04em',
-          }}
-        >
-          Control Console
+        <span style={{ color: '#4a5568', fontSize: 10, letterSpacing: '0.05em' }}>
+          // Console
         </span>
       </div>
 
-      {/* Right: Window controls — hidden in native Qt host via injected CSS */}
-      <div data-hide-in-native="true" style={{ display: 'flex', gap: 4 }}>
+      <div data-hide-in-native="true" style={{ display: 'flex', gap: 2 }}>
         <WindowButton variant="minimize" />
         <WindowButton variant="maximize" />
         <WindowButton variant="close" />

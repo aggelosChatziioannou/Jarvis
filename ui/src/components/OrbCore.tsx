@@ -18,6 +18,7 @@ const PARAM_MAP: Record<VoiceState, Partial<AnimParams>> = {
   idle: { orbScale: 1, glowIntensity: 0.3, particleSpeed: 0.3, coreOpacity: 0.4, ringOpacity: 0.15 },
   listening: { orbScale: 1.08, glowIntensity: 0.6, particleSpeed: 0.8, coreOpacity: 0.7, ringOpacity: 0.35 },
   thinking: { orbScale: 1.15, glowIntensity: 0.9, particleSpeed: 2.5, coreOpacity: 0.85, ringOpacity: 0.6 },
+  synthesizing: { orbScale: 1.12, glowIntensity: 0.5, particleSpeed: 0.5, coreOpacity: 0.6, ringOpacity: 0.3 },
   speaking: { orbScale: 1.25, glowIntensity: 1.0, particleSpeed: 1.2, coreOpacity: 1.0, ringOpacity: 0.8 },
 };
 
@@ -77,6 +78,19 @@ export default function OrbCore({ state }: OrbCoreProps) {
         ease: 'sine.inOut',
       });
       pulseTweensRef.current.push(pulse);
+    }
+
+    // Synthesizing: gentle breathe
+    if (state === 'synthesizing') {
+      const breath = gsap.to(params, {
+        orbScale: 1.18,
+        glowIntensity: 0.6,
+        duration: 2.0,
+        yoyo: true,
+        repeat: -1,
+        ease: 'sine.inOut',
+      });
+      pulseTweensRef.current.push(breath);
     }
 
     // Idle: gentle breathing
@@ -182,7 +196,7 @@ export default function OrbCore({ state }: OrbCoreProps) {
       // Draw orbital rings (subtle)
       const ringColor = currentState === 'listening'
         ? '0, 229, 160'
-        : '255, 184, 0';
+        : '34, 211, 238';
 
       [55, 85, 120].forEach((r, i) => {
         ctx.beginPath();
@@ -274,7 +288,7 @@ export default function OrbCore({ state }: OrbCoreProps) {
             position: 'absolute',
             inset: -30,
             borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(255,184,0,0.25) 0%, rgba(255,140,0,0.08) 40%, transparent 70%)',
+            background: 'radial-gradient(circle, rgba(34,211,238,0.25) 0%, rgba(6,182,212,0.08) 40%, transparent 70%)',
             animation: 'orbPulse 3s ease-in-out infinite',
             pointerEvents: 'none',
           }}
@@ -287,11 +301,11 @@ export default function OrbCore({ state }: OrbCoreProps) {
             width: '100%',
             height: '100%',
             borderRadius: '50%',
-            background: 'radial-gradient(circle at 35% 30%, #FFE055 0%, #FFB800 30%, #FF8C00 60%, #CC5500 100%)',
+            background: 'radial-gradient(circle at 35% 30%, #7dd3fc 0%, #22d3ee 30%, #06b6d4 60%, #0e7490 100%)',
             boxShadow: `
-              0 0 30px rgba(255,184,0,0.5),
-              0 0 60px rgba(255,140,0,0.3),
-              0 0 100px rgba(255,100,0,0.15),
+              0 0 30px rgba(34,211,238,0.5),
+              0 0 60px rgba(6,182,212,0.3),
+              0 0 100px rgba(8,145,178,0.15),
               inset 0 -4px 12px rgba(0,0,0,0.3)
             `,
             position: 'relative',

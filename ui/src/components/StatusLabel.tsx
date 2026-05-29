@@ -10,14 +10,16 @@ const STATE_TEXT: Record<VoiceState, string> = {
   idle: 'AWAITING COMMAND',
   listening: 'LISTENING',
   thinking: 'PROCESSING',
+  synthesizing: 'SYNTHESIZING',
   speaking: 'SPEAKING',
 };
 
 const STATE_COLOR: Record<VoiceState, string> = {
   idle: '#5A7182',
   listening: '#00E5A0',
-  thinking: '#FFB800',
-  speaking: '#FFB800',
+  thinking: '#22d3ee',
+  synthesizing: '#a78bfa',
+  speaking: '#22d3ee',
 };
 
 export default function StatusLabel({ state }: StatusLabelProps) {
@@ -45,15 +47,16 @@ export default function StatusLabel({ state }: StatusLabelProps) {
       duration: 0.15,
       ease: 'power2.in',
       onComplete: () => {
-        if (state === 'thinking') {
+        if (state === 'thinking' || state === 'synthesizing') {
           // Start ellipsis animation
           ellipsisRef.current = 0;
-          setDisplayText('PROCESSING.');
+          const baseText = state === 'synthesizing' ? 'SYNTHESIZING' : 'PROCESSING';
+          setDisplayText(`${baseText}.`);
 
           intervalRef.current = window.setInterval(() => {
             ellipsisRef.current = (ellipsisRef.current + 1) % 3;
             const dots = '.'.repeat(ellipsisRef.current + 1);
-            setDisplayText(`PROCESSING${dots}`);
+            setDisplayText(`${baseText}${dots}`);
           }, 500);
         } else {
           setDisplayText(newText);
@@ -74,15 +77,15 @@ export default function StatusLabel({ state }: StatusLabelProps) {
       ease: 'power2.inOut',
     });
 
-    // Speaking glow
-    if (state === 'speaking') {
+    // Speaking / synthesizing glow
+    if (state === 'speaking' || state === 'synthesizing') {
       gsap.to(el, {
-        textShadow: '0 0 12px rgba(255, 184, 0, 0.4)',
+        textShadow: '0 0 12px rgba(34, 211, 238, 0.4)',
         duration: 0.4,
       });
     } else {
       gsap.to(el, {
-        textShadow: '0 0 0px rgba(255, 184, 0, 0)',
+        textShadow: '0 0 0px rgba(34, 211, 238, 0)',
         duration: 0.4,
       });
     }
@@ -100,8 +103,8 @@ export default function StatusLabel({ state }: StatusLabelProps) {
       style={{
         fontFamily: "'Inter', sans-serif",
         fontSize: 13,
-        fontWeight: 400,
-        letterSpacing: '0.08em',
+        fontWeight: 600,
+        letterSpacing: '0.12em',
         textTransform: 'uppercase',
         marginTop: 28,
         color: STATE_COLOR.idle,

@@ -134,6 +134,63 @@ class TestWhisperHallucinationFilterDefaults:
         assert settings.whisper_no_speech_threshold == pytest.approx(0.72)
 
 
+class TestChatGenerationBoundsConfig:
+    """Defaults for the bounded/tuned main-chat generation keys (R1)."""
+
+    def test_llm_chat_max_tokens_default(self):
+        config = get_default_config()
+        assert "llm_chat_max_tokens" in config
+        assert config["llm_chat_max_tokens"] == 512
+
+    def test_llm_chat_temperature_default(self):
+        config = get_default_config()
+        assert "llm_chat_temperature" in config
+        # -1.0 is the "unset / use model default" sentinel.
+        assert config["llm_chat_temperature"] == -1.0
+
+    def test_llm_chat_max_tokens_round_trips(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"llm_chat_max_tokens": 256}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.llm_chat_max_tokens == 256
+
+    def test_llm_chat_temperature_round_trips(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"llm_chat_temperature": 0.7}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.llm_chat_temperature == pytest.approx(0.7)
+
+
+class TestMemoryInjectionWindowConfig:
+    """Default for the memory-injection window (R3)."""
+
+    def test_memory_injection_max_turns_default(self):
+        config = get_default_config()
+        assert "memory_injection_max_turns" in config
+        assert config["memory_injection_max_turns"] == 4
+
+    def test_memory_injection_max_turns_round_trips(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"memory_injection_max_turns": 6}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        settings = load_settings()
+        assert settings.memory_injection_max_turns == 6
+
+
 class TestModelConsistency:
     """Tests for overall model configuration consistency."""
 

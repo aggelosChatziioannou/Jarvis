@@ -1,0 +1,564 @@
+{
+  "patterns": {
+    "συστήματος": {
+      "intent": "system_control",
+      "score": 0.865
+    },
+    "system": {
+      "intent": "system_control",
+      "score": 0.862
+    },
+    "the computer": {
+      "intent": "system_control",
+      "score": 0.861
+    },
+    "computer": {
+      "intent": "system_control",
+      "score": 0.861
+    },
+    "ένταση συστήματος": {
+      "intent": "system_control",
+      "score": 0.86
+    },
+    "timer": {
+      "intent": "timer_set",
+      "score": 0.885
+    },
+    "minutes": {
+      "intent": "timer_set",
+      "score": 0.885
+    },
+    "χρονόμετρο": {
+      "intent": "timer_set",
+      "score": 0.881
+    },
+    "χρονόμετρο για": {
+      "intent": "timer_set",
+      "score": 0.878
+    },
+    "λεπτά": {
+      "intent": "timer_set",
+      "score": 0.877
+    },
+    "a timer": {
+      "intent": "timer_set",
+      "score": 0.874
+    },
+    "timer for": {
+      "intent": "timer_set",
+      "score": 0.873
+    },
+    "a timer for": {
+      "intent": "timer_set",
+      "score": 0.867
+    },
+    "me in": {
+      "intent": "timer_set",
+      "score": 0.86
+    },
+    "ένα χρονόμετρο": {
+      "intent": "timer_set",
+      "score": 0.86
+    },
+    "20 minutes": {
+      "intent": "timer_set",
+      "score": 0.86
+    },
+    "play": {
+      "intent": "spotify_play",
+      "score": 0.883
+    },
+    "παίξε": {
+      "intent": "spotify_play",
+      "score": 0.866
+    },
+    "time in": {
+      "intent": "time_current",
+      "score": 0.893
+    },
+    "time": {
+      "intent": "time_current",
+      "score": 0.8925925925925926
+    },
+    "ώρα": {
+      "intent": "time_current",
+      "score": 0.8806451612903226
+    },
+    "the time": {
+      "intent": "time_current",
+      "score": 0.875
+    },
+    "what's the time": {
+      "intent": "time_current",
+      "score": 0.873
+    },
+    "ώρα στην": {
+      "intent": "time_current",
+      "score": 0.873
+    },
+    "τι ώρα είναι": {
+      "intent": "time_current",
+      "score": 0.872
+    },
+    "the time in": {
+      "intent": "time_current",
+      "score": 0.872
+    },
+    "ώρα είναι": {
+      "intent": "time_current",
+      "score": 0.872
+    },
+    "τι ώρα": {
+      "intent": "time_current",
+      "score": 0.872
+    },
+    "ώρα είναι στην": {
+      "intent": "time_current",
+      "score": 0.87
+    },
+    "είναι στην": {
+      "intent": "time_current",
+      "score": 0.87
+    },
+    "weather in": {
+      "intent": "weather_current",
+      "score": 0.884
+    },
+    "the weather in": {
+      "intent": "weather_current",
+      "score": 0.873
+    },
+    "καιρός στην": {
+      "intent": "weather_current",
+      "score": 0.867
+    },
+    "τι καιρό κάνει": {
+      "intent": "weather_current",
+      "score": 0.863
+    },
+    "καιρό κάνει": {
+      "intent": "weather_current",
+      "score": 0.863
+    },
+    "καιρό κάνει στην": {
+      "intent": "weather_current",
+      "score": 0.862
+    },
+    "how's the weather": {
+      "intent": "weather_current",
+      "score": 0.862
+    },
+    "κάνει στην": {
+      "intent": "weather_current",
+      "score": 0.862
+    },
+    "how's the": {
+      "intent": "weather_current",
+      "score": 0.862
+    },
+    "how's": {
+      "intent": "weather_current",
+      "score": 0.862
+    },
+    "ο καιρός": {
+      "intent": "weather_current",
+      "score": 0.861
+    },
+    "πόσοι βαθμοί": {
+      "intent": "weather_current",
+      "score": 0.861
+    },
+    "πόσοι": {
+      "intent": "weather_current",
+      "score": 0.861
+    },
+    "βαθμοί": {
+      "intent": "weather_current",
+      "score": 0.861
+    },
+    "είναι ο καιρός": {
+      "intent": "weather_current",
+      "score": 0.86
+    },
+    "πώς είναι ο": {
+      "intent": "weather_current",
+      "score": 0.86
+    },
+    "πόσοι βαθμοί στην": {
+      "intent": "weather_current",
+      "score": 0.86
+    },
+    "πώς είναι": {
+      "intent": "weather_current",
+      "score": 0.86
+    },
+    "βαθμοί στην": {
+      "intent": "weather_current",
+      "score": 0.86
+    },
+    "καιρός": {
+      "intent": "weather_current",
+      "score": 0.857
+    },
+    "είναι ο": {
+      "intent": "weather_current",
+      "score": 0.85
+    },
+    "τερμάτισε": {
+      "intent": "app_close",
+      "score": 0.863
+    },
+    "close": {
+      "intent": "app_close",
+      "score": 0.86
+    },
+    "κλείσε": {
+      "intent": "app_close",
+      "score": 0.85
+    },
+    "photoshop": {
+      "intent": "app_close",
+      "score": 0.85
+    },
+    "τι λες για": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "λες για τον": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "do you think": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "you think of": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "what do you": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "τι λες": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "λες για": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "για τον": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "you think": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "what do": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "think of": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "λες": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "think": {
+      "intent": "general_chat",
+      "score": 0.868
+    },
+    "do you": {
+      "intent": "general_chat",
+      "score": 0.8655499999999999
+    },
+    "άνοιξε": {
+      "intent": "app_launch",
+      "score": 0.864
+    },
+    "open": {
+      "intent": "app_launch",
+      "score": 0.863
+    },
+    "is this": {
+      "intent": "spotify_query",
+      "score": 0.882
+    },
+    "είναι αυτό": {
+      "intent": "spotify_query",
+      "score": 0.875
+    },
+    "είναι αυτό ο": {
+      "intent": "spotify_query",
+      "score": 0.873
+    },
+    "αυτό ο": {
+      "intent": "spotify_query",
+      "score": 0.873
+    },
+    "αυτό": {
+      "intent": "spotify_query",
+      "score": 0.8660789473684211
+    },
+    "date": {
+      "intent": "time_date",
+      "score": 0.882
+    },
+    "ημερομηνία": {
+      "intent": "time_date",
+      "score": 0.871
+    },
+    "μέρα": {
+      "intent": "time_date",
+      "score": 0.869
+    },
+    "τι μέρα": {
+      "intent": "time_date",
+      "score": 0.867
+    },
+    "έχουμε": {
+      "intent": "time_date",
+      "score": 0.866
+    },
+    "what day": {
+      "intent": "time_date",
+      "score": 0.862
+    },
+    "τι μέρα έχουμε": {
+      "intent": "time_date",
+      "score": 0.861
+    },
+    "μέρα έχουμε": {
+      "intent": "time_date",
+      "score": 0.861
+    },
+    "what's the date": {
+      "intent": "time_date",
+      "score": 0.86
+    },
+    "the date": {
+      "intent": "time_date",
+      "score": 0.86
+    },
+    "today": {
+      "intent": "time_date",
+      "score": 0.8559166666666667
+    },
+    "σήμερα": {
+      "intent": "time_date",
+      "score": 0.8516153846153846
+    },
+    "ποια": {
+      "intent": "time_date",
+      "score": 0.85
+    },
+    "day": {
+      "intent": "time_date",
+      "score": 0.85
+    },
+    "ξυπνητήρι": {
+      "intent": "alarm_set",
+      "score": 0.891
+    },
+    "alarm": {
+      "intent": "alarm_set",
+      "score": 0.887
+    },
+    "στις": {
+      "intent": "alarm_set",
+      "score": 0.878
+    },
+    "το πρωί": {
+      "intent": "alarm_set",
+      "score": 0.873
+    },
+    "πρωί": {
+      "intent": "alarm_set",
+      "score": 0.873
+    },
+    "ξυπνητήρι για": {
+      "intent": "alarm_set",
+      "score": 0.872
+    },
+    "an alarm": {
+      "intent": "alarm_set",
+      "score": 0.87
+    },
+    "ξυπνητήρι στις": {
+      "intent": "alarm_set",
+      "score": 0.869
+    },
+    "alarm for": {
+      "intent": "alarm_set",
+      "score": 0.867
+    },
+    "μεσημέρι": {
+      "intent": "alarm_set",
+      "score": 0.865
+    },
+    "alarm at": {
+      "intent": "alarm_set",
+      "score": 0.864
+    },
+    "8:30": {
+      "intent": "alarm_set",
+      "score": 0.864
+    },
+    "an alarm for": {
+      "intent": "alarm_set",
+      "score": 0.862
+    },
+    "5 in the": {
+      "intent": "alarm_set",
+      "score": 0.861
+    },
+    "in the morning": {
+      "intent": "alarm_set",
+      "score": 0.861
+    },
+    "5 in": {
+      "intent": "alarm_set",
+      "score": 0.861
+    },
+    "in the": {
+      "intent": "alarm_set",
+      "score": 0.861
+    },
+    "the morning": {
+      "intent": "alarm_set",
+      "score": 0.861
+    },
+    "5 το πρωί": {
+      "intent": "alarm_set",
+      "score": 0.86
+    },
+    "5 το": {
+      "intent": "alarm_set",
+      "score": 0.86
+    },
+    "11 pm": {
+      "intent": "alarm_set",
+      "score": 0.86
+    },
+    "morning": {
+      "intent": "alarm_set",
+      "score": 0.8516153846153846
+    },
+    "πρόγνωση": {
+      "intent": "weather_forecast",
+      "score": 0.873
+    },
+    "forecast": {
+      "intent": "weather_forecast",
+      "score": 0.873
+    },
+    "πρόγνωση για": {
+      "intent": "weather_forecast",
+      "score": 0.872
+    },
+    "πρόγνωση για την": {
+      "intent": "weather_forecast",
+      "score": 0.871
+    },
+    "για την": {
+      "intent": "weather_forecast",
+      "score": 0.871
+    },
+    "weather like tomorrow": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "like tomorrow in": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "θα κάνει αύριο": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "καιρό θα κάνει": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "τι καιρό θα": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "what's the forecast": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "tomorrow in": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "like tomorrow": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "θα κάνει": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "καιρό θα": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "κάνει αύριο": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "the forecast": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "forecast for": {
+      "intent": "weather_forecast",
+      "score": 0.87
+    },
+    "κάνει αύριο στην": {
+      "intent": "weather_forecast",
+      "score": 0.869
+    },
+    "the forecast for": {
+      "intent": "weather_forecast",
+      "score": 0.869
+    },
+    "αύριο στην": {
+      "intent": "weather_forecast",
+      "score": 0.869
+    },
+    "the weather like": {
+      "intent": "weather_forecast",
+      "score": 0.8666666666666667
+    },
+    "weather like": {
+      "intent": "weather_forecast",
+      "score": 0.8666666666666667
+    },
+    "tomorrow": {
+      "intent": "weather_forecast",
+      "score": 0.8646551724137931
+    },
+    "αύριο": {
+      "intent": "weather_forecast",
+      "score": 0.8634285714285714
+    },
+    "like": {
+      "intent": "weather_forecast",
+      "score": 0.8518518518518519
+    },
+    "shuffle": {
+      "intent": "spotify_control",
+      "score": 0.86
+    },
+    "ξανά": {
+      "intent": "clarification",
+      "score": 0.8545454545454545
+    }
+  }
+}

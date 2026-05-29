@@ -6,9 +6,11 @@ TTS history, state) and makes informed decisions about whether speech
 is directed at the assistant and what the actual query is.
 """
 
+import hashlib
 import json
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, List
 
@@ -111,7 +113,12 @@ class IntentJudgeConfig:
     aliases: list = None
     model: str = "gemma4:e2b"
     ollama_base_url: str = "http://127.0.0.1:11434"
-    timeout_sec: float = 15.0
+    # 6s: a small Ollama model that hasn't replied by then either is loading
+    # weights (warmup path handles that) or is stuck. Failing fast is better
+    # than blocking the voice loop — the upstream fallback (`could_be_hot_window`
+    # heuristics, fast-path patterns) keeps things responsive when the judge
+    # is unavailable.
+    timeout_sec: float = 6.0
     thinking: bool = False
 
     def __post_init__(self):
@@ -193,6 +200,13 @@ Examples:
 - "stop" -> {{"directed": true, "query": "", "stop": true, "confidence": "high", "reasoning": "stop command"}}
 - No wake word, not hot window -> {{"directed": false, "query": "", "stop": false, "confidence": "high", "reasoning": "no wake word"}}'''
 
+    # 10s TTL cache on (current_text, in_hot_window, last_tts_text). During
+    # transcript-finalize retries and overlapping Whisper outputs the SAME
+    # tuple is judged multiple times within a second or two; caching the
+    # IntentJudgment skips a full Ollama round-trip on duplicates.
+    _CACHE_TTL_SEC = 10.0
+    _CACHE_MAX_ENTRIES = 32
+
     def __init__(self, config: Optional[IntentJudgeConfig] = None):
         """Initialize the intent judge.
 
@@ -204,9 +218,37 @@ Examples:
         self._last_error_time: float = 0.0
         self._error_cooldown: float = 30.0
         self._last_failure_reason: str = ""
+        self._cache: "OrderedDict[str, tuple[float, IntentJudgment]]" = OrderedDict()
 
         if not self._available:
             debug_log("intent judge disabled: requests not available", "voice")
+
+    def _cache_key(
+        self,
+        current_text: str,
+        in_hot_window: bool,
+        last_tts_text: str,
+    ) -> str:
+        raw = f"{current_text}|{int(bool(in_hot_window))}|{last_tts_text or ''}"
+        return hashlib.md5(raw.encode("utf-8", errors="replace")).hexdigest()
+
+    def _cache_get(self, key: str) -> Optional["IntentJudgment"]:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        ts, judgment = entry
+        if time.time() - ts >= self._CACHE_TTL_SEC:
+            self._cache.pop(key, None)
+            return None
+        # Refresh recency so popular keys survive eviction.
+        self._cache.move_to_end(key)
+        return judgment
+
+    def _cache_put(self, key: str, judgment: "IntentJudgment") -> None:
+        self._cache[key] = (time.time(), judgment)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._CACHE_MAX_ENTRIES:
+            self._cache.popitem(last=False)
 
     @property
     def last_failure_reason(self) -> str:
@@ -303,7 +345,7 @@ Examples:
             lines.append("Mode: HOT WINDOW (listening for follow-up, no wake word needed)")
         elif wake_timestamp:
             from datetime import datetime
-            wake_ts_str = datetime.fromtimestamp(wake_timestamp).strftime('%H:%M:%S.%f')[:-3]
+            wake_ts_str = datetime.fromtimestamp(wake_timestamp).strftime('%H:%M:%S.%f')[:-4]
             lines.append(f"Wake word detected at: {wake_ts_str}")
         else:
             lines.append("Mode: WAKE WORD (waiting for wake word)")
@@ -397,6 +439,20 @@ Examples:
         if not segments:
             return None
 
+        # Cache hit short-circuit. Voice retries often re-judge the same
+        # (current_text, hot-window, last_tts) tuple within milliseconds; a
+        # 10s TTL covers that without holding stale judgments past one turn.
+        cache_key = self._cache_key(current_text, in_hot_window, last_tts_text)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            debug_log(
+                f"🧠 Intent judge: cache hit "
+                f"({'directed' if cached.directed else 'not directed'}, "
+                f"text='{current_text[:40]}')",
+                "voice",
+            )
+            return cached
+
         try:
             system_prompt = self._build_system_prompt()
             user_prompt = self._build_user_prompt(
@@ -467,6 +523,7 @@ Examples:
                     "voice"
                 )
                 debug_log(f"   Reasoning: {judgment.reasoning}", "voice")
+                self._cache_put(cache_key, judgment)
             else:
                 self._last_failure_reason = f"unparseable response: {response_text[:80]}"
                 debug_log(f"🧠 Intent judge: failed to parse: {response_text[:100]}", "voice")
@@ -512,7 +569,7 @@ def create_intent_judge(cfg) -> Optional[IntentJudge]:
         aliases=list(getattr(cfg, "wake_aliases", [])),
         model=model,
         ollama_base_url=ollama_base_url,
-        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 10.0)),
+        timeout_sec=float(getattr(cfg, "intent_judge_timeout_sec", 6.0)),
         thinking=bool(getattr(cfg, "intent_judge_thinking_enabled", False)),
     )
 

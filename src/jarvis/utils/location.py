@@ -36,6 +36,9 @@ except Exception as e:
 # Session flag to show location warning only once per session
 _location_warning_shown = False
 
+# Track last logged public IP to avoid repeating the same address
+_last_logged_public_ip: Optional[str] = None
+
 # Simple in-memory caches (module scoped)
 # Cache for location lookups keyed by final resolved IP -> location_info dict
 _location_cache: Dict[str, Dict[str, Any]] = {}
@@ -293,7 +296,10 @@ def _get_external_ip_automatically() -> Optional[str]:
     # Final fallback: single DNS query to OpenDNS (privacy-light)
     ip = _resolve_public_ip_via_opendns()
     if ip and not _is_private_ip(ip):
-        debug_log(f"Public IP resolved via OpenDNS: {ip}", "location")
+        global _last_logged_public_ip
+        if ip != _last_logged_public_ip:
+            _last_logged_public_ip = ip
+            debug_log(f"Public IP resolved via OpenDNS: {ip}", "location")
         return ip
 
     return None
@@ -344,7 +350,8 @@ def _download_geolite2_database() -> bool:
                 debug_log("GeoLite2 database found and up to date", "location")
                 return True
 
-        debug_log(f"GeoLite2 database not found or outdated at: {db_path}", "location")
+        if not _location_warning_shown:
+            debug_log(f"GeoLite2 database not found or outdated at: {db_path}", "location")
         _print_location_setup_instructions(db_path)
 
         return False

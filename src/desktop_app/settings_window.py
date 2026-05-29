@@ -1004,7 +1004,7 @@ class _MCPCatalogueDialog(QDialog):
         # Node.js availability warning
         node_warning = QLabel(
             "⚠️  <b>Node.js not found.</b> Most MCP servers require Node.js. "
-            "<a href='https://nodejs.org/' style='color: #f59e0b;'>Download Node.js</a> "
+            "<a href='https://nodejs.org/' style='color: #22d3ee;'>Download Node.js</a> "
             "and restart Jarvis to use them."
         )
         node_warning.setOpenExternalLinks(True)
@@ -1055,7 +1055,7 @@ class _MCPCatalogueDialog(QDialog):
 
             if entry.needs_api_key:
                 key_label = QLabel(f"🔑 Requires {entry.api_key_env_var}")
-                key_label.setStyleSheet("color: #fbbf24; font-size: 11px;")
+                key_label.setStyleSheet("color: #7dd3fc; font-size: 11px;")
                 text_layout.addWidget(key_label)
 
             card_layout.addLayout(text_layout, 1)

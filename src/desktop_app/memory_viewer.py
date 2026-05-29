@@ -870,17 +870,17 @@ def index() -> str:
             --bg-card: #161920;
             --bg-hover: #1e222c;
 
-            --accent-primary: #f59e0b;
-            --accent-secondary: #fbbf24;
-            --accent-glow: rgba(245, 158, 11, 0.15);
-            --accent-muted: #92400e;
+            --accent-primary: #22d3ee;
+            --accent-secondary: #7dd3fc;
+            --accent-glow: rgba(34, 211, 238, 0.15);
+            --accent-muted: #0e7490;
 
             --text-primary: #f4f4f5;
             --text-secondary: #a1a1aa;
             --text-muted: #71717a;
 
             --border-color: #27272a;
-            --border-glow: rgba(245, 158, 11, 0.3);
+            --border-glow: rgba(34, 211, 238, 0.3);
 
             --success: #22c55e;
             --warning: #f59e0b;
@@ -920,7 +920,7 @@ def index() -> str:
             right: 0;
             bottom: 0;
             background:
-                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(245, 158, 11, 0.08), transparent),
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34, 211, 238, 0.08), transparent),
                 radial-gradient(ellipse 60% 40% at 100% 100%, rgba(139, 92, 246, 0.05), transparent);
             pointer-events: none;
             z-index: -1;
@@ -2811,7 +2811,7 @@ def index() -> str:
                 ctx.beginPath();
                 ctx.moveTo(from.x, from.y);
                 ctx.lineTo(to.x, to.y);
-                ctx.strokeStyle = 'rgba(245, 158, 11, 0.15)';
+                ctx.strokeStyle = 'rgba(34, 211, 238, 0.15)';
                 ctx.stroke();
             });
 
@@ -2831,8 +2831,8 @@ def index() -> str:
                     ctx.beginPath();
                     ctx.arc(pos.x, pos.y, radius + 6, 0, Math.PI * 2);
                     ctx.fillStyle = isSelected
-                        ? 'rgba(245, 158, 11, 0.25)'
-                        : 'rgba(245, 158, 11, 0.12)';
+                        ? 'rgba(34, 211, 238, 0.25)'
+                        : 'rgba(34, 211, 238, 0.12)';
                     ctx.fill();
                 }
 
@@ -2841,7 +2841,7 @@ def index() -> str:
                 ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
 
                 if (isSelected) {
-                    ctx.fillStyle = '#f59e0b';
+                    ctx.fillStyle = '#22d3ee';
                 } else if (isRoot) {
                     ctx.fillStyle = '#1a1d26';
                 } else if (node.has_children) {
@@ -2852,7 +2852,7 @@ def index() -> str:
                 ctx.fill();
 
                 ctx.lineWidth = (isSelected ? 2.5 : 1.5) / graphZoom;
-                ctx.strokeStyle = isSelected ? '#fbbf24' : isHovered ? '#f59e0b' : '#27272a';
+                ctx.strokeStyle = isSelected ? '#7dd3fc' : isHovered ? '#22d3ee' : '#27272a';
                 ctx.stroke();
 
                 // Label

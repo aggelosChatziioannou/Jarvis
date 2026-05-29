@@ -11,7 +11,7 @@ from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
-from ..debug import debug_log
+from ..debug import debug_log, info_log
 from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import (
     extract_search_params_for_memory,
@@ -36,8 +36,10 @@ from .planner import (
     resolve_next_tool_call as _resolve_plan_step,
 )
 from ..tools.selection import select_tools, ToolSelectionStrategy
+import concurrent.futures
 import json
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from ..utils.location import get_location_context_with_timezone
@@ -52,6 +54,19 @@ if TYPE_CHECKING:
 
 def _indent_text(text: str, prefix: str = "  ") -> str:
     return f"\n{prefix}".join(text.splitlines())
+
+
+def _model_is_small(model_name: Optional[str]) -> bool:
+    """Boolean view of ``detect_model_size`` for the malformed-output fallback.
+
+    The malformed-output error reply tailors its wording for small local models
+    (which are the ones prone to producing unparseable output). Routing the
+    decision through ``detect_model_size`` keeps it in lockstep with the rest of
+    the prompt-selection logic, so size-class patterns (including ``gemma4`` and
+    its ``gemma4:e2b`` default tag) are recognised in exactly one place instead
+    of a hand-rolled substring list that silently misses tags like ``:e2b``.
+    """
+    return detect_model_size(model_name) == ModelSize.SMALL
 
 
 def _get_tool_input_schema(
@@ -773,9 +788,99 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
     return "\n\n".join(parts) if parts else None
 
 
+def _translate_fused_to_router_shape(fused_tools: list) -> list[str]:
+    """Translate fused-intent ``tools`` list to the engine's router shape.
+
+    The downstream tool router emits a ``list[str]`` of bare tool names
+    (used to build the allow-list and to derive the tools schema). The
+    fused-intent engine returns ``list[dict]`` of the form
+    ``[{"name": "weather.current", "arguments": {...}}, ...]`` — we
+    pull out the ``name`` field per entry, preserving order so the
+    "first occurrence wins" semantics of the rest of the engine hold.
+
+    Raises ``ValueError`` if any entry is malformed (missing/blank name,
+    not a dict). The caller catches this and falls back to the legacy
+    router+planner pipeline.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for i, entry in enumerate(fused_tools):
+        if not isinstance(entry, dict):
+            raise ValueError(f"fused tool entry {i} is not a dict: {type(entry).__name__}")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"fused tool entry {i} has missing/blank name")
+        name = name.strip()
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _translate_fused_to_planner_shape(
+    fused_tools: list,
+    fused_plan: list,
+) -> list[str]:
+    """Translate fused-intent ``plan`` to the engine's planner shape.
+
+    The downstream planner produces ``list[str]`` where the FIRST WORD of
+    each non-synthesis step must be a tool name (parsed by
+    ``planner._TOOL_NAME_HEAD_RE``). The fused-intent engine emits prose
+    plan steps like ``["Lookup weather", "Reply with summary"]`` — without
+    explicit tool names embedded, ``tool_names_in_plan`` would return an
+    empty list and ``plan_has_unresolved_tool_steps`` would flip true,
+    causing the engine to drop back to the router fallback.
+
+    Strategy: prepend each fused tool name as its own action step so the
+    parser picks it up; keep the human-readable plan strings AFTER the
+    tool steps so they still document what the LLM intended. The final
+    fused-plan string is kept as the synthesis step.
+
+    For the empty-tools case (e.g. chat-only "Reply to user."), we keep
+    the fused plan unchanged — ``tool_steps_of`` will return ``[]`` so no
+    direct-exec is attempted.
+
+    Returns a list[str] compatible with the downstream planner consumers
+    (``format_plan_block``, ``tool_names_in_plan``, ``tool_steps_of``,
+    ``progress_nudge``).
+    """
+    if not fused_tools:
+        # Pure-reply plan or empty plan — pass through fused plan strings
+        # unchanged. Guarantee at least one step so format_plan_block has
+        # something to render (matches the planner's "Reply to user."
+        # contract for direct-reply plans).
+        return list(fused_plan) if fused_plan else ["Reply to the user."]
+
+    # Re-render each tool entry as ``name`` (the planner step parser only
+    # needs the first word to be a tool name). We do NOT serialise the
+    # arguments here because the engine's allow-list path treats these
+    # steps as advisory; the actual arguments come from the fused tools
+    # list when downstream code reaches the direct-exec path.
+    out: list[str] = []
+    for entry in fused_tools:
+        name = entry.get("name", "").strip() if isinstance(entry, dict) else ""
+        if name:
+            out.append(name)
+
+    # Append the fused prose plan after the tool steps. The LAST entry
+    # becomes the synthesis step (consumed by ``tool_steps_of``, which
+    # treats len(steps) > 1 cases as "all but last are tool steps").
+    # If the fused plan is empty, append a generic synthesis step so
+    # ``tool_steps_of`` correctly returns the tool steps and recognises
+    # a separate synthesis target.
+    if fused_plan:
+        out.extend(str(s) for s in fused_plan if s)
+    else:
+        out.append("Reply to the user.")
+    return out
+
+
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
-                    language: Optional[str] = None) -> Optional[str]:
+                    language: Optional[str] = None,
+                    fused_tools: Optional[list] = None,
+                    fused_plan: Optional[list] = None,
+                    cancel_event: Optional["threading.Event"] = None) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -790,10 +895,43 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             web_search can pick locale-appropriate resources (e.g. the
             right Wikipedia host). None when invoked outside the voice
             path — tools then fall back to their own default.
+        fused_tools: Optional pre-computed tool list from Tier 2.4 fused
+            intent engine (``list[dict]`` of ``{"name": ..., "arguments": ...}``).
+            When provided and ``cfg.use_fused_tools_in_engine`` is True,
+            the engine skips its internal tool router LLM call entirely
+            and uses these tools directly. Saves ~5-7s per query.
+        fused_plan: Optional pre-computed plan steps from Tier 2.4
+            (``list[str]``). Used together with ``fused_tools`` to also
+            skip the internal planner LLM call. Saves another ~5-7s.
+        cancel_event: Optional ``threading.Event`` polled at safe boundaries
+            of the agentic loop (top of each turn, before each tool
+            dispatch, after each tool result, and right before returning
+            the final reply). When set, the loop stops at the next boundary
+            and returns the no-speak sentinel (the empty string ``""``,
+            which the listener's truthiness guard treats as "do NOT speak").
+            This makes the STOP button and Wispr barge-in abort an in-flight
+            reply at TURN/TOOL granularity. Mid-single-LLM-call cancellation
+            is out of scope here (it needs streaming). ``None`` (the default
+            for non-voice callers) disables cancellation entirely and leaves
+            behaviour unchanged.
 
     Returns:
-        Generated reply text or None
+        Generated reply text, ``""`` when cancelled via ``cancel_event``, or
+        ``None`` (e.g. the stop tool's dismissal path).
     """
+    # No-speak sentinel returned when ``cancel_event`` fires at a safe
+    # boundary. Empty string (not None) so it stays distinguishable from the
+    # stop-tool dismissal path while still being suppressed by the listener's
+    # ``if reply and self.tts...`` guard.
+    _CANCELLED_SENTINEL = ""
+
+    def _cancelled(where: str) -> bool:
+        """True when cancellation has been requested. Logs once per check
+        site so the abort point is visible in the debug log."""
+        if cancel_event is not None and cancel_event.is_set():
+            debug_log(f"reply cancelled by cancel_event ({where})", "planning")
+            return True
+        return False
     # Step 1: Redact sensitive information
     redacted = redact(text)
 
@@ -891,121 +1029,198 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         strategy = ToolSelectionStrategy(getattr(cfg, "tool_selection_strategy", "llm"))
     except ValueError:
         strategy = ToolSelectionStrategy.LLM
-    # Hot-window cache: router output for the same redacted query and
-    # tool catalogue is reused within one conversation. Catalogue
-    # signature includes builtin + MCP tool names so a mid-window MCP
-    # refresh invalidates the cache. context_hint is intentionally not
-    # part of the key — time/location drift inside one hot window
-    # rarely changes the tool pick.
-    _router_cache_key = (
-        f"router:{redacted}|"
-        f"{strategy.value}|"
-        f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
-        f"{','.join(sorted((mcp_tools or {}).keys()))}"
-    )
-    _cached_routed = (
-        dialogue_memory.hot_cache_get(_router_cache_key)
-        if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
-    )
-    if isinstance(_cached_routed, list):
-        routed_tools = list(_cached_routed)
-        debug_log("tool router served from hot-window cache", "planning")
-    else:
-        routed_tools = select_tools(
-            query=redacted,
-            builtin_tools=BUILTIN_TOOLS,
-            mcp_tools=mcp_tools,
-            strategy=strategy,
-            llm_base_url=cfg.ollama_base_url,
-            llm_model=resolve_tool_router_model(cfg),
-            llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
-            embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
-            embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
-            context_hint=context_hint,
-        )
-        # Don't cache the router's "fall open to all tools" fallback. That
-        # path fires when the LLM router times out, returns empty, or emits
-        # a response no token of which matches a known tool name — i.e. the
-        # router gave up. Caching its "give up = expose everything" output
-        # for the rest of the conversation pins ``allowed_tools`` to the
-        # full catalogue, overwhelms the planner (which then paraphrases
-        # tool steps as prose), and starves a small chat model into
-        # producing the empty-reply fallback. Re-rolling the router on the
-        # next turn is cheap and almost always recovers.
-        _router_returned_full_catalog = (
-            routed_tools is not None
-            and len(routed_tools) == len(_full_catalog_names)
-            and set(routed_tools) == set(_full_catalog_names)
-        )
-        if (
-            dialogue_memory
-            and hasattr(dialogue_memory, "hot_cache_put")
-            and not _router_returned_full_catalog
-        ):
-            dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
 
-    # Tool carry-over guard: when the previous assistant turn invoked a
-    # tool that FAILED (success=False on the ToolExecutionResult), union
-    # the previous tool name back into the allow-list. Compensates for
-    # small routers that misroute follow-ups where the user is supplying
-    # the missing info — e.g. turn 1 "how's the weather tomorrow?" stalls
-    # because no location is configured, turn 2 "I'm in London" routes to
-    # webSearch instead of re-invoking getWeather. Gating on the prior
-    # tool's failure flag (rather than query length) means a successful
-    # chain followed by a genuine new short ask ("play some music")
-    # correctly does NOT carry over the prior tool. The flag distinguishes
-    # only success vs failure, not failure mode (argument issue vs network
-    # vs anything else); the user is most likely to follow up with a
-    # correction either way, and the chat model can still pick a different
-    # tool from the widened list.
+    # ── Tier 2.4 fused-intent fast path ───────────────────────────────
+    # When the caller (listener cascade) has already computed intent +
+    # tools + plan via FusedIntentEngine in ONE LLM call, reuse those
+    # results to skip our internal router+planner. Saves ~10-14s.
     #
-    # Engine-side per-turn overlay: the cache above stores only the raw
-    # router output, so this never poisons the cache.
-    routed_tools = list(routed_tools or [])
-    _carryover_names: list[str] = []
-    if recent_messages:
-        for _name in _previous_turn_failed_tool_names(recent_messages):
-            if _name in _full_catalog_names and _name not in routed_tools:
-                _carryover_names.append(_name)
-        if _carryover_names:
-            routed_tools = routed_tools + _carryover_names
+    # Gating:
+    #   - cfg.use_fused_tools_in_engine (default True) lets ops disable
+    #     this without code change if the fused engine misroutes badly.
+    #   - Both fused_tools and fused_plan must be lists; either being
+    #     None means the caller didn't run the fused engine for this
+    #     turn (e.g. called from a path that doesn't have it wired).
+    #
+    # Fail-open: if translation raises (malformed entries, missing names,
+    # etc.) we fall through to the legacy router+planner pipeline. The
+    # recall gate, warm-profile load, memory enrichment, and rest of the
+    # pipeline continue to run unchanged — only the router LLM call and
+    # the planner LLM call are skipped.
+    routed_tools = None
+    action_plan: list[str] = []
+    use_fused = (
+        getattr(cfg, "use_fused_tools_in_engine", True)
+        and fused_tools is not None
+        and fused_plan is not None
+        and isinstance(fused_tools, list)
+        and isinstance(fused_plan, list)
+    )
+    if use_fused:
+        try:
+            routed_tools = _translate_fused_to_router_shape(fused_tools)
+            action_plan = _translate_fused_to_planner_shape(
+                fused_tools, fused_plan
+            )
+            print(
+                f"  ⚡ Tier 2 fused: skipping router+planner "
+                f"(tools={len(routed_tools)}, plan_steps={len(action_plan)})",
+                flush=True,
+            )
             debug_log(
-                f"tool carry-over: union {_carryover_names} from previous "
-                f"failed tool turn into allow-list",
+                f"fused-intent fast path: tools={routed_tools} "
+                f"plan_steps={len(action_plan)}",
                 "planning",
             )
+        except Exception as _fused_exc:
+            print(
+                f"  ⚠️ fused translation failed: {_fused_exc!r} — "
+                f"falling back to router+planner",
+                flush=True,
+            )
+            debug_log(
+                f"fused translation failed (falling back): {_fused_exc!r}",
+                "planning",
+            )
+            routed_tools = None
+            action_plan = []
+            use_fused = False
 
-    _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
-    _planner_tool_catalog: list[tuple[str, str]] = []
-    for _schema in (_planner_schema or []):
-        _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
-        if isinstance(_fn, dict):
-            _nm = _fn.get("name")
-            _desc = (_fn.get("description") or "").strip().splitlines()
-            _first = _desc[0] if _desc else ""
-            if _nm:
-                _planner_tool_catalog.append((str(_nm), _first[:120]))
+    # Carryover bookkeeping: surfaced into a local so it is visible to the
+    # ``allowed_tools`` selection-source label below regardless of which
+    # path (fused or legacy router) populated ``routed_tools``. The legacy
+    # path also unions failed-tool names from the prior turn back into the
+    # allow-list; on the fused path we skip that union because the fused
+    # engine sees the same hot-window context and can re-emit the tool
+    # itself.
+    _carryover_names: list[str] = []
 
-    action_plan: list[str] = []
-    try:
-        action_plan = plan_query(
-            cfg=cfg,
-            query=redacted,
-            dialogue_context=_dialogue_ctx,
-            tools=_planner_tool_catalog,
+    if not use_fused:
+        # Hot-window cache: router output for the same redacted query and
+        # tool catalogue is reused within one conversation. Catalogue
+        # signature includes builtin + MCP tool names so a mid-window MCP
+        # refresh invalidates the cache. context_hint is intentionally not
+        # part of the key — time/location drift inside one hot window
+        # rarely changes the tool pick.
+        _router_cache_key = (
+            f"router:{redacted}|"
+            f"{strategy.value}|"
+            f"{','.join(sorted(BUILTIN_TOOLS.keys()))}|"
+            f"{','.join(sorted((mcp_tools or {}).keys()))}"
         )
-    except Exception as _plan_exc:  # pragma: no cover — defensive
-        debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
-        action_plan = []
-    if action_plan:
-        _plan_preview = " | ".join(s[:50] for s in action_plan)
-        print(
-            f"  🗺️ Plan: {len(action_plan)} step(s) — {_plan_preview}",
-            flush=True,
+        _cached_routed = (
+            dialogue_memory.hot_cache_get(_router_cache_key)
+            if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
         )
-        debug_log(
-            f"planner produced {len(action_plan)} step(s)", "planning"
-        )
+        if isinstance(_cached_routed, list):
+            routed_tools = list(_cached_routed)
+            debug_log("tool router served from hot-window cache", "planning")
+        else:
+            routed_tools = select_tools(
+                query=redacted,
+                builtin_tools=BUILTIN_TOOLS,
+                mcp_tools=mcp_tools,
+                strategy=strategy,
+                llm_base_url=cfg.ollama_base_url,
+                llm_model=resolve_tool_router_model(cfg),
+                llm_timeout_sec=float(getattr(cfg, "llm_tools_timeout_sec", 8.0)),
+                embed_model=getattr(cfg, "ollama_embed_model", "nomic-embed-text"),
+                embed_timeout_sec=float(getattr(cfg, "llm_embed_timeout_sec", 10.0)),
+                context_hint=context_hint,
+            )
+            # Don't cache the router's "fall open to all tools" fallback. That
+            # path fires when the LLM router times out, returns empty, or emits
+            # a response no token of which matches a known tool name — i.e. the
+            # router gave up. Caching its "give up = expose everything" output
+            # for the rest of the conversation pins ``allowed_tools`` to the
+            # full catalogue, overwhelms the planner (which then paraphrases
+            # tool steps as prose), and starves a small chat model into
+            # producing the empty-reply fallback. Re-rolling the router on the
+            # next turn is cheap and almost always recovers.
+            _router_returned_full_catalog = (
+                routed_tools is not None
+                and len(routed_tools) == len(_full_catalog_names)
+                and set(routed_tools) == set(_full_catalog_names)
+            )
+            if (
+                dialogue_memory
+                and hasattr(dialogue_memory, "hot_cache_put")
+                and not _router_returned_full_catalog
+            ):
+                dialogue_memory.hot_cache_put(_router_cache_key, list(routed_tools or []))
+
+        # Tool carry-over guard: when the previous assistant turn invoked a
+        # tool that FAILED (success=False on the ToolExecutionResult), union
+        # the previous tool name back into the allow-list. Compensates for
+        # small routers that misroute follow-ups where the user is supplying
+        # the missing info — e.g. turn 1 "how's the weather tomorrow?" stalls
+        # because no location is configured, turn 2 "I'm in London" routes to
+        # webSearch instead of re-invoking getWeather. Gating on the prior
+        # tool's failure flag (rather than query length) means a successful
+        # chain followed by a genuine new short ask ("play some music")
+        # correctly does NOT carry over the prior tool. The flag distinguishes
+        # only success vs failure, not failure mode (argument issue vs network
+        # vs anything else); the user is most likely to follow up with a
+        # correction either way, and the chat model can still pick a different
+        # tool from the widened list.
+        #
+        # Engine-side per-turn overlay: the cache above stores only the raw
+        # router output, so this never poisons the cache.
+        routed_tools = list(routed_tools or [])
+        if recent_messages:
+            for _name in _previous_turn_failed_tool_names(recent_messages):
+                if _name in _full_catalog_names and _name not in routed_tools:
+                    _carryover_names.append(_name)
+            if _carryover_names:
+                routed_tools = routed_tools + _carryover_names
+                debug_log(
+                    f"tool carry-over: union {_carryover_names} from previous "
+                    f"failed tool turn into allow-list",
+                    "planning",
+                )
+
+        _planner_schema = generate_tools_json_schema(routed_tools, mcp_tools)
+        _planner_tool_catalog: list[tuple[str, str]] = []
+        for _schema in (_planner_schema or []):
+            _fn = _schema.get("function", {}) if isinstance(_schema, dict) else {}
+            if isinstance(_fn, dict):
+                _nm = _fn.get("name")
+                _desc = (_fn.get("description") or "").strip().splitlines()
+                _first = _desc[0] if _desc else ""
+                if _nm:
+                    _planner_tool_catalog.append((str(_nm), _first[:120]))
+
+        # Skip the planner entirely when the router returned no tools. With an
+        # empty tool catalogue the planner has nothing to sequence and almost
+        # always emits a single "[reply directly]" step — the downstream
+        # `needs_memory = (not action_plan) or plan_demands_memory` already
+        # treats an empty plan as fail-open (memory enrichment runs as normal),
+        # so the planner LLM round-trip is pure latency cost (~5-7s) here.
+        if not routed_tools:
+            debug_log(
+                "planner skipped — router returned no tools (fail-open path active)",
+                "planning",
+            )
+        else:
+            try:
+                action_plan = plan_query(
+                    cfg=cfg,
+                    query=redacted,
+                    dialogue_context=_dialogue_ctx,
+                    tools=_planner_tool_catalog,
+                )
+            except Exception as _plan_exc:  # pragma: no cover — defensive
+                debug_log(f"planner step failed (non-fatal): {_plan_exc}", "planning")
+                action_plan = []
+            if action_plan:
+                debug_log(
+                    f"planner produced {len(action_plan)} step(s)", "planning"
+                )
+    else:
+        # Fused fast path: ensure ``routed_tools`` is a list so downstream
+        # ``list(routed_tools)`` calls work uniformly. The translator
+        # already returned a list[str], so this is a defensive list copy.
+        routed_tools = list(routed_tools or [])
 
     # Gating decisions derived from the plan.
     # - Empty plan → fail-open: behave like before (memory + router).
@@ -1104,6 +1319,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
+    #
+    # Path B (Tier 2.6): when ``parallel_memory_enrichment`` is enabled
+    # (default), the memory enrichment work (keyword extraction → diary
+    # search → graph BFS → optional digest) is dispatched to a single-
+    # worker ThreadPoolExecutor so it overlaps with the warm-profile
+    # load and the agentic loop's first chat turn. Because the chat
+    # call does not stream, the closest analogue to "inject before
+    # first 24 tokens" is "merge memory into ``messages[0]`` before
+    # turn 2 of the agentic loop". If memory arrives after turn 2,
+    # it is dropped — the loop has progressed past the injection
+    # window. Cancellation safety: every return path calls
+    # ``_shutdown_memory_executor`` to release the worker thread.
     enrichment_source = getattr(cfg, "memory_enrichment_source", "diary")
     conversation_context = ""
     # For small models, the diary + graph text is replaced by a single
@@ -1114,18 +1341,69 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # marginally-relevant diary / graph text.
     raw_diary_entries: list[str] = []
     raw_graph_parts: list[str] = []
-    keywords = []
-
+    keywords: list = []
     questions: list[str] = []
-
     search_params: dict = {}
+    graph_context = ""
 
-    # Extract keywords and implicit questions only when the planner asked
-    # for a memory search (or the planner failed and we're falling open).
-    # For queries the planner classified as reply-only ("what are you
-    # thinking", a greeting, a pure opinion) this skips an LLM call we'd
-    # have paid unconditionally in the old flow.
-    if needs_memory:
+    # Cache the chat-model digest decision once so the worker thread does
+    # not have to read cfg/detect_model_size concurrently with the main
+    # thread (cheap, but keeps everything the worker touches read-only
+    # after submission).
+    digest_cfg = getattr(cfg, "memory_digest_enabled", None)
+    if digest_cfg is None:
+        digest_enabled = (detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL)
+    else:
+        digest_enabled = bool(digest_cfg)
+
+    parallel_memory_enabled = bool(
+        getattr(cfg, "parallel_memory_enrichment", True)
+    )
+
+    def _run_memory_enrichment_worker(in_parallel: bool) -> dict:
+        """Run the full memory enrichment chain.
+
+        Returns a dict with the fields the main thread merges back into
+        the surrounding local scope. Catches every exception internally
+        (graceful degradation — chat path must keep working when memory
+        fails) and prefixes print lines with ``[mem]`` when running on
+        a worker thread so interleaved logs stay readable.
+        """
+        tag = "[mem] " if in_parallel else ""
+        out: dict = {
+            "search_params": {},
+            "keywords": [],
+            "questions": [],
+            "raw_diary_entries": [],
+            "raw_graph_parts": [],
+            "conversation_context": "",
+            "graph_context": "",
+            "memory_digest_text": "",
+            # Cache writes are queued here and applied by the main
+            # thread after future.result() returns. hot_cache_put is
+            # documented as thread-safe (it uses an RLock), but
+            # deferring keeps writes off the worker and avoids any
+            # future regression in cache implementation.
+            "cache_writes": [],
+        }
+
+        if not needs_memory:
+            debug_log(
+                "memory enrichment skipped: planner did not request it",
+                "memory",
+            )
+            return out
+
+        _local_search_params: dict = {}
+        _local_keywords: list = []
+        _local_questions: list[str] = []
+        _local_raw_diary: list[str] = []
+        _local_raw_graph: list[str] = []
+        _local_conversation_context = ""
+        _local_graph_context = ""
+        _local_memory_digest_text = ""
+
+        # Step 4: extractor LLM (keywords + implicit questions).
         try:
             _extractor_query = redacted
             if _memory_topic_hint:
@@ -1143,172 +1421,365 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if dialogue_memory and hasattr(dialogue_memory, "hot_cache_get") else None
             )
             if isinstance(_cached_params, dict):
-                search_params = _cached_params
+                _local_search_params = _cached_params
                 debug_log("memory extractor served from hot-window cache", "memory")
             else:
-                search_params = extract_search_params_for_memory(
+                _local_search_params = extract_search_params_for_memory(
                     _extractor_query, cfg.ollama_base_url, resolve_tool_router_model(cfg),
                     timeout_sec=float(getattr(cfg, 'llm_tools_timeout_sec', 8.0)),
                     thinking=getattr(cfg, 'llm_thinking_enabled', False),
                     context_hint=context_hint,
                 )
-                if dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
-                    dialogue_memory.hot_cache_put(_extractor_cache_key, search_params)
-            keywords = search_params.get('keywords', [])
-            questions = search_params.get('questions', [])
-            if keywords:
-                print(f"  🔍 Memory search: {', '.join(keywords)}", flush=True)
-                debug_log(f"extracted keywords: {keywords}", "memory")
-            if questions:
-                debug_log(f"implicit questions: {questions}", "memory")
+                # Defer the cache put to the main thread (see cache_writes).
+                out["cache_writes"].append(
+                    (_extractor_cache_key, _local_search_params)
+                )
+            _local_keywords = _local_search_params.get('keywords', []) or []
+            _local_questions = _local_search_params.get('questions', []) or []
+            if _local_keywords:
+                print(
+                    f"  {tag}🔍 Memory search: {', '.join(_local_keywords)}",
+                    flush=True,
+                )
+                debug_log(f"extracted keywords: {_local_keywords}", "memory")
+            if _local_questions:
+                debug_log(f"implicit questions: {_local_questions}", "memory")
         except Exception as e:
             debug_log(f"keyword extraction failed: {e}", "memory")
-    else:
-        debug_log("memory enrichment skipped: planner did not request it", "memory")
 
-    # Step 4a: Diary enrichment (episodic conversation history)
-    if enrichment_source in ("all", "diary") and keywords:
-        try:
-            from_time = search_params.get('from')
-            to_time = search_params.get('to')
-            debug_log(f"diary search: keywords={keywords}, from={from_time}, to={to_time}", "memory")
-
-            from ..memory.conversation import search_conversation_memory_by_keywords
-            context_results = search_conversation_memory_by_keywords(
-                db=db,
-                keywords=keywords,
-                from_time=from_time,
-                to_time=to_time,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_embed_model=cfg.ollama_embed_model,
-                timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
-                voice_debug=cfg.voice_debug,
-                max_results=cfg.memory_enrichment_max_results
-            )
-            if context_results:
-                raw_diary_entries = list(context_results)
-                conversation_context = "\n".join(context_results)
-                print(f"  📖 Diary: recalled {len(context_results)} entries", flush=True)
-                for entry in context_results[:3]:
-                    # Show a short preview of each diary entry (first 80 chars,
-                    # with an ellipsis when the source was longer so the log
-                    # makes it obvious the line is truncated rather than short).
-                    flat = entry.strip().replace("\n", " ")
-                    preview = flat[:80] + ("…" if len(flat) > 80 else "")
-                    print(f"     · {preview}", flush=True)
-                debug_log(f"diary enrichment: {len(context_results)} results", "memory")
-        except Exception as e:
-            debug_log(f"diary enrichment failed: {e}", "memory")
-
-    # Step 4b: Graph memory enrichment (structured knowledge about the user).
-    # The graph is a question-answer index: each node holds knowledge facts the
-    # assistant can use to answer implicit questions behind a query. If the
-    # extractor produced no questions, the query is either utility (time, maths)
-    # or already fully answerable from live context — no reason to crawl the
-    # knowledge graph.
-    graph_context = ""
-    if enrichment_source in ("all", "graph"):
-        if not questions:
-            debug_log("skipping graph enrichment: no implicit questions to answer", "memory")
-        else:
+        # Step 4a: Diary enrichment (episodic conversation history).
+        if enrichment_source in ("all", "diary") and _local_keywords:
             try:
-                from ..memory.graph import GraphMemoryStore
-                graph_store = GraphMemoryStore(cfg.db_path)
+                from_time = _local_search_params.get('from')
+                to_time = _local_search_params.get('to')
+                debug_log(
+                    f"diary search: keywords={_local_keywords}, "
+                    f"from={from_time}, to={to_time}",
+                    "memory",
+                )
 
-                graph_parts: list[str] = []
-                # Track node name + matched question for user-facing logs
-                node_annotations: list[tuple[str, str]] = []  # (node_name, matched_question)
-
-                # Build search text from the questions, stripped of stop words so
-                # LIKE matching keys off the content words.
-                question_words: list[str] = []
-                seen: set[str] = set()
-                for q in questions:
-                    for w in q.lower().split():
-                        w = w.strip("?.,!'\"")
-                        if _is_content_word(w) and w not in seen:
-                            seen.add(w)
-                            question_words.append(w)
-
-                # Fewer than 2 meaningful words produces noisy LIKE matches against
-                # a single generic term — skip rather than surface irrelevant hits.
-                if len(question_words) < 2:
-                    debug_log(f"skipping graph search: <2 content words after stopwords ({question_words})", "memory")
-                else:
-                    graph_nodes = graph_store.search_nodes(" ".join(question_words), limit=5)
-                    for node in graph_nodes:
-                        ancestors = graph_store.get_ancestors(node.id)
-                        path = " > ".join(a.name for a in ancestors)
-                        data_preview = node.data[:300] if node.data else ""
-                        if data_preview:
-                            graph_parts.append(f"[{path}] {data_preview}")
-                            matched_q = _match_question(data_preview, questions)
-                            node_annotations.append((node.name or path.split(" > ")[-1], matched_q))
-                            debug_log(f"graph hit: [{path}] ({node.data_token_count} tokens)", "memory")
-
-                if graph_parts:
-                    raw_graph_parts = list(graph_parts)
-                    graph_context = (
-                        "Information the user has shared with you in prior conversations "
-                        "(you have access to this — it is part of what the user has told "
-                        "you, just not in the current session):\n" + "\n".join(graph_parts)
+                from ..memory.conversation import search_conversation_memory_by_keywords
+                context_results = search_conversation_memory_by_keywords(
+                    db=db,
+                    keywords=_local_keywords,
+                    from_time=from_time,
+                    to_time=to_time,
+                    ollama_base_url=cfg.ollama_base_url,
+                    ollama_embed_model=cfg.ollama_embed_model,
+                    timeout_sec=float(getattr(cfg, 'llm_embed_timeout_sec', 10.0)),
+                    voice_debug=cfg.voice_debug,
+                    max_results=cfg.memory_enrichment_max_results
+                )
+                if context_results:
+                    _local_raw_diary = list(context_results)
+                    _local_conversation_context = "\n".join(context_results)
+                    print(
+                        f"  {tag}📖 Diary: recalled {len(context_results)} entries",
+                        flush=True,
                     )
-                    names_str = ", ".join(name for name, _ in node_annotations[:4] if name)
-                    print(f"  🧠 Knowledge: {len(graph_parts)} nodes — {names_str}", flush=True)
-                    for name, reason in node_annotations[:4]:
-                        if reason:
-                            print(f"     · {name} → {reason}", flush=True)
-                        else:
-                            print(f"     · {name}", flush=True)
+                    for entry in context_results[:3]:
+                        # Show a short preview of each diary entry (first 80 chars,
+                        # with an ellipsis when the source was longer so the log
+                        # makes it obvious the line is truncated rather than short).
+                        flat = entry.strip().replace("\n", " ")
+                        preview = flat[:80] + ("…" if len(flat) > 80 else "")
+                        print(f"     {tag}· {preview}", flush=True)
+                    debug_log(
+                        f"diary enrichment: {len(context_results)} results",
+                        "memory",
+                    )
             except Exception as e:
-                debug_log(f"graph enrichment failed: {e}", "memory")
+                debug_log(f"diary enrichment failed: {e}", "memory")
 
-    # Step 4c: Memory digest for small models.
-    #
-    # Small models (~2B) degrade sharply as the system prompt grows, and the
-    # combined diary + graph payload can easily add 2-3 KB of marginally-
-    # relevant text that pushes them into "describe the context back" or
-    # "I've already discussed this, no need to search" failure modes.
-    #
-    # For SMALL models we replace both `conversation_context` and
-    # `graph_context` with a single compact relevance-filtered note. For
-    # LARGE models we pass the raw text through unchanged — they can
-    # handle the volume and benefit from the full detail.
-    #
-    # Opt-in/out via `memory_digest_enabled` (default: auto-on for SMALL).
-    digest_cfg = getattr(cfg, "memory_digest_enabled", None)
-    if digest_cfg is None:
-        digest_enabled = (detect_model_size(cfg.ollama_chat_model) == ModelSize.SMALL)
-    else:
-        digest_enabled = bool(digest_cfg)
-
-    if digest_enabled and (raw_diary_entries or raw_graph_parts):
-        try:
-            digest = digest_memory_for_query(
-                query=redacted,
-                diary_entries=raw_diary_entries,
-                graph_parts=raw_graph_parts,
-                ollama_base_url=cfg.ollama_base_url,
-                ollama_chat_model=cfg.ollama_chat_model,
-                timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
-                thinking=getattr(cfg, 'llm_thinking_enabled', False),
-            )
-            # Replace the raw injections with the digest note (or nothing
-            # when the distil decided nothing was relevant). Downstream
-            # `_build_initial_system_message` reads these two locals.
-            if digest:
-                flat = digest.replace("\n", " ")
-                preview = flat[:80] + ("…" if len(flat) > 80 else "")
-                print(f"  🧩 Memory digest: {len(digest)} chars — \"{preview}\"", flush=True)
-                memory_digest_text = digest
+        # Step 4b: Graph memory enrichment (structured knowledge about the user).
+        # The graph is a question-answer index: each node holds knowledge facts the
+        # assistant can use to answer implicit questions behind a query. If the
+        # extractor produced no questions, the query is either utility (time, maths)
+        # or already fully answerable from live context — no reason to crawl the
+        # knowledge graph.
+        if enrichment_source in ("all", "graph"):
+            if not _local_questions:
+                debug_log(
+                    "skipping graph enrichment: no implicit questions to answer",
+                    "memory",
+                )
             else:
-                print("  🧩 Memory digest: no directly-relevant past memory", flush=True)
-            # Clear the raw injections — the digest replaces them entirely
-            # for small models, regardless of whether any relevance survived.
-            conversation_context = ""
-            graph_context = ""
-        except Exception as e:
-            debug_log(f"memory digest step failed (non-fatal): {e}", "memory")
+                try:
+                    from ..memory.graph import GraphMemoryStore
+                    graph_store = GraphMemoryStore(cfg.db_path)
+
+                    graph_parts: list[str] = []
+                    # Track node name + matched question for user-facing logs
+                    node_annotations: list[tuple[str, str]] = []
+
+                    # Build search text from the questions, stripped of stop words so
+                    # LIKE matching keys off the content words.
+                    question_words: list[str] = []
+                    seen: set[str] = set()
+                    for q in _local_questions:
+                        for w in q.lower().split():
+                            w = w.strip("?.,!'\"")
+                            if _is_content_word(w) and w not in seen:
+                                seen.add(w)
+                                question_words.append(w)
+
+                    # Fewer than 2 meaningful words produces noisy LIKE matches against
+                    # a single generic term — skip rather than surface irrelevant hits.
+                    if len(question_words) < 2:
+                        debug_log(
+                            f"skipping graph search: <2 content words after "
+                            f"stopwords ({question_words})",
+                            "memory",
+                        )
+                    else:
+                        graph_nodes = graph_store.search_nodes(
+                            " ".join(question_words), limit=5
+                        )
+                        for node in graph_nodes:
+                            ancestors = graph_store.get_ancestors(node.id)
+                            path = " > ".join(a.name for a in ancestors)
+                            data_preview = node.data[:300] if node.data else ""
+                            if data_preview:
+                                graph_parts.append(f"[{path}] {data_preview}")
+                                matched_q = _match_question(data_preview, _local_questions)
+                                node_annotations.append(
+                                    (node.name or path.split(" > ")[-1], matched_q)
+                                )
+                                debug_log(
+                                    f"graph hit: [{path}] "
+                                    f"({node.data_token_count} tokens)",
+                                    "memory",
+                                )
+
+                    if graph_parts:
+                        _local_raw_graph = list(graph_parts)
+                        _local_graph_context = (
+                            "Information the user has shared with you in prior conversations "
+                            "(you have access to this — it is part of what the user has told "
+                            "you, just not in the current session):\n" + "\n".join(graph_parts)
+                        )
+                        names_str = ", ".join(
+                            name for name, _ in node_annotations[:4] if name
+                        )
+                        print(
+                            f"  {tag}🧠 Knowledge: {len(graph_parts)} nodes "
+                            f"— {names_str}",
+                            flush=True,
+                        )
+                        for name, reason in node_annotations[:4]:
+                            if reason:
+                                print(f"     {tag}· {name} → {reason}", flush=True)
+                            else:
+                                print(f"     {tag}· {name}", flush=True)
+                except Exception as e:
+                    debug_log(f"graph enrichment failed: {e}", "memory")
+
+        # Step 4c: Memory digest for small models.
+        #
+        # Small models (~2B) degrade sharply as the system prompt grows, and the
+        # combined diary + graph payload can easily add 2-3 KB of marginally-
+        # relevant text that pushes them into "describe the context back" or
+        # "I've already discussed this, no need to search" failure modes.
+        #
+        # For SMALL models we replace both `conversation_context` and
+        # `graph_context` with a single compact relevance-filtered note. For
+        # LARGE models we pass the raw text through unchanged — they can
+        # handle the volume and benefit from the full detail.
+        #
+        # Opt-in/out via `memory_digest_enabled` (default: auto-on for SMALL).
+        if digest_enabled and (_local_raw_diary or _local_raw_graph):
+            try:
+                digest = digest_memory_for_query(
+                    query=redacted,
+                    diary_entries=_local_raw_diary,
+                    graph_parts=_local_raw_graph,
+                    ollama_base_url=cfg.ollama_base_url,
+                    ollama_chat_model=cfg.ollama_chat_model,
+                    timeout_sec=float(getattr(cfg, 'llm_digest_timeout_sec', 8.0)),
+                    thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                )
+                # Replace the raw injections with the digest note (or nothing
+                # when the distil decided nothing was relevant). Downstream
+                # `_build_initial_system_message` reads these two locals.
+                if digest:
+                    flat = digest.replace("\n", " ")
+                    preview = flat[:80] + ("…" if len(flat) > 80 else "")
+                    print(
+                        f"  {tag}🧩 Memory digest: {len(digest)} chars "
+                        f"— \"{preview}\"",
+                        flush=True,
+                    )
+                    _local_memory_digest_text = digest
+                else:
+                    print(
+                        f"  {tag}🧩 Memory digest: no directly-relevant past memory",
+                        flush=True,
+                    )
+                # Clear the raw injections — the digest replaces them entirely
+                # for small models, regardless of whether any relevance survived.
+                _local_conversation_context = ""
+                _local_graph_context = ""
+            except Exception as e:
+                debug_log(f"memory digest step failed (non-fatal): {e}", "memory")
+
+        out["search_params"] = _local_search_params
+        out["keywords"] = _local_keywords
+        out["questions"] = _local_questions
+        out["raw_diary_entries"] = _local_raw_diary
+        out["raw_graph_parts"] = _local_raw_graph
+        out["conversation_context"] = _local_conversation_context
+        out["graph_context"] = _local_graph_context
+        out["memory_digest_text"] = _local_memory_digest_text
+        return out
+
+    def _apply_memory_result(result: dict) -> None:
+        """Merge worker output into the enclosing locals and flush
+        any deferred cache writes on the main thread."""
+        nonlocal conversation_context, memory_digest_text
+        nonlocal raw_diary_entries, raw_graph_parts
+        nonlocal keywords, questions, search_params, graph_context
+        if not isinstance(result, dict):
+            return
+        search_params = result.get("search_params", {}) or {}
+        keywords = result.get("keywords", []) or []
+        questions = result.get("questions", []) or []
+        raw_diary_entries = result.get("raw_diary_entries", []) or []
+        raw_graph_parts = result.get("raw_graph_parts", []) or []
+        conversation_context = result.get("conversation_context", "") or ""
+        graph_context = result.get("graph_context", "") or ""
+        memory_digest_text = result.get("memory_digest_text", "") or ""
+        # Apply deferred cache writes on the main thread.
+        cache_writes = result.get("cache_writes") or []
+        if cache_writes and dialogue_memory and hasattr(dialogue_memory, "hot_cache_put"):
+            for _key, _val in cache_writes:
+                try:
+                    dialogue_memory.hot_cache_put(_key, _val)
+                except Exception as _cw_exc:  # pragma: no cover — defensive
+                    debug_log(
+                        f"hot cache write failed (non-fatal): {_cw_exc}",
+                        "memory",
+                    )
+
+    # Submit enrichment to a worker thread (parallel) or run inline.
+    # The future is created here, right after the recall gate finished
+    # resolving ``needs_memory`` — submitting earlier would race with the
+    # gate; submitting later forfeits parallelism with the warm-profile
+    # load and the system-message build below.
+    _memory_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+    _memory_future: Optional[concurrent.futures.Future] = None
+    _memory_merged = False
+    _memory_t0 = time.monotonic()
+    _memory_executor_shutdown = False
+
+    def _shutdown_memory_executor() -> None:
+        """Idempotent executor cleanup. Called from every explicit
+        return path (stop tool, error reply, success reply) so the
+        worker thread is released as soon as the reply finishes.
+
+        Before shutdown, if the future is still outstanding (chat
+        finished before memory did, which is common when chat is
+        mocked or fast-cached), give the worker a brief grace
+        period to complete so its hot-cache writes land. Otherwise
+        the extractor result for this query is lost and the next
+        turn has to re-run the LLM extractor. The grace is bounded
+        (``cfg.memory_shutdown_grace_sec``, default 0.1s) so a
+        genuinely slow memory step never delays reply teardown
+        meaningfully.
+
+        Trade-off: the agentic loop is not wrapped in a try/finally
+        because that would require re-indenting ~700 lines of body.
+        Every external call inside the loop already has its own
+        try/except, so unhandled exceptions are extremely rare. If
+        one does escape, the executor falls out of scope and Python
+        finalises the worker thread when ``cancel_futures=True`` is
+        passed at GC time."""
+        nonlocal _memory_executor_shutdown, _memory_merged
+        if _memory_executor_shutdown or _memory_executor is None:
+            return
+        _memory_executor_shutdown = True
+        if _memory_future is not None and not _memory_merged:
+            try:
+                _grace = float(getattr(cfg, "memory_shutdown_grace_sec", 0.1))
+                _late = _memory_future.result(timeout=max(0.0, _grace))
+                _apply_memory_result(_late)
+                _memory_merged = True
+                debug_log(
+                    "memory worker completed during shutdown grace; "
+                    "cache writes persisted",
+                    "memory",
+                )
+            except concurrent.futures.TimeoutError:
+                debug_log(
+                    "memory worker still running at shutdown grace expiry; "
+                    "dropping result",
+                    "memory",
+                )
+            except Exception as _grace_exc:  # pragma: no cover — defensive
+                debug_log(
+                    f"memory worker grace wait failed (non-fatal): {_grace_exc}",
+                    "memory",
+                )
+        try:
+            _memory_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception as _ex_exc:  # pragma: no cover — defensive
+            debug_log(
+                f"memory executor shutdown failed (non-fatal): {_ex_exc}",
+                "memory",
+            )
+
+    if needs_memory and parallel_memory_enabled:
+        _memory_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="reply_memory"
+        )
+        print("  📚 Memory task launched (parallel)", flush=True)
+        try:
+            _memory_future = _memory_executor.submit(
+                _run_memory_enrichment_worker, True
+            )
+        except Exception as _sub_exc:  # pragma: no cover — defensive
+            debug_log(
+                f"memory future submit failed, falling back to inline: {_sub_exc}",
+                "memory",
+            )
+            _memory_future = None
+            _shutdown_memory_executor()
+            # Inline fallback so behaviour matches today on submit failure.
+            _apply_memory_result(_run_memory_enrichment_worker(False))
+            _memory_merged = True
+    else:
+        # Sequential path: either the planner says we don't need memory,
+        # the recall gate flipped it off, or parallel enrichment is
+        # disabled by config. Run inline so behaviour matches today.
+        _apply_memory_result(_run_memory_enrichment_worker(False))
+        _memory_merged = True
+
+    # Short wait before building the system message: if the worker
+    # already finished (e.g. extractor cache hit), prefer to merge the
+    # result now so the very first chat call carries memory context.
+    # If still pending, ``_memory_merged`` stays False and the agentic
+    # loop will poll between turns.
+    if _memory_future is not None and not _memory_merged:
+        try:
+            _early = _memory_future.result(timeout=0.05)
+            _apply_memory_result(_early)
+            _memory_merged = True
+            _elapsed_ms = (time.monotonic() - _memory_t0) * 1000.0
+            print(
+                f"  📚 Memory ready in {_elapsed_ms:.0f}ms "
+                "(merged before first chat turn)",
+                flush=True,
+            )
+        except concurrent.futures.TimeoutError:
+            # Expected on the cold path — memory work is still running.
+            # The agentic loop will poll between turns and merge when
+            # the future completes.
+            pass
+        except Exception as _early_exc:  # pragma: no cover — defensive
+            debug_log(
+                f"memory future raised during early wait (dropping): {_early_exc}",
+                "memory",
+            )
+            _memory_merged = True  # don't poll again — result is unrecoverable
 
     # Step 6: Tool allow-list for this turn.
     #
@@ -1388,7 +1859,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # the wasted round-trip and prompt confusion of starting native and falling back mid-turn.
     use_text_tools = (model_size == ModelSize.SMALL)
     prompts = get_system_prompts(model_size)
-    debug_log(f"Model size detected: {model_size.value} for {cfg.ollama_chat_model} (use_text_tools={use_text_tools})", "planning")
+
+    # ── Consolidated planning summary ─────────────────────────────────
+    # One line replaces the previous scattered 10+ line planning dump.
+    _plan_label = "Reply (direct)"
+    if action_plan:
+        _first_step = action_plan[0][:30] + "..." if len(action_plan[0]) > 30 else action_plan[0]
+        _plan_label = f"{_first_step} ({len(action_plan)} step(s))"
+    _tool_names = ", ".join(routed_tools[:4]) if routed_tools else "none"
+    if len(routed_tools) > 4:
+        _tool_names += f" (+{len(routed_tools) - 4})"
+    info_log(
+        f"🗺️ Plan: {_plan_label} | Tools: {_tool_names} | Model: {cfg.ollama_chat_model}"
+    )
+    debug_log(
+        f"Model size: {model_size.value} (use_text_tools={use_text_tools})", "planning"
+    )
 
     # Compound-query decomposition for small models.
     # When a query contains a conjunction joining two question-clauses, the
@@ -1712,6 +2198,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     max_turns = cfg.agentic_max_turns
     turn = 0
 
+    # Resolve the chat generation bounds once for the whole loop. The config
+    # sentinel -1.0 temperature means "unset — use the model default", in which
+    # case we pass None so chat_with_messages omits the key entirely. Both reads
+    # are guarded so a non-numeric config attribute can't crash the loop.
+    try:
+        _cfg_temp = float(getattr(cfg, 'llm_chat_temperature', -1.0))
+    except (TypeError, ValueError):
+        _cfg_temp = -1.0
+    _chat_temperature: Optional[float] = _cfg_temp if _cfg_temp >= 0 else None
+    try:
+        _chat_max_tokens: Optional[int] = int(getattr(cfg, 'llm_chat_max_tokens', 512))
+    except (TypeError, ValueError):
+        _chat_max_tokens = 512
+    try:
+        _mem_window = max(1, int(getattr(cfg, 'memory_injection_max_turns', 4)))
+    except (TypeError, ValueError):
+        _mem_window = 4
+
     # Per-reply session id used to group prompt dumps on disk when
     # JARVIS_DUMP_PROMPTS=1 is set. Generated unconditionally so the
     # identifier stays stable even if dumping is toggled mid-loop.
@@ -1733,6 +2237,80 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
         print(f"  🔁 Turn {turn}/{max_turns}", flush=True)
+
+        # Cancellation boundary 1: top of each turn, before any direct-exec
+        # tool call or chat LLM call. A STOP / barge-in that arrived since the
+        # previous turn unwinds here.
+        if _cancelled(f"turn {turn} start"):
+            _shutdown_memory_executor()
+            return _CANCELLED_SENTINEL
+
+        # Inter-turn memory injection (Path B analogue to "inject before
+        # first 24 tokens"). If the memory worker is still outstanding,
+        # poll it non-blockingly. When it completes, mutate the system
+        # message in-place so the next chat call (this turn) carries
+        # memory context. The window stays open for the first
+        # `memory_injection_max_turns` turns; once the loop progresses past
+        # it without memory arriving, stop polling and drop the result so the
+        # loop isn't stalled. The drop is logged so the degradation (recalled
+        # memory silently not reaching the model) is visible in the logs.
+        # (_mem_window resolved once at loop setup above.)
+        if _memory_future is not None and not _memory_merged:
+            if turn > _mem_window:
+                _elapsed_ms = (time.monotonic() - _memory_t0) * 1000.0
+                print(
+                    f"  📚 Memory ready/timeout in {_elapsed_ms:.0f}ms "
+                    f"— chat past injection window, dropped",
+                    flush=True,
+                )
+                debug_log(
+                    f"⚠️ memory injection window closed "
+                    f"(turn {turn} > memory_injection_max_turns={_mem_window}); "
+                    f"dropping recalled memory after {_elapsed_ms:.0f}ms",
+                    "memory",
+                )
+                _memory_merged = True  # stop polling
+            else:
+                try:
+                    _poll_result = _memory_future.result(timeout=0.001)
+                    _apply_memory_result(_poll_result)
+                    _memory_merged = True
+                    _elapsed_ms = (time.monotonic() - _memory_t0) * 1000.0
+                    # Rebuild the system message so memory context lands
+                    # in messages[0] before the chat call below. We mutate
+                    # in place to preserve the messages[0] identity that
+                    # `_update_system_message_with_context` updates each
+                    # turn for time/location drift.
+                    try:
+                        messages[0] = {
+                            "role": "system",
+                            "content": _build_initial_system_message(),
+                        }
+                    except Exception as _rebuild_exc:  # pragma: no cover — defensive
+                        debug_log(
+                            f"system-message rebuild after memory inject "
+                            f"failed (non-fatal): {_rebuild_exc}",
+                            "memory",
+                        )
+                    print(
+                        f"  📚 Memory ready in {_elapsed_ms:.0f}ms "
+                        f"(chat at turn {turn}, INJECTED)",
+                        flush=True,
+                    )
+                    debug_log(
+                        f"memory injected into messages[0] before turn {turn}",
+                        "memory",
+                    )
+                except concurrent.futures.TimeoutError:
+                    # Worker still running — try again next turn.
+                    pass
+                except Exception as _poll_exc:  # pragma: no cover — defensive
+                    debug_log(
+                        f"memory future raised during inter-turn poll "
+                        f"(dropping): {_poll_exc}",
+                        "memory",
+                    )
+                    _memory_merged = True  # don't re-poll a broken future
 
         # Plan-driven direct-exec. When a pre-loop action plan exists and
         # has more tool steps than tool results seen so far, resolve the
@@ -1789,6 +2367,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             and _cand_sig not in recent_tool_signatures
                         )
                         if _plan_exec_ok:
+                            # Cancellation boundary 2 (direct-exec variant):
+                            # before firing the planner-resolved tool. Checked
+                            # before the assistant tool_calls message is
+                            # appended so no dangling call is left behind.
+                            if _cancelled(
+                                f"before plan direct-exec {_name}"
+                            ):
+                                _shutdown_memory_executor()
+                                return _CANCELLED_SENTINEL
                             debug_log(
                                 f"planner: direct-executing plan step "
                                 f"{_tool_results_so_far + 1} — "
@@ -1926,6 +2513,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 extra_options=None,
                 tools=_dump_tools_schema,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                num_predict=_chat_max_tokens,
+                temperature=_chat_temperature,
             )
             dump_reply_turn(
                 session_id=_dump_session_id,
@@ -1957,6 +2546,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 extra_options=None,
                 tools=None,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                num_predict=_chat_max_tokens,
+                temperature=_chat_temperature,
             )
             dump_reply_turn(
                 session_id=_dump_session_id,
@@ -2030,6 +2621,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         if t_name:
             tool_name, tool_args, tool_call_id = t_name, t_args, t_call_id
             debug_log(f"🛠️ tool requested: {tool_name}", "planning")
+            # Cancellation boundary 2: before dispatching the model-requested
+            # tool. A STOP arriving between the chat response and the tool
+            # dispatch unwinds here rather than firing the tool's side effect.
+            if _cancelled(f"before tool dispatch {tool_name}"):
+                _shutdown_memory_executor()
+                return _CANCELLED_SENTINEL
             try:
                 _args_preview = json.dumps(tool_args or {}, ensure_ascii=False)
             except Exception:
@@ -2158,6 +2755,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
                 # Return None to signal no response should be generated
                 # Don't add to dialogue memory - this is a dismissal, not a conversation
+                _shutdown_memory_executor()
                 return None
 
             # Append tool result
@@ -2340,6 +2938,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                         "tool_failed": True,
                     })
                 debug_log(f"    ❌ tool error: {err}", "planning")
+            # Cancellation boundary 3: after the tool result is appended,
+            # before looping back for the next turn. A STOP that arrived while
+            # the tool was executing unwinds here so the model is never asked
+            # to synthesise a reply the user no longer wants.
+            if _cancelled(f"after tool result {tool_name}"):
+                _shutdown_memory_executor()
+                return _CANCELLED_SENTINEL
             # Loop continues to let the agent produce the next step/final reply
             continue
 
@@ -2350,8 +2955,11 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             malformed_fallback = False
         elif _is_malformed_json_response(content):
             debug_log(f"  ⚠️ Malformed content — delivering error reply: '{content[:80]}...'", "planning")
-            model_name = (cfg.ollama_chat_model or "").lower()
-            is_small = any(s in model_name for s in [":1b", ":3b", ":7b", "-1b", "-3b", "-7b"])
+            # Classify via detect_model_size so the default gemma4:e2b (and any
+            # other tag-only small model) is correctly recognised as small. The
+            # old inline substring check (:1b/:3b/:7b) missed gemma4:e2b and
+            # served large-model wording to small-model users.
+            is_small = _model_is_small(cfg.ollama_chat_model)
             candidate_reply = (
                 "I had trouble understanding that request. "
                 "This can happen with smaller AI models. "
@@ -2366,6 +2974,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
 
         reply = candidate_reply
         last_candidate_reply = candidate_reply
+        # Cancellation boundary 4: a STOP that arrived during the final chat
+        # call (the one that produced this natural-language content) must
+        # suppress speaking it. Return the no-speak sentinel instead of the
+        # freshly-generated reply.
+        if _cancelled("before delivering final reply"):
+            _shutdown_memory_executor()
+            return _CANCELLED_SENTINEL
         break
 
     # Step 9: Handle error case - return error message if no reply
@@ -2419,6 +3034,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             except Exception as e:
                 debug_log(f"dialogue memory error: {e}", "memory")
 
+        _shutdown_memory_executor()
         return reply
 
     # Step 10: Output and memory update
@@ -2458,4 +3074,5 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"dialogue memory error: {e}", "memory")
 
+    _shutdown_memory_executor()
     return reply

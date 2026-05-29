@@ -59,7 +59,7 @@ _BTN_STYLE = """
     }
     QPushButton:hover {
         background-color: #3f3f46;
-        border-color: #f59e0b;
+        border-color: #22d3ee;
     }
 """
 

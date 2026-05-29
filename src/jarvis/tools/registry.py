@@ -90,13 +90,17 @@ def refresh_mcp_tools(verbose: bool = True) -> Tuple[Dict[str, "ToolSpec"], Dict
             debug_log("No MCP config cached, skipping refresh", "mcp")
             return {}, {}
 
-        if verbose:
-            print("🔄 Refreshing MCP tools...", flush=True)
-
         _mcp_tools_cache, errors = discover_mcp_tools(_mcp_config_cache)
 
         if verbose:
-            print(f"  ✅ Found {len(_mcp_tools_cache)} MCP tools", flush=True)
+            _server_names = sorted({tn.split("__")[0] for tn in _mcp_tools_cache.keys() if "__" in tn})
+            if _server_names:
+                print(
+                    f"🔄 MCP refreshed: {', '.join(_server_names)} ({len(_mcp_tools_cache)} tools)",
+                    flush=True,
+                )
+            else:
+                print(f"🔄 MCP refreshed: {len(_mcp_tools_cache)} tools", flush=True)
 
         debug_log(f"MCP tools cache refreshed with {len(_mcp_tools_cache)} tools", "mcp")
         return _mcp_tools_cache.copy(), errors

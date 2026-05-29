@@ -3,35 +3,30 @@ import type { PanelTab } from '@/types/panel';
 import { TABS } from '@/types/panel';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
+import StatusBar from './StatusBar';
 import LiveLogsTab from './tabs/LiveLogsTab';
 import AudioIOTab from './tabs/AudioIOTab';
 import WakeWordTab from './tabs/WakeWordTab';
-import TranscriptionTab from './tabs/TranscriptionTab';
 import VoiceTTSTab from './tabs/VoiceTTSTab';
 import LanguageModelTab from './tabs/LanguageModelTab';
 import MCPServersTab from './tabs/MCPServersTab';
 import APIKeysTab from './tabs/APIKeysTab';
-import MemoryTab from './tabs/MemoryTab';
-import FastPathsTab from './tabs/FastPathsTab';
 import EasterEggsTab from './tabs/EasterEggsTab';
 
 const TAB_COMPONENTS: Record<PanelTab, React.ComponentType> = {
   'live-logs': LiveLogsTab,
   'audio-io': AudioIOTab,
   'wake-word': WakeWordTab,
-  'transcription': TranscriptionTab,
   'voice-tts': VoiceTTSTab,
   'language-model': LanguageModelTab,
   'mcp-servers': MCPServersTab,
   'api-keys': APIKeysTab,
-  'memory': MemoryTab,
-  'fast-paths': FastPathsTab,
   'easter-eggs': EasterEggsTab,
 };
 
 export default function ControlPanel() {
   const [activeTab, setActiveTab] = useState<PanelTab>('live-logs');
-  const [sidebarExpanded, setSidebarExpanded] = useState(true);
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
 
   const toggleSidebar = useCallback(() => {
     setSidebarExpanded(prev => !prev);
@@ -44,7 +39,7 @@ export default function ControlPanel() {
       style={{
         width: '100vw',
         height: '100vh',
-        background: 'linear-gradient(180deg, #050b1f 0%, #0a1428 100%)',
+        background: '#060a12',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -57,7 +52,7 @@ export default function ControlPanel() {
         style={{
           position: 'absolute',
           inset: 0,
-          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 0l25.98 15v30L30 60 4.02 45V15L30 0z' fill='none' stroke='%2322d3ee' stroke-opacity='0.02'/%3E%3C/svg%3E")`,
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 0l25.98 15v30L30 60 4.02 45V15L30 0z' fill='none' stroke='%234fd1c5' stroke-opacity='0.015'/%3E%3C/svg%3E")`,
           backgroundSize: 60,
           pointerEvents: 'none',
           zIndex: 0,
@@ -83,15 +78,17 @@ export default function ControlPanel() {
           style={{
             flex: 1,
             overflow: 'auto',
-            padding: 24,
+            padding: '12px 16px',
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
           {/* Tab Header */}
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 16, flexShrink: 0 }}>
             <h1
               style={{
                 fontFamily: "'Orbitron', sans-serif",
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 500,
                 letterSpacing: '0.12em',
                 color: '#e6f1ff',
@@ -105,7 +102,7 @@ export default function ControlPanel() {
               style={{
                 width: 40,
                 height: 2,
-                background: 'linear-gradient(90deg, #22d3ee, transparent)',
+                background: 'linear-gradient(90deg, #4fd1c5, transparent)',
                 borderRadius: 1,
               }}
             />
@@ -114,17 +111,21 @@ export default function ControlPanel() {
           {/* Tab Content */}
           <div
             style={{
-              background: 'rgba(15, 26, 46, 0.6)',
-              border: '1px solid rgba(34, 211, 238, 0.12)',
-              borderRadius: 16,
-              padding: 24,
-              minHeight: 'calc(100vh - 180px)',
+              flex: 1,
+              background: 'rgba(6, 10, 18, 0.6)',
+              border: '1px solid rgba(79, 209, 197, 0.08)',
+              borderRadius: 6,
+              padding: 20,
+              overflow: 'auto',
             }}
           >
             <ActiveComponent />
           </div>
         </div>
       </div>
+
+      {/* Status Bar */}
+      <StatusBar />
     </div>
   );
 }

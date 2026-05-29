@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { api, openStateStream } from '@/lib/api';
 
-export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
+export type VoiceState = 'idle' | 'listening' | 'thinking' | 'synthesizing' | 'speaking';
 
 /**
  * Live-wired version of useVoiceState — subscribes to the daemon's
@@ -13,6 +13,7 @@ export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 export function useVoiceState() {
   const [state, setState] = useState<VoiceState>('idle');
   const [isMuted, setIsMuted] = useState(false);
+  const [query, setQuery] = useState<string>('');
   const [connected, setConnected] = useState(false);
   const demoTimersRef = useRef<number[]>([]);
 
@@ -25,6 +26,7 @@ export function useVoiceState() {
         if (!alive) return;
         setState(s.state);
         setIsMuted(s.isMuted);
+        setQuery(s.query || '');
         setConnected(true);
       })
       .catch(() => {
@@ -34,6 +36,7 @@ export function useVoiceState() {
     const close = openStateStream((s) => {
       setState(s.state);
       setIsMuted(s.isMuted);
+      setQuery(s.query || '');
       setConnected(true);
     });
 
@@ -51,6 +54,8 @@ export function useVoiceState() {
   const stop = useCallback(() => {
     clearDemoTimers();
     setState('idle');
+    setIsMuted(false);
+    setQuery('');
     api.stop().catch(() => {
       /* still local-reset above */
     });
@@ -68,8 +73,8 @@ export function useVoiceState() {
   }, [isMuted, clearDemoTimers]);
 
   /** Local-only demo cycle — only fires when the daemon is offline. */
-  const startDemo = useCallback(() => {
-    if (connected || isMuted || state !== 'idle') return;
+  const startDemo = useCallback((force = false) => {
+    if (!force && (connected || isMuted || state !== 'idle')) return;
     clearDemoTimers();
     setState('listening');
     const t1 = window.setTimeout(() => {
@@ -83,6 +88,22 @@ export function useVoiceState() {
     }, 2000);
     demoTimersRef.current.push(t1);
   }, [clearDemoTimers, connected, isMuted, state]);
+
+  const triggerNow = useCallback(() => {
+    if (connected) {
+      if (isMuted) {
+        api.unmute()
+          .then(() => api.triggerNow())
+          .catch(() => {});
+      } else {
+        api.triggerNow().catch(() => {});
+      }
+    } else if (state === 'idle') {
+      // Fallback to demo cycle when daemon is offline
+      setIsMuted(false);
+      startDemo(true);
+    }
+  }, [connected, state, isMuted, startDemo]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -103,5 +124,5 @@ export function useVoiceState() {
     };
   }, [startDemo, stop, toggleMute, clearDemoTimers]);
 
-  return { state, isMuted, toggleMute, stop, startDemo };
+  return { state, isMuted, query, toggleMute, stop, startDemo, triggerNow };
 }

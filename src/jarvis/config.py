@@ -32,6 +32,18 @@ SUPPORTED_CHAT_MODELS: Dict[str, Dict[str, str]] = {
         "size": "~12GB",
         "vram": "24GB+",
     },
+    "qwen3.5:9b-8k": {
+        "name": "Qwen 3.5 9B (8k ctx)",
+        "description": "Custom local build — strong chat + tool use; pairs with Piper TTS on a 16GB GPU",
+        "size": "~6.6GB",
+        "vram": "16GB+",
+    },
+    "qwen3.5:4b-4k": {
+        "name": "Qwen 3.5 4B (4k ctx)",
+        "description": "Fast intent/router model — low VRAM, quick classification",
+        "size": "~3.4GB",
+        "vram": "8GB+",
+    },
 }
 
 # The default chat model (first in the supported list)
@@ -85,6 +97,12 @@ class Settings:
     llm_digest_timeout_sec: float
     llm_embedding_timeout_sec: float
     llm_profile_select_timeout_sec: float
+    # Bounds/tuning for the main agentic chat generation. `llm_chat_max_tokens`
+    # caps generated tokens per synthesis turn (num_predict) so latency/length
+    # are bounded; `llm_chat_temperature` is the sampling temperature, with the
+    # sentinel -1.0 meaning "unset / use the model default".
+    llm_chat_max_tokens: int
+    llm_chat_temperature: float
 
     # Profiles & Behavior
     active_profiles: list[str]
@@ -108,6 +126,9 @@ class Settings:
     tts_chatterbox_audio_prompt: str | None  # Path to audio file for voice cloning with Chatterbox
     tts_chatterbox_exaggeration: float  # Emotion exaggeration control (0.0-1.0+)
     tts_chatterbox_cfg_weight: float  # CFG weight for quality/speed trade-off
+    tts_chatterbox_steps: int  # Tier 1.2: max_new_tokens for t3 diffusion sampling (1000 default upstream, 300 recommended)
+    tts_output_device: Optional[str]  # Output device for sounddevice + pygame. None = system default. Accepts integer index (e.g. "16") or case-insensitive name substring (e.g. "PD200X" or "Realtek").
+    tts_streaming_enabled: bool  # Synthesise + play replies sentence-by-sentence (Piper) so the first sentence starts before the whole reply is synthesised. Falls back to whole-text playback when False or for single-sentence replies.
 
     # Piper TTS
     tts_piper_model_path: str | None  # Path to .onnx voice model
@@ -132,6 +153,19 @@ class Settings:
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
 
+    # STT backend selection — "whisper" (local faster-whisper) or "wispr" (cloud Wispr Flow via push-to-talk bridge)
+    stt_backend: str
+    # Wispr Flow bridge settings (only used when stt_backend == "wispr")
+    wispr_wake_model: str          # openWakeWord model name (default "hey_jarvis_v0.1")
+    wispr_wake_threshold: float    # Detection confidence threshold 0.0-1.0 (default 0.1)
+    wispr_silence_ms: int          # Silero VAD silence ms for PTT release (default 800)
+    wispr_min_dictation_sec: float # Suppress early VAD release for this many seconds (default 2.0)
+    wispr_max_dictation_sec: int   # Hard timeout for dictation (default 30)
+    wispr_clipboard_wait_sec: float # Max wait for Wispr Flow transcript to appear in clipboard (default 6.0)
+    wispr_hot_window_sec: float    # Seconds after reply during which follow-up does not need wake word (default 10.0)
+    wispr_suppress_autotype: bool  # Send backspaces to erase Wispr Flow's auto-typed text (default True)
+    wispr_mic_device: int | str | None  # Mic device for the bridge; None = system default
+
     # Whisper Speech Recognition
     whisper_model: str
     whisper_backend: str  # "auto", "mlx", or "faster-whisper"
@@ -146,6 +180,11 @@ class Settings:
     whisper_compression_ratio_threshold: Optional[float]
     whisper_initial_prompt: Optional[str]
     whisper_allowed_languages: list[str]
+    # When Whisper's auto-detect returns a language NOT in allowed, the
+    # fallback picker tries languages in this priority order before falling
+    # back to probability-voting. Set to e.g. ["el", "en"] for Greek-primary
+    # users so Greek wins over English-biased auto-detect. None = no priority.
+    language_priority: list[str]
     # Bootstrap language for the first few utterances before the sticky
     # language lock reaches consensus. None = auto-detect.
     whisper_default_language: Optional[str]
@@ -197,6 +236,10 @@ class Settings:
     dialogue_memory_timeout: float
     memory_enrichment_max_results: int
     memory_enrichment_source: str  # "all", "diary", or "graph"
+    # How many agentic turns the inter-turn memory-injection window stays open.
+    # If the async memory worker has not finished by this turn, the recalled
+    # memory is dropped (logged via debug_log) so the loop can progress.
+    memory_injection_max_turns: int
     # Tool-call + tool-result messages from prior replies in the hot window
     # are re-injected into the next turn so follow-ups can reuse them instead
     # of re-fetching. These knobs cap how many prior tool turns survive and
@@ -570,6 +613,11 @@ def get_default_config() -> Dict[str, Any]:
         "llm_digest_timeout_sec": 8.0,
         "llm_embedding_timeout_sec": 60.0,
         "llm_profile_select_timeout_sec": 30.0,
+        # Cap the main chat generation at 512 tokens per turn (num_predict) so
+        # length/latency are bounded on small local models. -1.0 temperature
+        # means "leave the model default untouched".
+        "llm_chat_max_tokens": 512,
+        "llm_chat_temperature": -1.0,
 
         # Profiles & Behavior
         "active_profiles": ["developer", "business", "life"],
@@ -593,6 +641,8 @@ def get_default_config() -> Dict[str, Any]:
         "tts_chatterbox_audio_prompt": None,  # Path to audio file for voice cloning
         "tts_chatterbox_exaggeration": 0.5,  # Emotion exaggeration (0.0-1.0+)
         "tts_chatterbox_cfg_weight": 0.5,  # CFG weight for quality/speed trade-off
+        "tts_chatterbox_steps": 300,  # Tier 1.2: max_new_tokens for t3 (300 = ~2.5s/sentence on RTX 5070 Ti)
+        "tts_streaming_enabled": True,  # Sentence-by-sentence Piper playback for faster time-to-first-audio
 
         # Piper TTS
         "tts_piper_model_path": None,  # Path to .onnx voice model
@@ -622,6 +672,21 @@ def get_default_config() -> Dict[str, Any]:
         # of medium while retaining ~95% of large-v3 accuracy. The listener
         # has a built-in fallback to large-v3 → medium if turbo isn't
         # supported by the installed faster-whisper (≥1.1.0 required).
+        # STT backend selection — "whisper" runs faster-whisper locally; "wispr" uses
+        # the Wispr Flow desktop app via a push-to-talk bridge (openWakeWord + Silero VAD
+        # + Ctrl+Win simulation). "wispr" gives better quality + lower local VRAM but
+        # sends audio to Wispr's cloud and loses Greek wake aliases.
+        "stt_backend": "whisper",
+        "wispr_wake_model": "hey_jarvis_v0.1",
+        "wispr_wake_threshold": 0.1,
+        "wispr_silence_ms": 800,
+        "wispr_min_dictation_sec": 2.0,
+        "wispr_max_dictation_sec": 30,
+        "wispr_clipboard_wait_sec": 6.0,
+        "wispr_hot_window_sec": 10.0,
+        "wispr_suppress_autotype": True,
+        "wispr_mic_device": None,
+
         "whisper_model": "large-v3-turbo",
         "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
         "whisper_device": "auto",  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
@@ -760,6 +825,9 @@ def get_default_config() -> Dict[str, Any]:
         "dialogue_memory_timeout": 300.0,
         "memory_enrichment_max_results": 3,
         "memory_enrichment_source": "all",  # "all", "diary", or "graph"
+        # Keep the memory-injection window open for the first 4 agentic turns
+        # before dropping late-arriving recalled memory.
+        "memory_injection_max_turns": 4,
         # Tool carryover: cap re-injected prior tool turns + chars per entry.
         "tool_carryover_max_turns": 2,
         "tool_carryover_per_entry_chars": 1200,
@@ -898,6 +966,13 @@ def load_settings() -> Settings:
     tts_chatterbox_audio_prompt = None if tts_chatterbox_audio_prompt_val in (None, "", "null") else str(tts_chatterbox_audio_prompt_val)
     tts_chatterbox_exaggeration = float(merged.get("tts_chatterbox_exaggeration", 0.5))
     tts_chatterbox_cfg_weight = float(merged.get("tts_chatterbox_cfg_weight", 0.5))
+    tts_chatterbox_steps = int(merged.get("tts_chatterbox_steps", 300))
+    tts_output_device_val = merged.get("tts_output_device", None)
+    if tts_output_device_val in (None, "", "null"):
+        tts_output_device = None
+    else:
+        tts_output_device = str(tts_output_device_val)
+    tts_streaming_enabled = bool(merged.get("tts_streaming_enabled", True))
 
     # Piper TTS settings
     tts_piper_model_path_val = merged.get("tts_piper_model_path")
@@ -920,6 +995,46 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
+    # STT backend selection (Phase B of Wispr-bridge rollout)
+    stt_backend = str(merged.get("stt_backend", "whisper")).lower()
+    if stt_backend not in ("whisper", "wispr"):
+        stt_backend = "whisper"  # Defensive default
+    wispr_wake_model = str(merged.get("wispr_wake_model", "hey_jarvis_v0.1"))
+    try:
+        wispr_wake_threshold = float(merged.get("wispr_wake_threshold", 0.1))
+    except (TypeError, ValueError):
+        wispr_wake_threshold = 0.1
+    try:
+        wispr_silence_ms = int(merged.get("wispr_silence_ms", 800))
+    except (TypeError, ValueError):
+        wispr_silence_ms = 800
+    try:
+        wispr_min_dictation_sec = float(merged.get("wispr_min_dictation_sec", 2.0))
+    except (TypeError, ValueError):
+        wispr_min_dictation_sec = 2.0
+    try:
+        wispr_max_dictation_sec = int(merged.get("wispr_max_dictation_sec", 30))
+    except (TypeError, ValueError):
+        wispr_max_dictation_sec = 30
+    try:
+        wispr_clipboard_wait_sec = float(merged.get("wispr_clipboard_wait_sec", 6.0))
+    except (TypeError, ValueError):
+        wispr_clipboard_wait_sec = 6.0
+    try:
+        wispr_hot_window_sec = float(merged.get("wispr_hot_window_sec", 10.0))
+    except (TypeError, ValueError):
+        wispr_hot_window_sec = 10.0
+    wispr_suppress_autotype = bool(merged.get("wispr_suppress_autotype", True))
+    wispr_mic_device_val = merged.get("wispr_mic_device", None)
+    if wispr_mic_device_val in (None, "", "null"):
+        wispr_mic_device = None
+    else:
+        # Accept either int index or string substring of device name
+        try:
+            wispr_mic_device = int(wispr_mic_device_val)
+        except (TypeError, ValueError):
+            wispr_mic_device = str(wispr_mic_device_val)
+
     whisper_model = str(merged.get("whisper_model", "large-v3-turbo"))
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
@@ -950,6 +1065,16 @@ def load_settings() -> Settings:
         [str(x).strip().lower() for x in _allowed_raw if str(x).strip()]
         if isinstance(_allowed_raw, list)
         else ["el", "en"]
+    )
+    # Language priority — first language wins fallback ties. Defaults to
+    # whisper_allowed_languages (in order), so user just needs to put their
+    # primary language first in `whisper_allowed_languages` to fix Greek
+    # mis-detection.
+    _priority_raw = merged.get("language_priority", whisper_allowed_languages)
+    language_priority = (
+        [str(x).strip().lower() for x in _priority_raw if str(x).strip()]
+        if isinstance(_priority_raw, list)
+        else list(whisper_allowed_languages)
     )
     _default_lang_raw = merged.get("whisper_default_language", None)
     whisper_default_language: Optional[str]
@@ -1051,6 +1176,7 @@ def load_settings() -> Settings:
     memory_enrichment_source = str(merged.get("memory_enrichment_source", "all")).lower()
     if memory_enrichment_source not in ("all", "diary", "graph"):
         memory_enrichment_source = "all"
+    memory_injection_max_turns = max(1, int(merged.get("memory_injection_max_turns", 4)))
     tool_carryover_max_turns = max(0, int(merged.get("tool_carryover_max_turns", 2)))
     tool_carryover_per_entry_chars = max(200, int(merged.get("tool_carryover_per_entry_chars", 1200)))
     _digest_raw = merged.get("memory_digest_enabled", None)
@@ -1110,6 +1236,23 @@ def load_settings() -> Settings:
     raw_dict = merged.get("dictation_custom_dictionary", [])
     dictation_custom_dictionary = list(raw_dict) if isinstance(raw_dict, list) else []
     mcps = _ensure_dict(merged.get("mcps"))
+    if not mcps:
+        # Back-compat / UI-sync: config.json (and the React "Services" tab)
+        # store servers as a LIST under `mcp_servers`
+        # [{id, name, command, args, env}, ...], but the runtime wants a
+        # DICT keyed by id with {command, args, env}. Without this conversion
+        # cfg.mcps stays empty → "No MCP servers configured" → Spotify /
+        # weather / gmail / etc. tools never load (e.g. "next track" cannot
+        # actually control the player, so Jarvis says it can't help).
+        _servers = merged.get("mcp_servers")
+        if isinstance(_servers, list):
+            for _srv in _servers:
+                if isinstance(_srv, dict) and _srv.get("id") and _srv.get("command"):
+                    mcps[str(_srv["id"])] = {
+                        "command": _srv.get("command"),
+                        "args": _srv.get("args", []),
+                        "env": _srv.get("env", {}),
+                    }
     whisper_min_confidence = float(merged.get("whisper_min_confidence", 0.4))
     whisper_no_speech_threshold = float(merged.get("whisper_no_speech_threshold", 0.5))
     whisper_min_audio_duration = float(merged.get("whisper_min_audio_duration", 0.3))
@@ -1119,6 +1262,8 @@ def load_settings() -> Settings:
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 8.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
+    llm_chat_max_tokens = int(merged.get("llm_chat_max_tokens", 512))
+    llm_chat_temperature = float(merged.get("llm_chat_temperature", -1.0))
 
     return Settings(
         # Database & Storage
@@ -1134,6 +1279,8 @@ def load_settings() -> Settings:
         llm_digest_timeout_sec=llm_digest_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
         llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
+        llm_chat_max_tokens=llm_chat_max_tokens,
+        llm_chat_temperature=llm_chat_temperature,
 
         # Profiles & Behavior
         active_profiles=active_profiles,
@@ -1153,6 +1300,9 @@ def load_settings() -> Settings:
         tts_chatterbox_audio_prompt=tts_chatterbox_audio_prompt,
         tts_chatterbox_exaggeration=tts_chatterbox_exaggeration,
         tts_chatterbox_cfg_weight=tts_chatterbox_cfg_weight,
+        tts_chatterbox_steps=tts_chatterbox_steps,
+        tts_output_device=tts_output_device,
+        tts_streaming_enabled=tts_streaming_enabled,
 
         # Piper TTS
         tts_piper_model_path=tts_piper_model_path,
@@ -1177,6 +1327,18 @@ def load_settings() -> Settings:
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
 
+        # STT backend selection + Wispr Flow bridge settings
+        stt_backend=stt_backend,
+        wispr_wake_model=wispr_wake_model,
+        wispr_wake_threshold=wispr_wake_threshold,
+        wispr_silence_ms=wispr_silence_ms,
+        wispr_min_dictation_sec=wispr_min_dictation_sec,
+        wispr_max_dictation_sec=wispr_max_dictation_sec,
+        wispr_clipboard_wait_sec=wispr_clipboard_wait_sec,
+        wispr_hot_window_sec=wispr_hot_window_sec,
+        wispr_suppress_autotype=wispr_suppress_autotype,
+        wispr_mic_device=wispr_mic_device,
+
         # Whisper Speech Recognition
         whisper_model=whisper_model,
         whisper_backend=whisper_backend,
@@ -1190,6 +1352,7 @@ def load_settings() -> Settings:
         whisper_compression_ratio_threshold=whisper_compression_ratio_threshold,
         whisper_initial_prompt=whisper_initial_prompt,
         whisper_allowed_languages=whisper_allowed_languages,
+        language_priority=language_priority,
         whisper_default_language=whisper_default_language,
         whisper_beam_size=whisper_beam_size,
         whisper_temperature_fallback=whisper_temperature_fallback,
@@ -1232,6 +1395,7 @@ def load_settings() -> Settings:
         dialogue_memory_timeout=dialogue_memory_timeout,
         memory_enrichment_max_results=memory_enrichment_max_results,
         memory_enrichment_source=memory_enrichment_source,
+        memory_injection_max_turns=memory_injection_max_turns,
         tool_carryover_max_turns=tool_carryover_max_turns,
         tool_carryover_per_entry_chars=tool_carryover_per_entry_chars,
         memory_digest_enabled=memory_digest_enabled,
