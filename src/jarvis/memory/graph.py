@@ -642,6 +642,56 @@ class GraphMemoryStore:
             ).fetchone()
         return row["version"] if row else 0
 
+    def purge_expired_nodes(self) -> int:
+        """Delete expired low-importance LEAF nodes (TTL). Structural/permanent,
+        non-leaf, and normal/high-importance nodes are exempt. Returns the count
+        removed. Deletion goes through ``delete_node`` so its structural guard and
+        warm-profile invalidation always apply.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT id FROM memory_nodes
+                WHERE permanent = 0
+                  AND importance <= 1
+                  AND ttl_days IS NOT NULL
+                  AND id NOT IN (
+                      SELECT DISTINCT parent_id FROM memory_nodes WHERE parent_id IS NOT NULL
+                  )
+                  AND julianday('now') - julianday(updated_at) > ttl_days
+                """
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+        removed = sum(1 for node_id in ids if self.delete_node(node_id))
+        if removed:
+            debug_log(f"TTL purge: removed {removed} expired leaf node(s)", "memory")
+        return removed
+
+    def prune_low_importance(self, min_age_days: int = 30) -> int:
+        """Delete ephemeral (importance 0) LEAF nodes older than ``min_age_days``.
+        Structural/permanent and non-leaf nodes are exempt. Returns the count
+        removed. User/Directives facts sit on permanent roots / importance>=2
+        split-leaves, so this can only ever reach World-ish ephemera.
+        """
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT id FROM memory_nodes
+                WHERE permanent = 0
+                  AND importance = 0
+                  AND id NOT IN (
+                      SELECT DISTINCT parent_id FROM memory_nodes WHERE parent_id IS NOT NULL
+                  )
+                  AND julianday('now') - julianday(updated_at) > ?
+                """,
+                (min_age_days,),
+            ).fetchall()
+            ids = [r["id"] for r in rows]
+        removed = sum(1 for node_id in ids if self.delete_node(node_id))
+        if removed:
+            debug_log(f"weekly prune: removed {removed} ephemeral leaf node(s)", "memory")
+        return removed
+
     # ── Entry points ────────────────────────────────────────────────────
 
     def get_recent_nodes(self, limit: int = RECENT_NODES_COUNT) -> list[MemoryNode]:

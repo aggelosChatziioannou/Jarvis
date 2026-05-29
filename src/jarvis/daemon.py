@@ -644,6 +644,11 @@ def main() -> None:
         except Exception as _rerr:
             debug_log(f"reminders disabled (store init failed): {_rerr!r}", "reminders")
 
+    # Periodic memory-maintenance jobs (TTL purge / weekly prune / monthly
+    # consolidation), checked hourly so the DB isn't touched every poll tick.
+    last_jobs_check = time.time()
+    jobs_check_interval = 3600.0
+
     # Start stdin monitor thread for Windows shutdown signal
     # On Windows, CTRL_BREAK_EVENT doesn't work reliably with CREATE_NO_WINDOW
     # So we also check for stdin being closed as a shutdown signal
@@ -688,6 +693,15 @@ def main() -> None:
                 except Exception as _rerr:
                     debug_log(f"reminder tick failed (non-fatal): {_rerr!r}", "reminders")
                 last_reminder_check = now
+
+            # Periodic memory-maintenance jobs (hourly throttle; fully fail-open).
+            if (now - last_jobs_check) >= jobs_check_interval:
+                try:
+                    from .memory.maintenance import run_periodic_memory_jobs
+                    run_periodic_memory_jobs(db, cfg)
+                except Exception as _merr:
+                    debug_log(f"periodic memory jobs failed (non-fatal): {_merr!r}", "memory")
+                last_jobs_check = now
 
         # Keep voice thread alive (unless stop requested)
         if voice_thread is not None:

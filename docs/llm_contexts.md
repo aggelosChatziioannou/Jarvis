@@ -194,6 +194,14 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: one line — an ISO-8601 local datetime, a 5-field cron string, or `NONE`. Validated (`datetime.fromisoformat` / `croniter.is_valid`); anything else → None. Consumed by `ReminderStore.create`.
 - **Limits**: `reminder_parse_timeout_sec` (8s), `num_ctx: 1024`, `temperature: 0.0`, no thinking. Fails closed — an unresolved time creates no reminder rather than guessing.
 
+## 16. Monthly Diary Consolidation (reuses extractor + merge)
+
+- **File**: [src/jarvis/memory/conversation.py](src/jarvis/memory/conversation.py) — `consolidate_previous_month`, scheduled via `memory/maintenance.py` on the daemon poll loop.
+- **Trigger**: monthly (28-day guard, last-run persisted in `job_state`), gated by `memory_monthly_consolidation_enabled` (default on). Targets the previous calendar month.
+- **Model / gating**: **no new LLM call** — folds the month's summaries through `update_graph_from_dialogue`, reusing the diary→graph extractor + best-child picker + node merge (contexts #10 / #11 / #11b) with the warm picker chain. Fail-open: a fold error archives a truncated fallback narrative instead.
+- **Inputs / Output**: the month's `conversation_summaries` → durable graph facts + one `episodic_archive` row; raw rows then removed (or kept when `memory_archive_delete_raw=False`).
+- **Limits**: bounded by the reused extractor/merge timeouts; ≤ once/month, on its own poll-loop tick so it never blocks voice.
+
 ---
 
 ## Frequency / Size Summary
@@ -217,6 +225,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 | 13 | Plan step resolver | 0-N (SMALL only) | auto by size + plan | SMALL (via router chain) |
 | 14 | Tool-specific | per-tool | n/a | LARGE |
 | 15 | Reminder time-parse fallback | 0 (only on ambiguous parse, tool-time) | gated; deterministic-first | SMALL (via router chain) |
+| 16 | Monthly consolidation | 0 (reuses #10/#11b, ~once/month) | gated; background | SMALL/LARGE (reuses extractor chain) |
 
 ## Size-aware auto switches
 

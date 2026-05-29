@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS memory_history (
 );
 CREATE INDEX IF NOT EXISTS idx_memhist_node ON memory_history(node_id);
 CREATE INDEX IF NOT EXISTS idx_memhist_ts ON memory_history(ts_utc DESC);
+
+-- Episodic archive: monthly-consolidated diary; raw rows are compressed away.
+CREATE TABLE IF NOT EXISTS episodic_archive (
+  id                   INTEGER PRIMARY KEY,
+  month_year           TEXT NOT NULL UNIQUE,
+  consolidated_summary TEXT NOT NULL,
+  original_count       INTEGER NOT NULL,
+  archived_at          TEXT NOT NULL
+);
+
+-- Persisted last-run timestamps for periodic memory-maintenance jobs.
+CREATE TABLE IF NOT EXISTS job_state (
+  job_name     TEXT PRIMARY KEY,
+  last_run_utc TEXT NOT NULL
+);
 """
 
 _VSS_SCHEMA_SQL = """
@@ -455,6 +470,60 @@ class Database:
                 """,
             ).fetchall()
             return rows
+
+    def get_summaries_for_month(self, month_year: str) -> list[sqlite3.Row]:
+        """All diary summaries whose date_utc falls in a YYYY-MM, oldest first."""
+        with self._lock:
+            return self.conn.execute(
+                "SELECT * FROM conversation_summaries WHERE substr(date_utc,1,7) = ? "
+                "ORDER BY date_utc ASC",
+                (month_year,),
+            ).fetchall()
+
+    def delete_summaries_for_month(self, month_year: str) -> int:
+        """Delete a month's raw diary rows (FTS/vectors cleaned by triggers)."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM conversation_summaries WHERE substr(date_utc,1,7) = ?",
+                (month_year,),
+            )
+            self.conn.commit()
+            return cur.rowcount
+
+    def archive_month(
+        self,
+        month_year: str,
+        consolidated_summary: str,
+        original_count: int,
+        archived_at: Optional[str] = None,
+    ) -> bool:
+        """Record a month's consolidation. Idempotent via UNIQUE(month_year)."""
+        if archived_at is None:
+            archived_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT OR IGNORE INTO episodic_archive "
+                "(month_year, consolidated_summary, original_count, archived_at) VALUES (?, ?, ?, ?)",
+                (month_year, consolidated_summary, original_count, archived_at),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    # --- Periodic-job state ---
+    def get_job_last_run(self, job_name: str) -> Optional[str]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT last_run_utc FROM job_state WHERE job_name = ?", (job_name,)
+            ).fetchone()
+        return row["last_run_utc"] if row else None
+
+    def set_job_last_run(self, job_name: str, ts_utc: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO job_state (job_name, last_run_utc) VALUES (?, ?)",
+                (job_name, ts_utc),
+            )
+            self.conn.commit()
 
     @property
     def has_vector_store(self) -> bool:
