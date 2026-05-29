@@ -121,3 +121,54 @@ def test_analyze_handles_model_failure_gracefully(monkeypatch):
     client = VisionModelClient(base_url="http://x:11434", model="moondream")
     assert client.analyze(_img(), "describe") is None
     assert client.locate(_img(), "thing") is None
+
+
+# --- downscaling (speed + VRAM: a 2560-wide screen tokenises to ~2616 prompt
+#     tokens; capping the longest side keeps the vision call under the timeout) -
+
+def _sent_image(seen):
+    from io import BytesIO
+    raw = base64.b64decode(seen["images"][0])
+    return Image.open(BytesIO(raw))
+
+
+def test_analyze_downscales_oversized_image_preserving_aspect(monkeypatch):
+    seen = {}
+
+    def fake_call(*a, **k):
+        seen["images"] = k["images"]
+        return "ok"
+
+    monkeypatch.setattr(mc, "call_vision_model", fake_call)
+    client = VisionModelClient(base_url="http://x", model="qwen2.5vl:3b", max_image_dim=1280)
+    client.analyze(_img(2560, 1440), "describe")
+    sent = _sent_image(seen)
+    assert max(sent.size) == 1280            # longest side capped
+    assert sent.size == (1280, 720)          # 16:9 aspect preserved
+
+
+def test_analyze_leaves_small_image_unscaled(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(mc, "call_vision_model",
+                        lambda *a, **k: seen.update(images=k["images"]) or "ok")
+    client = VisionModelClient(base_url="http://x", model="qwen2.5vl:3b", max_image_dim=1280)
+    client.analyze(_img(800, 600), "describe")
+    assert _sent_image(seen).size == (800, 600)   # already under the cap
+
+
+def test_locate_scales_coordinates_back_from_downscaled_image(monkeypatch):
+    # 2560x1440 is sent as 1280x720 (scale x2). A bbox centred at (650, 330) in
+    # the downscaled image must map back to (1300, 660) in the original.
+    monkeypatch.setattr(mc, "call_vision_model",
+                        lambda *a, **k: '{"bbox_2d": [600, 300, 700, 360]}')
+    client = VisionModelClient(base_url="http://x", model="qwen2.5vl:3b", max_image_dim=1280)
+    assert client.locate(_img(2560, 1440), "thing") == (1300, 660)
+
+
+def test_timeout_is_forwarded_to_the_model_call(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(mc, "call_vision_model",
+                        lambda *a, **k: seen.update(timeout_sec=k["timeout_sec"]) or "ok")
+    client = VisionModelClient(base_url="http://x", model="m", timeout_sec=20.0)
+    client.analyze(_img(), "x")
+    assert seen["timeout_sec"] == 20.0

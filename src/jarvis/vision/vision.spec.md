@@ -65,6 +65,17 @@ both see physical pixels under display scaling (125%/150%). Handles negative off
 
 Result coordinates are converted to **absolute** desktop pixels.
 
+### Observe failure is honest, not silent (`VisionEngine.observe`)
+
+`describe` returns `None` when the vision model does not respond (timeout / still
+loading / transient error). `observe` then returns an explicit
+`{"status": "unavailable", "reason": "no_response", "description": null, "message": …}`
+payload **instead of an empty description**. An empty string would let the reply LLM
+confabulate "the screen is blank"; the explicit status + `seeScreen`'s tool-description
+rule make the LLM tell the user the vision system is temporarily slow/unavailable and
+ask them to retry, never guessing screen contents. Capture itself succeeding or failing
+is independent — a black/blank capture is still a valid description request.
+
 ## Safety modes (`safety.py`)
 
 | Mode | Behaviour |
@@ -105,7 +116,8 @@ let the 9B chat model become evictable so qwen2.5vl:3b fits.
 | `vision_auto_blacklist` | browsers, password managers | never auto-actioned |
 | `vision_pending_ttl_sec` | `120` | confirmation window |
 | `vision_keep_alive` | `5m` | vision model Ollama keep_alive |
-| `vision_max_width` | `null` | optional capture downscale (reserved) |
+| `vision_max_width` | `1280` | cap longest side of the image **sent to the vision model** (`null` = off). OCR/`readScreen` keeps full resolution (Tesseract is a separate path). Downscaling a 2560-wide screen (~2616 prompt tokens) to 1280 roughly quarters the tokens → faster eval, less VRAM, fewer cold-load timeouts. `model_client` scales grounding coordinates back to the original. |
+| `vision_timeout_sec` | `20.0` | per-call vision model timeout. Headroom for the **cold** first call (model load + image eval under VRAM contention) so a slow first `seeScreen` doesn't fail. |
 
 ## Tools (raw-data, in `tools/builtin/vision/`)
 

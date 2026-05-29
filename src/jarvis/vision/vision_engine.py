@@ -56,7 +56,23 @@ class VisionEngine:
 
     def observe(self, monitor: MonitorRef = "primary") -> dict:
         img = self.capture.capture_monitor(monitor)
-        description = self.client.describe(img) or ""
+        description = self.client.describe(img)
+        if description is None:
+            # Capture worked but the vision model did not respond (timeout or
+            # still loading). Surface an explicit unavailable status so the
+            # reply LLM tells the user vision is slow/unavailable instead of
+            # confabulating screen contents from an empty description.
+            debug_log("vision_engine: observe -> model unavailable (no response)", "vision")
+            return {
+                "status": "unavailable",
+                "reason": "no_response",
+                "description": None,
+                "message": (
+                    "The vision model did not respond in time (it may be slow to "
+                    "load or temporarily unavailable); the screen was NOT analysed."
+                ),
+                "monitor": _mon_name(monitor),
+            }
         return {"description": description, "monitor": _mon_name(monitor)}
 
     def read(self, monitor: MonitorRef = "primary") -> dict:
@@ -177,6 +193,8 @@ class VisionEngine:
             base_url=getattr(cfg, "ollama_base_url", "http://localhost:11434"),
             model=getattr(cfg, "vision_model", "qwen2.5vl:3b"),
             keep_alive=getattr(cfg, "vision_keep_alive", "5m"),
+            timeout_sec=float(getattr(cfg, "vision_timeout_sec", 20.0)),
+            max_image_dim=getattr(cfg, "vision_max_width", 1280),
         )
         mode = Mode(str(getattr(cfg, "vision_default_mode", "assist")).lower())
         safety = SafetyGuard(

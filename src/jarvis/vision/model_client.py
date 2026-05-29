@@ -16,6 +16,8 @@ import json
 import re
 from typing import Optional, Tuple
 
+from PIL import Image
+
 from ..debug import debug_log
 from ..llm import call_vision_model
 
@@ -161,6 +163,7 @@ class VisionModelClient:
         model: str = "qwen2.5vl:3b",
         timeout_sec: float = 30.0,
         keep_alive: Optional[str] = "5m",
+        max_image_dim: Optional[int] = 1280,
     ) -> None:
         self.base_url = base_url
         self.model = model
@@ -168,12 +171,35 @@ class VisionModelClient:
         # Short keep_alive by default: vision is bursty, so the model loads on
         # demand and self-evicts, returning VRAM to the resident chat model.
         self.keep_alive = keep_alive
+        # Cap the longest side of the image sent to the model. A full 2560-wide
+        # screen tokenises to ~2616 prompt tokens; capping to 1280 roughly
+        # quarters that (faster eval, less VRAM, fewer cold-load timeouts).
+        # None disables downscaling. OCR/read keeps full resolution (Tesseract
+        # is a separate path), so only model grounding/describe is affected.
+        self.max_image_dim = max_image_dim
 
-    def analyze(self, image, prompt: str) -> Optional[str]:
-        """Send an image + prompt to the vision model; return text or None."""
-        img_b64 = _encode_image_b64(image)
-        debug_log(f"model_client: analyze model={self.model} prompt={prompt[:48]!r}", "vision")
-        return call_vision_model(
+    def _downscaled(self, image) -> Tuple["Image.Image", float]:
+        """Return ``(image_to_send, scale)`` where ``scale`` maps a coordinate
+        in the sent image back to the original (1.0 when no downscaling)."""
+        dim = self.max_image_dim
+        w, h = image.size
+        longest = max(w, h)
+        if not dim or longest <= dim:
+            return image, 1.0
+        ratio = dim / float(longest)
+        small = image.resize((max(1, round(w * ratio)), max(1, round(h * ratio))), Image.LANCZOS)
+        return small, w / float(small.size[0])
+
+    def _invoke(self, image, prompt: str) -> Tuple[Optional[str], Tuple[int, int], float]:
+        """Downscale, call the model, and return ``(text, sent_size, scale)``."""
+        small, scale = self._downscaled(image)
+        img_b64 = _encode_image_b64(small)
+        debug_log(
+            f"model_client: analyze model={self.model} sent={small.size} "
+            f"scale={scale:.2f} prompt={prompt[:48]!r}",
+            "vision",
+        )
+        text = call_vision_model(
             base_url=self.base_url,
             model=self.model,
             prompt=prompt,
@@ -181,19 +207,30 @@ class VisionModelClient:
             timeout_sec=self.timeout_sec,
             keep_alive=self.keep_alive,
         )
+        return text, small.size, scale
+
+    def analyze(self, image, prompt: str) -> Optional[str]:
+        """Send an image + prompt to the vision model; return text or None."""
+        text, _, _ = self._invoke(image, prompt)
+        return text
 
     def describe(self, image) -> Optional[str]:
         return self.analyze(image, DESCRIBE_PROMPT)
 
     def locate(self, image, target: str) -> Optional[Tuple[int, int]]:
-        """Return the centre (x, y) of ``target`` relative to the image, or None.
+        """Return the centre (x, y) of ``target`` relative to the ORIGINAL image,
+        or None.
 
         Used as the *fallback* locate path (icons / coloured buttons) when
         Tesseract word-box matching finds no text label — see vision_engine.
+        The model sees a possibly-downscaled image, so coordinates are scaled
+        back up to the original before returning.
         """
         prompt = LOCATE_PROMPT_TEMPLATE.format(target=target)
-        text = self.analyze(image, prompt)
-        coords = parse_point_or_box(text, img_size=getattr(image, "size", None))
+        text, sent_size, scale = self._invoke(image, prompt)
+        coords = parse_point_or_box(text, img_size=sent_size)
+        if coords is not None and scale != 1.0:
+            coords = (int(round(coords[0] * scale)), int(round(coords[1] * scale)))
         debug_log(f"model_client: ground {target!r} -> {coords}", "vision")
         return coords
 

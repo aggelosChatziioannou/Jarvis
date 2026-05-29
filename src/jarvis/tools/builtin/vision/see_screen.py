@@ -20,7 +20,10 @@ class SeeScreenTool(Tool):
             "screen — you CANNOT know what is currently displayed from memory or the conversation. "
             "When the user asks what is on their screen or what you can see, you MUST call this tool "
             "and MUST NOT invent, guess, or describe screen contents without it. For reading exact "
-            "text use readScreen instead. Returns raw data; do not format here."
+            "text use readScreen instead. If the result has status 'unavailable', the vision model "
+            "did not respond (slow to load or temporarily down): tell the user the vision system is "
+            "temporarily unavailable or delayed and ask them to try again — do NOT guess or describe "
+            "what might be on screen. Returns raw data; do not format here."
         )
 
     @property

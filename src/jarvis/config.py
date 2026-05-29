@@ -338,7 +338,8 @@ class Settings:
     vision_auto_blacklist: list       # process names never auto-actioned (banks, password mgrs, browsers)
     vision_pending_ttl_sec: int       # how long a proposed action waits for confirmation
     vision_keep_alive: str            # Ollama keep_alive for the vision model (short -> self-evicts)
-    vision_max_width: Optional[int]   # optional capture downscale width (reserved)
+    vision_max_width: Optional[int]   # cap longest side of the image sent to the vision model (None = off); OCR/read keeps full res
+    vision_timeout_sec: float         # per-call vision model timeout (headroom for cold load)
 
     # Dictation (hold-to-dictate)
     dictation_enabled: bool
@@ -984,7 +985,8 @@ def get_default_config() -> Dict[str, Any]:
         "vision_auto_blacklist": ["chrome.exe", "msedge.exe", "firefox.exe", "1password.exe", "keepass.exe"],
         "vision_pending_ttl_sec": 120,
         "vision_keep_alive": "5m",
-        "vision_max_width": None,
+        "vision_max_width": 1280,
+        "vision_timeout_sec": 20.0,
 
         # Dictation (hold-to-dictate, WisprFlow-like)
         "dictation_enabled": True,
@@ -1376,8 +1378,9 @@ def load_settings() -> Settings:
     vision_auto_blacklist = list(_vb) if isinstance(_vb, list) else []
     vision_pending_ttl_sec = int(merged.get("vision_pending_ttl_sec", 120) or 120)
     vision_keep_alive = str(merged.get("vision_keep_alive", "5m") or "5m").strip()
-    _vmw = merged.get("vision_max_width")
+    _vmw = merged.get("vision_max_width", 1280)
     vision_max_width = int(_vmw) if isinstance(_vmw, (int, float)) and _vmw else None
+    vision_timeout_sec = max(1.0, float(merged.get("vision_timeout_sec", 20.0) or 20.0))
     dictation_enabled = bool(merged.get("dictation_enabled", True))
     dictation_hotkey = str(merged.get("dictation_hotkey", _default_dictation_hotkey())).strip()
     dictation_filler_removal = bool(merged.get("dictation_filler_removal", False))
@@ -1603,6 +1606,7 @@ def load_settings() -> Settings:
         vision_pending_ttl_sec=vision_pending_ttl_sec,
         vision_keep_alive=vision_keep_alive,
         vision_max_width=vision_max_width,
+        vision_timeout_sec=vision_timeout_sec,
 
         # Dictation
         dictation_enabled=dictation_enabled,

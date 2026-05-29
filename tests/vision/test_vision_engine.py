@@ -91,6 +91,18 @@ def test_read_returns_text():
     assert eng.read() == {"text": "Γειά σου", "monitor": "primary"}
 
 
+def test_observe_reports_unavailable_when_model_returns_none():
+    # Capture succeeded but the vision model did not respond (timeout / still
+    # loading). observe() must NOT hand back an empty description that the LLM
+    # then fills with a guess — it must surface an explicit unavailable status.
+    eng, _, _ = _engine(desc=None)
+    out = eng.observe()
+    assert out["monitor"] == "primary"
+    assert out.get("status") == "unavailable"
+    assert out.get("description") is None
+    assert "message" in out          # human-readable reason for the LLM to relay
+
+
 # --- locate fallback chain ---------------------------------------------
 
 def test_locate_uses_ocr_first_and_converts_to_absolute():
@@ -201,3 +213,23 @@ def test_scroll_auto_executes_with_signed_amount():
     out = eng.scroll("down", amount=3)
     assert out["result"] == "executed" and out["amount"] == -3
     assert interactor.calls == [("scroll", -3)]
+
+
+# --- build wiring -------------------------------------------------------
+
+def test_build_wires_timeout_and_downscale_from_config():
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(
+        ollama_base_url="http://x:11434",
+        vision_model="qwen2.5vl:3b",
+        vision_keep_alive="5m",
+        vision_timeout_sec=20.0,
+        vision_max_width=1280,
+        vision_default_mode="assist",
+        vision_auto_whitelist=(),
+        vision_auto_blacklist=(),
+        vision_pending_ttl_sec=120.0,
+    )
+    eng = VisionEngine.build(cfg)
+    assert eng.client.timeout_sec == 20.0
+    assert eng.client.max_image_dim == 1280
