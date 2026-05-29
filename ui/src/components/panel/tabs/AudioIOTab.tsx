@@ -1,46 +1,81 @@
 import { useEffect, useState } from 'react';
 import { Volume2, Mic, Speaker } from 'lucide-react';
-import { api, type AudioDevices } from '@/lib/api';
+import { api, openStateStream, type AudioDevices, type AudioDevice } from '@/lib/api';
 import { SaveBar } from './WakeWordTab';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 /**
- * Audio I/O. Device pickers are NAME-based — they save the device name to the
- * config keys the backend actually reads (`wispr_mic_device` for the mic,
- * `tts_output_device` for the speaker). Names survive index changes when
- * wireless/USB devices reconnect, unlike the old (dead) *_device_index keys.
+ * Audio I/O. Device pickers are ENDPOINT-ID based: the stable Windows Core
+ * Audio endpoint id is persisted (`audio_input_endpoint_id` /
+ * `audio_output_endpoint_id`) with the friendly name kept for display and as a
+ * fallback. The list is live (Core Audio) and refreshes on device add/remove;
+ * a remembered device that is currently unplugged stays selected and is shown
+ * as "(disconnected)". There is no "follow Windows default" option.
  */
 export default function AudioIOTab() {
-  const [devices, setDevices] = useState<AudioDevices>({
-    inputs: [],
-    outputs: [],
-    current_in: null,
-    current_out: null,
-  });
-  const [micName, setMicName] = useState<string>('');     // wispr_mic_device
-  const [outName, setOutName] = useState<string>('');     // tts_output_device
+  const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [] });
+  const [inId, setInId] = useState<string>('');   // audio_input_endpoint_id
+  const [inName, setInName] = useState<string>(''); // audio_input_name
+  const [outId, setOutId] = useState<string>('');   // audio_output_endpoint_id
+  const [outName, setOutName] = useState<string>(''); // audio_output_name
   const [vadLevel, setVadLevel] = useState(1);
   const [threshold, setThreshold] = useState(0.005);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
+  // Live, adaptive device list. pycaw Core Audio is the source of truth and the
+  // list reflects hot-plug, so we (a) re-fetch when the daemon signals a device
+  // change over /ws/state (the `devices_changed` counter pushed by the Core
+  // Audio watcher) and (b) re-poll on a gentle interval as a fail-open safety
+  // net in case the watcher could not register.
   useEffect(() => {
-    api.audioDevices().then(setDevices).catch(() => {});
+    let alive = true;
+    const refresh = () =>
+      api.audioDevices().then((d) => { if (alive) setDevices(d); }).catch(() => {});
+    refresh();
+    const timer = window.setInterval(refresh, 4000);
+    let lastSig: number | undefined;
+    const stop = openStateStream((s) => {
+      if (s.devices_changed !== undefined && s.devices_changed !== lastSig) {
+        lastSig = s.devices_changed;
+        refresh();
+      }
+    });
     api
       .getConfig()
       .then((cfg) => {
-        setMicName(cfg.wispr_mic_device == null ? '' : String(cfg.wispr_mic_device));
-        setOutName(cfg.tts_output_device == null ? '' : String(cfg.tts_output_device));
+        if (!alive) return;
+        setInId(cfg.audio_input_endpoint_id == null ? '' : String(cfg.audio_input_endpoint_id));
+        setInName(cfg.audio_input_name == null ? '' : String(cfg.audio_input_name));
+        setOutId(cfg.audio_output_endpoint_id == null ? '' : String(cfg.audio_output_endpoint_id));
+        setOutName(cfg.audio_output_name == null ? '' : String(cfg.audio_output_name));
         setVadLevel(Number(cfg.vad_aggressiveness ?? 1));
         setThreshold(Number(cfg.voice_min_energy ?? 0.005));
       })
       .catch(() => {});
+    return () => { alive = false; window.clearInterval(timer); stop(); };
   }, []);
+
+  // Migration bridge: config v7 forwarded the legacy device *name* but left the
+  // endpoint id blank. Once the live list arrives, adopt the id of the device
+  // whose name matches the remembered name so the picker shows the right entry.
+  useEffect(() => {
+    if (inId === '' && inName) {
+      const m = devices.inputs.find((d) => d.name === inName);
+      if (m) setInId(m.id);
+    }
+    if (outId === '' && outName) {
+      const m = devices.outputs.find((d) => d.name === outName);
+      if (m) setOutId(m.id);
+    }
+  }, [devices, inId, inName, outId, outName]);
 
   const save = async () => {
     await api.patchConfig({
-      wispr_mic_device: micName.trim() === '' ? null : micName,
-      tts_output_device: outName.trim() === '' ? null : outName,
+      audio_input_endpoint_id: inId,
+      audio_input_name: inName,
+      audio_output_endpoint_id: outId,
+      audio_output_name: outName,
       vad_aggressiveness: vadLevel,
       voice_min_energy: threshold,
     });
@@ -50,25 +85,19 @@ export default function AudioIOTab() {
 
   const playTone = () => api.testTone().catch(() => {});
 
-  // De-duplicate by name — the backend lists every host-API variant of the same
-  // physical device; the user only needs to pick the name once.
-  const uniq = (list: { index: number; name: string }[]) =>
-    [...new Map(list.map((d) => [d.name, d])).values()];
-  const inputs = uniq(devices.inputs);
-  const outputs = uniq(devices.outputs);
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 700 }}>
       <SectionCard icon={<Mic size={18} />} title="Input (Microphone)">
         <FormRow label="Microphone">
           <DeviceSelect
-            value={micName}
-            onChange={(v) => {
-              setMicName(v);
+            value={inId}
+            selectedName={inName}
+            onChange={(id, name) => {
+              setInId(id);
+              setInName(name);
               setDirty(true);
             }}
-            options={inputs}
-            defaultLabel="(System Default)"
+            options={devices.inputs}
           />
         </FormRow>
         <p style={hintStyle}>Where Jarvis listens for "Hey Jarvis".</p>
@@ -78,13 +107,14 @@ export default function AudioIOTab() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <FormRow label="Speaker">
             <DeviceSelect
-              value={outName}
-              onChange={(v) => {
-                setOutName(v);
+              value={outId}
+              selectedName={outName}
+              onChange={(id, name) => {
+                setOutId(id);
+                setOutName(name);
                 setDirty(true);
               }}
-              options={outputs}
-              defaultLabel="(Follow Windows default)"
+              options={devices.outputs}
             />
           </FormRow>
           <p style={hintStyle}>Where Jarvis speaks. Save first, then test below.</p>
@@ -131,43 +161,55 @@ export default function AudioIOTab() {
   );
 }
 
-const DEFAULT_DEVICE = '__default__';
+const NONE_DEVICE = '__none__';
 
 /**
  * Themed device picker built on the shadcn/Radix Select so the open option
  * list uses the app's dark+cyan popover tokens instead of the grey native
- * dropdown. Radix forbids an empty-string value, so the "default" choice is
- * carried internally as DEFAULT_DEVICE and mapped back to '' for the config.
+ * dropdown. Selection is by stable endpoint id (the friendly name is shown).
+ * A remembered device that is currently unplugged is not in the live list, so
+ * it is rendered as a synthetic "(disconnected)" entry and stays selected.
+ * Radix forbids an empty-string value, so "no selection" maps to NONE_DEVICE
+ * (which has no matching item, so the placeholder shows).
  */
 function DeviceSelect({
   value,
+  selectedName,
   onChange,
   options,
-  defaultLabel,
 }: {
   value: string;
-  onChange: (v: string) => void;
-  options: { index: number; name: string }[];
-  defaultLabel: string;
+  selectedName: string;
+  onChange: (id: string, name: string) => void;
+  options: AudioDevice[];
 }) {
-  const known = options.some((d) => d.name === value);
+  const known = options.some((d) => d.id === value);
   return (
     <Select
-      value={value === '' ? DEFAULT_DEVICE : value}
-      onValueChange={(v) => onChange(v === DEFAULT_DEVICE ? '' : v)}
+      value={value === '' ? NONE_DEVICE : value}
+      onValueChange={(v) => {
+        if (v === NONE_DEVICE) {
+          onChange('', '');
+          return;
+        }
+        const dev = options.find((d) => d.id === v);
+        onChange(v, dev ? dev.name : selectedName);
+      }}
     >
       <SelectTrigger style={selectStyle} aria-label="device">
-        <SelectValue />
+        <SelectValue placeholder="Select a device" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value={DEFAULT_DEVICE}>{defaultLabel}</SelectItem>
         {options.map((d) => (
-          <SelectItem key={d.name} value={d.name}>
+          <SelectItem key={d.id} value={d.id}>
             {d.name}
+            {d.available ? '' : ' (disconnected)'}
           </SelectItem>
         ))}
         {value !== '' && !known && (
-          <SelectItem value={value}>{value} (not detected)</SelectItem>
+          <SelectItem value={value}>
+            {(selectedName || 'Selected device') + ' (disconnected)'}
+          </SelectItem>
         )}
       </SelectContent>
     </Select>

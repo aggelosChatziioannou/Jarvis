@@ -53,6 +53,10 @@ export interface VoiceStatePayload {
   lastWake: string | null;
   commandsProcessed: number;
   query?: string;
+  // Monotonic counter bumped by the Core Audio device watcher on any
+  // add/remove/state/default change. Clients re-fetch the device list when it
+  // increments. Absent until the daemon has published at least one change.
+  devices_changed?: number;
 }
 
 export interface LogPayload {
@@ -92,11 +96,16 @@ export interface EasterEgg {
   enabled: boolean;
 }
 
+export interface AudioDevice {
+  id: string; // stable Windows Core Audio endpoint id
+  name: string; // friendly name (display + fallback match)
+  is_default: boolean; // current OS default for its direction
+  available: boolean; // endpoint is currently Active (plugged in)
+}
+
 export interface AudioDevices {
-  inputs: { index: number; name: string }[];
-  outputs: { index: number; name: string }[];
-  current_in: number | null;
-  current_out: number | null;
+  inputs: AudioDevice[];
+  outputs: AudioDevice[];
 }
 
 export interface TTSCacheStats {
