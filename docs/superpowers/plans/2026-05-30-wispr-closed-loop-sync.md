@@ -16,7 +16,7 @@
 
 ## File Structure
 
-- Create `src/jarvis/listening/wispr_state.py` — `WindowInfo`, `WindowEnumerator` (real pywin32 default + injectable), `WisprStateProbe.is_recording()/available()`. One responsibility: report Wispr recording state, fail-open.
+- Create `src/jarvis/listening/wispr_state.py` — `MicUsageReader` seam (default = `winreg` mic-consent reader), `WisprStateProbe.is_recording()/available()`. One responsibility: report whether Wispr is capturing the mic (= recording), fail-open. (Window enumeration rejected by characterisation; see spec §4.4.)
 - Create `scripts/characterise_wispr_overlay.py` — one-off live characterisation of the overlay discriminator.
 - Modify `src/jarvis/listening/wispr_bridge.py` — inject probe; `_ensure_recording`; startup reconciliation; no-capture force-off + reason; `on_wispr_unavailable`; configurable combo; min inter-tap gap; clipboard-sequence capture.
 - Modify `src/jarvis/listening/listener.py` — `_on_wispr_dictation_end(captured, reason=None)`; wire `on_wispr_unavailable`.
@@ -46,9 +46,9 @@ git commit -m "chore(voice): add Wispr overlay characterisation script"
 
 **Files:** Modify `src/jarvis/config.py` (dataclass field block ~l.170-180; DEFAULTS ~l.758-773; builder ~l.1128-1170; `WisprConfig(...)` constructor ~l.1500-1510). Test `tests/test_config_models.py`.
 
-New: `wispr_closed_loop_enabled: bool = True`, `wispr_hands_free_combo: list[str] = ["ctrl","cmd","space"]`, `wispr_min_tap_gap_sec: float = 0.5`, `wispr_confirm_timeout_sec: float = 0.6`, `wispr_state_pid_ttl_sec: float = 2.0`, `wispr_clipboard_grace_sec: float = 2.0`. Declare-only (already read in bridge): `wispr_erase_max_chars: int = 300`, `wispr_barge_in_interrupt: bool = True`.
+New: `wispr_closed_loop_enabled: bool = True`, `wispr_hands_free_combo: list[str] = ["ctrl","cmd","space"]`, `wispr_min_tap_gap_sec: float = 0.5`, `wispr_confirm_timeout_sec: float = 1.2`, `wispr_clipboard_grace_sec: float = 2.0`. Declare-only (already read in bridge): `wispr_erase_max_chars: int = 300`, `wispr_barge_in_interrupt: bool = True`. (No `wispr_state_pid_ttl_sec` — the registry probe needs no PID resolution.)
 
-- [ ] **Step 1: Failing test** in `test_config_models.py`: assert a default-built config exposes all 8 fields with the documented defaults, and that round-tripping a config dict preserves a non-default `wispr_hands_free_combo` and `wispr_min_tap_gap_sec`. Assert types (list of str, float, int, bool).
+- [ ] **Step 1: Failing test** in `test_config_models.py`: assert a default-built config exposes all 7 fields with the documented defaults, and that round-tripping a config dict preserves a non-default `wispr_hands_free_combo` and `wispr_min_tap_gap_sec`. Assert types (list of str, float, int, bool).
 - [ ] **Step 2:** Run → FAIL (AttributeError / missing keys).
 - [ ] **Step 3:** Add the fields in all four sites following the existing `wispr_suppress_autotype` pattern exactly (dataclass annotation+default, DEFAULTS entry, builder local read with the same `.get`/coercion idiom, constructor kwarg). Match list/float/int/bool coercion to neighbours.
 - [ ] **Step 4:** Run → PASS. Also run the full `-m unit` config tests to ensure no schema/migration test broke.
@@ -58,49 +58,46 @@ New: `wispr_closed_loop_enabled: bool = True`, `wispr_hands_free_combo: list[str
 
 ## Chunk 2: WisprStateProbe
 
-### Task 2: Probe with injectable enumerator (TDD, fake)
+### Task 2: Probe with injectable mic-usage reader (TDD, fake)
 
 **Files:** Create `src/jarvis/listening/wispr_state.py`; Test `tests/test_wispr_state.py`.
 
 Interface:
 ```python
-@dataclass(frozen=True)
-class WindowInfo:
-    pid: int; process_name: str; cls: str; title: str
-    visible: bool; width: int; height: int; left: int; top: int
-    @property
-    def on_screen(self) -> bool: ...  # left/top not in the -32000 offscreen sentinel and w,h>0
-
-WindowEnumerator = Callable[[], list[WindowInfo]]
+MicUsageReader = Callable[[], bool | None]  # True=Wispr capturing mic, False=not, None=unknown
 
 class WisprStateProbe:
-    def __init__(self, enumerator: WindowEnumerator | None = None,
-                 pid_ttl_sec: float = 2.0, clock: Callable[[], float] = time.monotonic): ...
-    def is_recording(self) -> bool | None
-    def available(self) -> bool
+    def __init__(self, reader: MicUsageReader | None = None) -> None: ...
+    def is_recording(self) -> bool | None   # wraps reader() in try/except -> None
+    def available(self) -> bool             # last reading was a definite True/False
 ```
 
-`is_recording()` rule (final form pinned by Task 0; default hypothesis until then): find Wispr `Status` overlay (`process_name == "Wispr Flow"`, `cls == "Chrome_WidgetWin_1"`, `title == "Status"`); recording iff `<discriminator>`; not recording iff overlay present but discriminator false; `None` iff no Wispr window found or enumerator raised.
+Also expose the pure selection helper for unit testing:
+```python
+def recording_from_consent_rows(rows: list[tuple[str, int, int]]) -> bool | None:
+    """rows = [(subkey_name, last_used_start, last_used_stop)]. Filter to Wispr
+    entries; pick max-start; recording iff its stop == 0; None if no Wispr row."""
+```
 
-- [ ] **Step 1: Failing tests** (fake enumerator returning crafted `WindowInfo` lists):
-  - recording-state list → `True`
-  - idle-state list → `False`
-  - empty list / no Wispr process → `None`
-  - enumerator raises → `None` (caught)
-  - `available()` reflects "Wispr window seen this call"
+- [ ] **Step 1: Failing tests** (fake reader + `recording_from_consent_rows`):
+  - reader returns True → `is_recording()` True, `available()` True
+  - reader returns False → `is_recording()` False, `available()` True
+  - reader returns None → `is_recording()` None, `available()` False
+  - reader raises → `is_recording()` None (caught), `available()` False
+  - `recording_from_consent_rows`: active-version row (max start, stop==0) → True; same set with a stale `stop==0` on a smaller-start row → still True via the active row; all stops != 0 → False; no Wispr row → None
 - [ ] **Step 2:** Run → FAIL (module missing).
-- [ ] **Step 3:** Implement the dataclass, the discriminator logic, and the fail-open wrapping. No real Win32 here.
+- [ ] **Step 3:** Implement `recording_from_consent_rows`, the `WisprStateProbe` wrapper, and fail-open. No real registry here.
 - [ ] **Step 4:** Run → PASS.
-- [ ] **Step 5: Commit** `feat(voice): WisprStateProbe (overlay-read, fail-open)`.
+- [ ] **Step 5: Commit** `feat(voice): WisprStateProbe (mic-consent read, fail-open)`.
 
-### Task 3: Real pywin32 enumerator backend
+### Task 3: Real winreg mic-consent reader backend
 
-**Files:** Modify `src/jarvis/listening/wispr_state.py` (add `_pywin32_enumerator` as the default when `enumerator is None`). Opt-in integration test only.
+**Files:** Modify `src/jarvis/listening/wispr_state.py` (add `_registry_mic_reader` as the default when `reader is None`). Opt-in integration test only.
 
-- [ ] **Step 1:** Implement `_pywin32_enumerator()` using `win32gui.EnumWindows` + `win32gui.GetClassName`/`GetWindowText`/`IsWindowVisible`/`GetWindowRect`, `win32process.GetWindowThreadProcessId`, `psutil.Process(pid).name()`, mirroring `vision/safety.py`. Wrap imports so non-Windows / missing pywin32 → enumerator returns `[]` (probe then yields `None`). Cache Wispr PIDs for `pid_ttl_sec`.
-- [ ] **Step 2:** Add `tests/test_wispr_state.py::test_real_enumerator_smoke` marked `@pytest.mark.integration` (skipped under `-m unit`) that just asserts it runs and returns a list.
-- [ ] **Step 3:** Run `-m unit` → real backend untouched (skipped); fake-enumerator tests still PASS.
-- [ ] **Step 4: Commit** `feat(voice): pywin32 enumerator backend for WisprStateProbe`.
+- [ ] **Step 1:** Implement `_registry_mic_reader()` using `winreg` (stdlib): enumerate `HKCU\...\ConsentStore\microphone\NonPackaged` (and the packaged store as fallback), collect `(subkey, LastUsedTimeStart, LastUsedTimeStop)` for Wispr/Flow sub-keys, and return `recording_from_consent_rows(rows)`. Wrap so non-Windows / missing `winreg` / no entry → `None`.
+- [ ] **Step 2:** Add `tests/test_wispr_state.py::test_real_reader_smoke` marked `@pytest.mark.integration` (skipped under `-m unit`) asserting it runs and returns `True`/`False`/`None`.
+- [ ] **Step 3:** Run `-m unit` → real backend untouched (skipped); fake-reader tests still PASS.
+- [ ] **Step 4: Commit** `feat(voice): winreg mic-consent reader backend for WisprStateProbe`.
 
 ---
 
