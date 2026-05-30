@@ -112,6 +112,9 @@ class WisprStateProbe:
 
 `_ensure_recording(target)` logic per spec §4.2 (observed=None → today's `_keys_held` path; observed==target → reconcile, no tap; observed!=target → tap, confirm-poll up to `wispr_confirm_timeout_sec`, one re-tap, else return False). Confirm-poll uses injected `clock`/`sleep` seam so tests don't wall-clock wait.
 
+> **Reviewer note (seam):** The bridge currently calls module-level `time.monotonic`/`time.sleep` directly. Task 4 Step 3 MUST add `monotonic: Callable=time.monotonic` and `sleep: Callable=time.sleep` as injectable constructor params, store them, and route both `_ensure_recording`'s confirm-poll AND Task 8's `_key_worker` gap-gate through `self._sleep`/`self._monotonic`. Tests inject a fake clock + a sleep-recorder.
+> **Reviewer note (thread):** `_ensure_recording` is *called from* `_do_press_keys`/`_do_release_keys`, which already run on the key-worker thread — so the bounded confirm-poll never blocks the PortAudio callback. Unit tests may call `_ensure_recording` directly.
+
 - [ ] **Step 1: Failing tests** with a `FakeProbe` (scriptable `is_recording` queue) + a tap-recorder:
   - desync heal: probe says recording, target True → **no** tap, `_keys_held` becomes True
   - normal start: probe says not-recording then recording-after-tap → exactly one tap, returns True
@@ -127,6 +130,8 @@ class WisprStateProbe:
 **Files:** `wispr_bridge.py` `start()`. Test `test_wispr_bridge.py`.
 
 - [ ] **Step 1: Failing test:** probe reports recording at `start()` → bridge forces OFF (one tap), `_keys_held` ends False; probe `None` → `_keys_held` stays False, no tap (today). Use a fake to avoid loading real models (guard the reconciliation into a small testable method `_reconcile_initial_state()` called from `start()` so the test targets it without opening audio/models).
+
+> **Reviewer note (synchronous tap):** `_start_dictation` enqueues taps via `_key_queue`; in a non-started test bridge nothing drains the queue. `_reconcile_initial_state()` MUST perform the force-off tap **synchronously** under `_keys_lock` (call `_do_release_keys()`/the locked tap path directly, like `_force_release_locked`), NOT via the queue, so the test observes `_keys_held` deterministically.
 - [ ] **Step 2:** Run → FAIL.
 - [ ] **Step 3:** Implement `_reconcile_initial_state()`; call after models load, before `audio_stream.start()`. Exempt from min-gap.
 - [ ] **Step 4:** Run → PASS.
@@ -141,7 +146,7 @@ class WisprStateProbe:
   - when probe still recording at no-capture → `_ensure_recording(False)` invoked (force-off).
   - listener `_on_wispr_dictation_end(False, reason="off")` distinguishes message vs `"timeout"` (assert via a captured notice/log, behaviour not exact string).
 - [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Add `reason` to the callback (`on_dictation_end(captured, reason=None)`, default keeps callers working); thread reason through `_post_dictation_worker`; on no-capture call force-off when probe confident; update listener handler signature + branch.
+- [ ] **Step 3:** Add `reason` to the callback (`on_dictation_end(captured, reason=None)`, default keeps callers working); thread reason through `_post_dictation_worker`; on no-capture call force-off when probe confident; update listener handler signature + branch. **Keep the default/`"timeout"` listener notice containing the substring "transcript"** (existing `test_failed_dictation_prints_notice` asserts it); only the new `reason="off"` branch gets distinct wording. **Update existing W4 bridge-test lambdas** from `lambda captured: ...` to `lambda captured, reason=None: ...` and assert the delivered `(captured, reason)` tuple (behavioural), not just that the callback fired.
 - [ ] **Step 4:** Run → PASS.
 - [ ] **Step 5: Commit** `feat(voice): self-correct + reason on no-capture turns`.
 
@@ -176,7 +181,7 @@ class WisprStateProbe:
 - [ ] **Step 1: Failing test:** identical re-utterance (clipboard text equals baseline text but sequence advanced) → **dispatched** (today it is dropped). Plus: no change at all (sequence same) → not dispatched, `reason="unchanged"`. Fallback path (seq=None) → behaves as today (text diff).
 - [ ] **Step 2:** Run → FAIL.
 - [ ] **Step 3:** Implement `_clipboard_seq()` and the sequence-aware dispatch with text-diff fallback.
-- [ ] **Step 4:** Run → PASS (existing `test_no_clipboard_change_reports_false` updated to the sequence semantics, kept meaningful).
+- [ ] **Step 4:** Run → PASS (existing `test_no_clipboard_change_reports_false` updated to the sequence semantics, kept meaningful; update any W4 `on_dictation_end` lambdas to the `(captured, reason=None)` shape).
 - [ ] **Step 5: Commit** `fix(voice): clipboard-sequence capture (dispatch identical re-utterance)`.
 
 ### Task 10: Spec + docs
