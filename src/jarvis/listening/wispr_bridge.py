@@ -261,6 +261,8 @@ class WisprBridge:
         self._confirm_timeout_sec = float(getattr(
             cfg, "wispr_confirm_timeout_sec", 1.2))
         self._min_tap_gap_sec = float(getattr(cfg, "wispr_min_tap_gap_sec", 0.5))
+        self._clipboard_grace_sec = float(getattr(
+            cfg, "wispr_clipboard_grace_sec", 2.0))
         combo = getattr(cfg, "wispr_hands_free_combo", None)
         self._hands_free_combo = self._normalise_combo(combo)
         if state_probe is not None:
@@ -306,6 +308,9 @@ class WisprBridge:
 
         # Clipboard baseline captured at wake time
         self._clipboard_baseline: str = ""
+        # OS clipboard sequence number at wake time (Windows). Lets us detect an
+        # identical re-utterance (same text) because the sequence still advances.
+        self._clipboard_baseline_seq: Optional[int] = None
 
         # Audio stream
         self.audio_stream: Optional[sd.InputStream] = None
@@ -992,13 +997,24 @@ class WisprBridge:
     def _handle_unconfirmed_start(self) -> None:
         """A START tap could not be confirmed to have put Wispr into recording.
 
-        Overridden behaviour is filled in by the honest-HUD path; the base
-        action is to log it so the desync is visible rather than silent."""
+        Rather than sit in DICTATING with the HUD falsely showing "listening"
+        while Wispr never started, revert to IDLE, allow an immediate re-trigger,
+        and fire ``on_wispr_unavailable`` so the listener can show an honest
+        "Wispr did not start" instead of a transcript that will never arrive."""
         debug_log(
             "ensure_recording: dictation start could not be confirmed — "
-            "Wispr Flow may not have started recording",
+            "Wispr Flow may not have started recording; reverting to idle",
             "voice",
         )
+        # Revert the optimistic DICTATING transition so we don't wait on a
+        # transcript that will never come, and re-arm the wake trigger.
+        self._try_enter_idle()
+        self._wake_cooldown = 0
+        if self.on_wispr_unavailable is not None:
+            try:
+                self.on_wispr_unavailable()
+            except Exception as e:
+                debug_log(f"on_wispr_unavailable callback raised: {e!r}", "voice")
 
     # ----------------------------------------------------------------------
     # Closed-loop level-seeking
@@ -1270,6 +1286,10 @@ class WisprBridge:
             except Exception as e:
                 debug_log(f"Could not read clipboard baseline: {e}", "voice")
                 self._clipboard_baseline = ""
+            # Snapshot the OS clipboard sequence so an identical re-utterance is
+            # still detectable (the text matches the baseline but the sequence
+            # advances when Wispr writes).
+            self._clipboard_baseline_seq = self._clipboard_seq()
 
         # Apply cooldown so the same trigger doesn't fire repeatedly
         self._wake_cooldown = WAKE_COOLDOWN_FRAMES
@@ -1300,7 +1320,7 @@ class WisprBridge:
         if reason in ("silence", "timeout"):
             threading.Thread(
                 target=self._post_dictation_worker,
-                args=(self._clipboard_baseline,),
+                args=(self._clipboard_baseline, self._clipboard_baseline_seq),
                 name="WisprPostDictationWorker",
                 daemon=True,
             ).start()
@@ -1322,49 +1342,124 @@ class WisprBridge:
     # Transcription capture (via clipboard) + dispatch
     # ----------------------------------------------------------------------
 
-    def _post_dictation_worker(self, baseline: str) -> None:
+    def _post_dictation_worker(self, baseline: str, baseline_seq: Optional[int] = None) -> None:
         """
         Runs after each completed dictation. Polls the clipboard for up to
-        ``self.clipboard_wait_sec`` waiting for Wispr Flow to write the
-        transcript. Dispatches via callbacks; always fires
-        ``on_dictation_end(captured)`` once finished — ``captured`` is True
-        when a clipboard transcript was seen (and dispatched), False when
-        none arrived within the wait window or clipboard polling is off.
+        ``clipboard_wait_sec`` + ``wispr_clipboard_grace_sec`` waiting for Wispr
+        Flow to write the transcript. Dispatches via callbacks; always fires
+        ``on_dictation_end(captured, reason)`` once finished.
+
+        ``captured`` is True when a clipboard transcript was seen (and
+        dispatched). ``reason`` distinguishes the no-capture causes so the
+        listener can give an honest notice and triage is possible:
+          * ``None``       — captured (a transcript was dispatched)
+          * ``"off"``      — clipboard polling is unavailable (pyperclip missing)
+          * ``"timeout"``  — watched but nothing arrived within the wait+grace
+          * ``"unchanged"``— the clipboard never changed at all (sequence path)
+
+        On a no-capture, if Wispr's real state shows it is STILL recording, we
+        force it OFF to a known idle — turning the most diagnostic moment into a
+        desync-recovery point rather than a silent cosmetic notice.
         """
         captured = False
+        reason: Optional[str] = None
         try:
-            if self.watch_clipboard:
-                deadline = time.monotonic() + self.clipboard_wait_sec
-                while time.monotonic() < deadline:
-                    if self.shutdown_event.is_set():
-                        return
-                    try:
-                        current = pyperclip.paste() or ""
-                    except Exception:
-                        time.sleep(CLIPBOARD_POLL_INTERVAL)
-                        continue
-                    if current != baseline and current.strip():
-                        self._dispatch_transcription(current)
-                        captured = True
-                        break
-                    time.sleep(CLIPBOARD_POLL_INTERVAL)
+            if not self.watch_clipboard:
+                # No clipboard polling — just wait long enough for Wispr Flow
+                # to finish auto-typing before we erase it.
+                reason = "off"
+                time.sleep(self.clipboard_wait_sec)
+            else:
+                reason, captured = self._poll_clipboard_for_transcript(
+                    baseline, baseline_seq)
                 if not captured and not self.shutdown_event.is_set():
                     debug_log(
                         f"No transcript appeared within "
-                        f"{self.clipboard_wait_sec:.0f}s",
+                        f"{self.clipboard_wait_sec + self._clipboard_grace_sec:.0f}s "
+                        f"(reason={reason})",
                         "voice",
                     )
-            else:
-                # No clipboard polling — just wait long enough for Wispr Flow
-                # to finish auto-typing before we erase it.
-                time.sleep(self.clipboard_wait_sec)
+                    # Closed-loop recovery: a no-capture turn where Wispr is
+                    # still recording means the stop never landed — force OFF.
+                    if self._read_probe() is True:
+                        try:
+                            self._ensure_recording(False)
+                            debug_log(
+                                "no-capture: Wispr still recording -> forced OFF",
+                                "voice",
+                            )
+                        except Exception as e:
+                            debug_log(f"no-capture force-off raised: {e!r}", "voice")
         finally:
             if self.on_dictation_end is not None:
                 try:
-                    self.on_dictation_end(captured)
+                    self.on_dictation_end(captured, reason)
                 except Exception as e:
                     debug_log(f"on_dictation_end callback raised: {e}",
                               "voice")
+
+    def _poll_clipboard_for_transcript(
+        self, baseline: str, baseline_seq: Optional[int]
+    ) -> tuple[Optional[str], bool]:
+        """Poll the clipboard until a NEW transcript appears or we time out.
+
+        Returns ``(reason, captured)``. Detection prefers the OS clipboard
+        sequence number (so an identical re-utterance is still detected) and
+        falls back to an exact-text diff when the sequence is unavailable.
+        """
+        deadline = (time.monotonic() + self.clipboard_wait_sec
+                    + self._clipboard_grace_sec)
+        seq_moved = False
+        while time.monotonic() < deadline:
+            if self.shutdown_event.is_set():
+                return None, False
+            try:
+                current = pyperclip.paste() or ""
+            except Exception:
+                time.sleep(CLIPBOARD_POLL_INTERVAL)
+                continue
+            cur_seq = self._clipboard_seq()
+            changed = self._clipboard_changed(
+                baseline, baseline_seq, current, cur_seq)
+            if cur_seq is not None and baseline_seq is not None and cur_seq != baseline_seq:
+                seq_moved = True
+            if changed and current.strip():
+                self._dispatch_transcription(current)
+                return None, True
+            time.sleep(CLIPBOARD_POLL_INTERVAL)
+        # Timed out. Distinguish "clipboard never moved at all" (unchanged)
+        # from "moved but produced nothing usable" (timeout).
+        if baseline_seq is not None and not seq_moved:
+            return "unchanged", False
+        return "timeout", False
+
+    @staticmethod
+    def _clipboard_changed(
+        baseline: str,
+        baseline_seq: Optional[int],
+        current: str,
+        cur_seq: Optional[int],
+    ) -> bool:
+        """True when the clipboard has a NEW value since the wake-time baseline.
+
+        Uses the OS clipboard sequence number when available (so an identical
+        re-utterance — same text — is still detected because the sequence
+        advanced), else falls back to the exact-text diff used historically."""
+        if baseline_seq is not None and cur_seq is not None:
+            return cur_seq != baseline_seq
+        return current != baseline
+
+    @staticmethod
+    def _clipboard_seq() -> Optional[int]:
+        """Windows clipboard sequence number, or None when unavailable.
+
+        Increments on ANY clipboard change (non-destructive — we never write
+        the clipboard ourselves). Fail-open on non-Windows / error."""
+        try:
+            import ctypes  # Windows-only path; cheap import
+            return int(ctypes.windll.user32.GetClipboardSequenceNumber())
+        except Exception:
+            return None
 
     def _dispatch_transcription(self, text: str) -> None:
         """

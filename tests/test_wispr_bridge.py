@@ -70,7 +70,13 @@ def _make_bridge(**cfg_attrs):
     Extra keyword args become attributes on the stub cfg, overriding the
     bridge's getattr defaults. Returns the bridge; callers attach their own
     recorders / stubs as needed. Never calls ``start()``.
+
+    Closed-loop sync defaults to OFF here so legacy behaviour tests are
+    deterministic (the state probe returns None -> belief-only path, no real
+    registry read, no real toggle tap). Tests that exercise the closed loop use
+    ``_make_closed_loop_bridge`` instead.
     """
+    cfg_attrs.setdefault("wispr_closed_loop_enabled", False)
     cfg = SimpleNamespace(**cfg_attrs)
     bridge = WisprBridge(
         cfg,
@@ -200,6 +206,38 @@ class TestEnsureRecording:
         assert len(taps) == 1                            # no extra tap
         assert bridge._ensure_recording(False) is True
         assert len(taps) == 2 and bridge._keys_held is False
+
+
+@pytest.mark.unit
+class TestUnconfirmedStart:
+    """When a START tap can't be confirmed, the bridge reverts DICTATING and
+    fires on_wispr_unavailable instead of leaving a false 'listening'."""
+
+    def test_unconfirmed_start_reverts_and_fires_callback(self):
+        fake = _FakeWispr(recording=False, tap_works=False)  # tap never reaches Wispr
+        fired = []
+        bridge = _make_closed_loop_bridge(fake)
+        bridge.on_wispr_unavailable = lambda: fired.append(True)
+        bridge._state = State.DICTATING       # _start_dictation already entered it
+
+        bridge._do_press_keys()
+
+        assert fired == [True]
+        assert bridge._state == State.IDLE     # reverted
+
+    def test_no_unavailable_when_probe_unknown(self):
+        # Fail-open: probe None -> belief-only start succeeds, no callback,
+        # state stays as the caller set it.
+        fired = []
+        bridge = _make_bridge()                # closed-loop off -> probe None
+        bridge.on_wispr_unavailable = lambda: fired.append(True)
+        bridge._tap_hands_free_toggle_locked = lambda: None  # type: ignore
+        bridge._state = State.DICTATING
+
+        bridge._do_press_keys()
+
+        assert fired == []
+        assert bridge._state == State.DICTATING
 
 
 @pytest.mark.unit
@@ -370,6 +408,84 @@ class TestEraseAutotypedTextGuard:
 
 
 # ===========================================================================
+# W8 — capture path: clipboard-sequence detection + no-capture reason/recovery
+# ===========================================================================
+
+@pytest.mark.unit
+class TestCapturePathReasons:
+    """The post-dictation worker reports WHY a turn produced no transcript and
+    detects an identical re-utterance via the clipboard sequence number."""
+
+    def test_identical_reutterance_is_dispatched(self, monkeypatch):
+        # Same text as the baseline, but the clipboard SEQUENCE advanced — the
+        # historical exact-text diff dropped this; sequence detection keeps it.
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.pyperclip, "paste", lambda: "hello", raising=False)
+
+        ends, transcripts = [], []
+        bridge = _make_bridge(
+            wispr_clipboard_wait_sec=0.05, wispr_clipboard_grace_sec=0.0,
+            wispr_suppress_autotype=False,
+        )
+        bridge.watch_clipboard = True
+        bridge._clipboard_seq = lambda: 6  # advanced past baseline_seq=5
+        bridge.on_dictation_end = lambda captured, reason=None: ends.append((captured, reason))
+        bridge.on_transcription = lambda t: transcripts.append(t)
+
+        bridge._post_dictation_worker("hello", 5)
+
+        assert transcripts == ["hello"]
+        assert ends == [(True, None)]
+
+    def test_unchanged_clipboard_reports_unchanged_reason(self, monkeypatch):
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.pyperclip, "paste", lambda: "hello", raising=False)
+
+        ends = []
+        bridge = _make_bridge(
+            wispr_clipboard_wait_sec=0.02, wispr_clipboard_grace_sec=0.0)
+        bridge.watch_clipboard = True
+        bridge._clipboard_seq = lambda: 5  # never moves from baseline_seq=5
+        bridge.on_dictation_end = lambda captured, reason=None: ends.append((captured, reason))
+
+        bridge._post_dictation_worker("hello", 5)
+
+        assert ends == [(False, "unchanged")]
+
+    def test_clipboard_off_reports_off_reason(self):
+        ends = []
+        bridge = _make_bridge(wispr_clipboard_wait_sec=0.0)
+        bridge.watch_clipboard = False
+        bridge.on_dictation_end = lambda captured, reason=None: ends.append((captured, reason))
+
+        bridge._post_dictation_worker("", None)
+
+        assert ends == [(False, "off")]
+
+
+@pytest.mark.unit
+class TestNoCaptureForcesOff:
+    """A no-capture turn where Wispr is still recording forces it OFF — the
+    most diagnostic moment becomes a desync-recovery point."""
+
+    def test_force_off_when_probe_still_recording(self, monkeypatch):
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.pyperclip, "paste", lambda: "base", raising=False)
+
+        fake = _FakeWispr(recording=True, tap_works=True)
+        bridge = _make_closed_loop_bridge(
+            fake, wispr_clipboard_wait_sec=0.0, wispr_clipboard_grace_sec=0.0)
+        bridge.watch_clipboard = True
+        bridge._clipboard_seq = lambda: 5  # unchanged from baseline_seq=5
+        bridge.on_dictation_end = lambda captured, reason=None: None
+
+        bridge._post_dictation_worker("base", 5)
+
+        assert fake.taps == 1          # forced OFF
+        assert fake.recording is False
+
+
+# ===========================================================================
 # W3 — thread-safe speaking flag
 # ===========================================================================
 
@@ -444,14 +560,15 @@ class TestDictationEndCapturedContract:
 
         ends: list = []
         transcripts: list = []
-        bridge = _make_bridge(wispr_clipboard_wait_sec=0.05)
+        bridge = _make_bridge(
+            wispr_clipboard_wait_sec=0.05, wispr_clipboard_grace_sec=0.0)
         bridge.watch_clipboard = True
-        bridge.on_dictation_end = lambda captured: ends.append(captured)
+        bridge.on_dictation_end = lambda captured, reason=None: ends.append((captured, reason))
         bridge.on_transcription = lambda text: transcripts.append(text)
 
         bridge._post_dictation_worker(baseline)
 
-        assert ends == [False]
+        assert ends == [(False, "timeout")]
         assert transcripts == []
 
     def test_clipboard_change_reports_true_and_dispatches(self, monkeypatch):
@@ -469,24 +586,25 @@ class TestDictationEndCapturedContract:
             wispr_suppress_autotype=False,  # skip erase during dispatch
         )
         bridge.watch_clipboard = True
-        bridge.on_dictation_end = lambda captured: ends.append(captured)
+        bridge.on_dictation_end = lambda captured, reason=None: ends.append((captured, reason))
         bridge.on_transcription = lambda text: transcripts.append(text)
 
         bridge._post_dictation_worker(baseline)
 
-        assert ends == [True]
+        assert ends == [(True, None)]
         assert transcripts == [new_text]
 
     def test_no_clipboard_branch_reports_false(self):
-        # watch_clipboard False -> the worker just sleeps then reports False.
+        # watch_clipboard False -> the worker just sleeps then reports
+        # (False, "off").
         ends: list = []
         bridge = _make_bridge(wispr_clipboard_wait_sec=0.01)
         bridge.watch_clipboard = False
-        bridge.on_dictation_end = lambda captured: ends.append(captured)
+        bridge.on_dictation_end = lambda captured, reason=None: ends.append((captured, reason))
 
         bridge._post_dictation_worker("")
 
-        assert ends == [False]
+        assert ends == [(False, "off")]
 
 
 # ===========================================================================

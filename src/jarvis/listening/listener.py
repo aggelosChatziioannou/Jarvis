@@ -700,6 +700,7 @@ class VoiceListener(threading.Thread):
                     on_wake=self._on_wispr_wake,
                     on_dictation_end=self._on_wispr_dictation_end,
                     on_stop=self._handle_wispr_stop,
+                    on_wispr_unavailable=self._on_wispr_unavailable,
                 )
                 debug_log("WisprBridge instantiated (start deferred to run())", "voice")
             except Exception as e:
@@ -4489,15 +4490,20 @@ class VoiceListener(threading.Thread):
         except Exception:
             pass
 
-    def _on_wispr_dictation_end(self, captured: bool = True) -> None:
+    def _on_wispr_dictation_end(self, captured: bool = True, reason=None) -> None:
         """Called from the post-dictation worker once clipboard polling
         has either captured the transcript or timed out.
 
         Args:
-            captured: True if Wispr Flow produced a transcript, False on a
-                clipboard timeout (no text within ``wispr_clipboard_wait_sec``).
+            captured: True if Wispr Flow produced a transcript, False otherwise.
                 Defaults to True so any caller that doesn't pass the flag
                 keeps the original no-op behaviour.
+            reason: Why no transcript was captured (``None`` when captured):
+                ``"off"`` (clipboard polling disabled / pyperclip missing),
+                ``"timeout"`` (watched but nothing arrived in time), or
+                ``"unchanged"`` (clipboard never advanced). Used only to give a
+                more honest notice; defaults to ``None`` for backward
+                compatibility with one-argument callers.
 
         When ``captured`` is True the cascade entry (``_process_transcript``
         invoked from ``_dispatch_wispr_transcript_to_cascade``) drives its own
@@ -4516,14 +4522,44 @@ class VoiceListener(threading.Thread):
             return None
 
         debug_log(
-            "wispr dictation produced no transcript (clipboard timeout)",
+            f"wispr dictation produced no transcript (reason={reason})",
             "voice",
         )
         try:
-            print("  🔇 Didn't catch that (no transcript).", flush=True)
+            if reason == "off":
+                print(
+                    "  🔇 Clipboard capture is off (pyperclip not installed) — "
+                    "no transcript captured.",
+                    flush=True,
+                )
+            else:
+                print("  🔇 Didn't catch that (no transcript).", flush=True)
         except Exception:
             pass
         # Tear down the stuck thinking tune + reset the face to IDLE.
+        self._stop_thinking_tune()
+        return None
+
+    def _on_wispr_unavailable(self) -> None:
+        """Called from the bridge when a dictation START could not be confirmed
+        to have put Wispr Flow into recording (closed-loop only).
+
+        The wake handler already started the thinking tune and set the face to
+        LISTENING, but Wispr never started, so no transcript will arrive. Tear
+        the UI back down and surface an honest notice instead of a permanent
+        false "listening". No TTS, to avoid noise."""
+        debug_log(
+            "wispr start unconfirmed — Wispr Flow did not begin recording",
+            "voice",
+        )
+        try:
+            print(
+                "  🔇 Wispr Flow did not start recording. Check that its "
+                "hands-free shortcut matches wispr_hands_free_combo.",
+                flush=True,
+            )
+        except Exception:
+            pass
         self._stop_thinking_tune()
         return None
 
