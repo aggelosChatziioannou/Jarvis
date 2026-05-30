@@ -65,7 +65,7 @@ class WisprStateProbe:
         """True only on Windows with a working enumerator and Wispr running."""
 ```
 
-- **`WindowEnumerator`** is a thin injectable seam: a callable returning a list of `WindowInfo(pid, process_name, hwnd, cls, title, visible, width, height, left, top, on_screen)`. The default implementation uses `ctypes` Win32 (`EnumWindows` + `GetWindowThreadProcessId` + `GetClassName` + `GetWindowText` + `IsWindowVisible` + `GetWindowRect`) and resolves Wispr PIDs by process name `"Wispr Flow"`. Tests inject a fake list — **no real Win32 in CI**.
+- **`WindowEnumerator`** is a thin injectable seam: a callable returning a list of `WindowInfo(pid, process_name, hwnd, cls, title, visible, width, height, left, top, on_screen)`. The default implementation reuses the project's existing `pywin32` dependency (`win32gui.EnumWindows` + `win32gui.GetClassName`/`GetWindowText`/`IsWindowVisible`/`GetWindowRect`, `win32process.GetWindowThreadProcessId`, and `psutil` for the process name) — the same stack already used by `src/jarvis/vision/safety.py:get_foreground_process_name`, rather than hand-rolling raw `ctypes` callbacks. It resolves Wispr PIDs by process name `"Wispr Flow"`. Tests inject a fake list — **no real Win32 in CI**.
 - **Discriminator** (how recording is told apart) is fixed by the characterisation step (4.4). The probe encapsulates it behind `is_recording()` so the discriminator can change without touching the bridge. The candidate discriminators, in priority order, are: (a) the `Status` overlay (`Chrome_WidgetWin_1`, title `Status`) being shown on-screen at a non-trivial size at its docked position; (b) a state-dependent window title; (c) presence/absence of a dedicated recording window. The characterisation script selects the first reliable one. If none is reliable, `is_recording()` returns `None` for all calls and the bridge degrades to the §4.3 heuristic guards.
 - **Fail-open everywhere:** non-Windows import, missing Win32, no Wispr process, or any exception -> `None`. Never raises.
 - **Caching:** PIDs are re-resolved at most every `wispr_state_pid_ttl_sec` (default 2.0) to bound enumeration cost; a single `is_recording()` enumerates once.
@@ -80,7 +80,7 @@ class WisprStateProbe:
   3. If `observed == target`: reconcile `_keys_held = target`, send **no** tap (the toggle is already where we want it; this is the inversion-healing step).
   4. If `observed != target`: tap once, then **confirm** by polling `is_recording()` up to `wispr_confirm_timeout_sec` (default 0.6, poll ~50 ms). On success set `_keys_held = target`. On failure send **one** corrective re-tap and re-confirm. Still failing -> return `False` (caller surfaces unavailability).
 - **`_start_dictation`** keeps an early provisional UI but only promotes to confirmed "listening" once a start is confirmed; when `_ensure_recording(True)` returns `False`, fire the new optional callback **`on_wispr_unavailable()`** so the listener can show "Wispr did not start" instead of a false "listening". When the probe is unavailable (`None`), preserve today's behaviour (show listening immediately).
-- **`start()` startup reconciliation:** initialise `_keys_held` from `probe.is_recording()` when confident; if Wispr is found **recording** at boot, force it OFF to a known IDLE before going live.
+- **`start()` startup reconciliation:** initialise `_keys_held` from `probe.is_recording()` when confident; if Wispr is found **recording** at boot, force it OFF to a known IDLE before going live. The startup force-OFF is exempt from the §4.2 minimum inter-tap gap (there is no prior tap to gate against), so it is unaffected by `wispr_min_tap_gap_sec`.
 - **`on_dictation_end(captured=False)` path / `_post_dictation_worker`:** when a turn produced no transcript, query the probe; if Wispr is still recording, `_ensure_recording(False)` to force a known IDLE. This turns the most diagnostic moment into a recovery point.
 - **Cheap guards (always on, independent of the probe):**
   - **Configurable hotkey:** new `wispr_hands_free_combo` (default `["ctrl", "cmd", "space"]`) drives `_tap_hands_free_toggle_locked` instead of the hardcoded chord, so a user whose Wispr binding differs can match it. Unknown key names fall back to the default with a logged warning.
@@ -100,8 +100,10 @@ A bounded, scripted task with explicit acceptance criteria, run once before the 
 ### 4.5 Capture-path fixes — `wispr_bridge.py` + `config.py`
 
 - **Clipboard-sequence capture:** use Win32 `GetClipboardSequenceNumber()` to detect that the clipboard changed even when the new transcript text is byte-identical to the baseline (the verified repeat-phrase drop). Baseline = sequence number at `_start_dictation`; dispatch when the sequence advances **and** the current clipboard value is non-empty. On non-Windows or any failure, fall back to the current exact-text diff. A new test asserts an identical re-utterance is still dispatched.
-- **Define `wispr_erase_max_chars`** in `config.py` (dataclass field + defaults + builder), mirroring `wispr_suppress_autotype`. It is currently read via `getattr(..., 300)` but never declared, so it is silently un-tunable.
-- **Smarter timeout / diagnosable no-capture:** after `clipboard_wait_sec` elapses, do one final grace check (`wispr_clipboard_grace_sec`, default 2.0) before declaring `captured=False`; pass a **reason** (`off` / `timeout` / `unchanged`) from `_post_dictation_worker` so the listener notice can distinguish "pyperclip missing" from "identical phrase" from "cloud too slow".
+- **Declare the two silently-undeclared Wispr fields** in `config.py` (dataclass field + defaults + builder + constructor, mirroring `wispr_suppress_autotype`):
+  - `wispr_erase_max_chars` — read at `wispr_bridge.py:1212` via `getattr(..., 300)` but never declared.
+  - `wispr_barge_in_interrupt` — read at `wispr_bridge.py:1376` via `getattr(..., True)` but never declared. Same defect class; fixed here because we are already touching the same four config sites. No behaviour change (default preserves today's `True`).
+- **Smarter timeout / diagnosable no-capture:** after `clipboard_wait_sec` elapses, do one final grace check (`wispr_clipboard_grace_sec`, default 2.0) before declaring `captured=False`; propagate a **reason** so the listener notice can distinguish "pyperclip missing" from "identical phrase" from "cloud too slow". **Delivery mechanism:** extend the existing callback to `on_dictation_end(captured: bool, reason: str | None = None)` with a backward-compatible default (`reason=None`); update the listener handler `_on_wispr_dictation_end(self, captured: bool = True, reason: str | None = None)` accordingly. `reason` is one of `"off"` (clipboard polling disabled), `"timeout"` (no clipboard change within the wait+grace), `"unchanged"` (clipboard present but never advanced), or `None` (captured). The optional-keyword shape keeps any other caller/test of the callback working unchanged.
 
 ### 4.6 Config fields (config.py)
 
@@ -113,9 +115,12 @@ A bounded, scripted task with explicit acceptance criteria, run once before the 
 | `wispr_confirm_timeout_sec` | `0.6` | How long to poll the probe to confirm a tap took effect. |
 | `wispr_state_pid_ttl_sec` | `2.0` | Wispr PID re-resolution cadence in the probe. |
 | `wispr_erase_max_chars` | `300` | Existing-but-undeclared cap on auto-type erase. |
+| `wispr_barge_in_interrupt` | `true` | Existing-but-undeclared barge-in toggle (declared here for consistency; default preserves current behaviour). |
 | `wispr_clipboard_grace_sec` | `2.0` | Extra grace after the clipboard wait before declaring no-capture. |
 
 All are config-driven and tunable; tests assert against the config-derived references, not hardcoded literals.
+
+`wispr_closed_loop_enabled` defaults to `true` and this is **safe before characterisation**: an un-characterised or unreliable overlay signal makes `WisprStateProbe.is_recording()` return `None`, which the bridge treats as "unknown" and degrades to the §4.3 fail-open behaviour (today's logic plus the two cheap guards). The master switch therefore never makes things worse even on a machine where §4.4 has not yet run; it exists so the probe path can be disabled wholesale if ever needed.
 
 ## 5. Error handling
 
