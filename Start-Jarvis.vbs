@@ -47,6 +47,7 @@ logPath = logDir & "\jarvis_startup.log"
 ' pythonw.exe has no console of its own. Without the >..\jarvis_startup.log
 ' redirect, any boot-time Python traceback would vanish into the void.
 cmdLine = "cmd /c " & _
+    "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & repoDir & "\scripts\kill-jarvis.ps1"" & " & _
     "set PYTHONPATH=" & repoDir & "\src" & " && " & _
     "set PYTHONIOENCODING=utf-8 && " & _
     "set OLLAMA_KEEP_ALIVE=-1 && " & _
