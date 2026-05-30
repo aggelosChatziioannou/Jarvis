@@ -52,6 +52,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from ..debug import debug_log
+from .wispr_state import WisprStateProbe
 
 
 # ============================================================================
@@ -151,6 +152,20 @@ class KeyEvent(Enum):
     STOP = "stop"
 
 
+# Map config combo-key names -> pynput Key objects. Single-character names
+# (letters/digits) are passed through as literal character keys at tap time.
+_COMBO_KEYS = {
+    "ctrl": Key.ctrl, "control": Key.ctrl,
+    "win": Key.cmd, "cmd": Key.cmd, "super": Key.cmd, "meta": Key.cmd,
+    "alt": Key.alt, "option": Key.alt, "altgr": Key.alt_gr,
+    "shift": Key.shift,
+    "space": Key.space,
+    "enter": Key.enter, "return": Key.enter,
+    "tab": Key.tab,
+    "esc": Key.esc, "escape": Key.esc,
+}
+
+
 # ============================================================================
 # Bridge
 # ============================================================================
@@ -176,21 +191,34 @@ class WisprBridge:
         cfg: Any,
         on_transcription: Callable[[str], None],
         on_wake: Optional[Callable[[], None]] = None,
-        on_dictation_end: Optional[Callable[[bool], None]] = None,
+        on_dictation_end: Optional[Callable[..., None]] = None,
         on_stop: Optional[Callable[[], None]] = None,
+        on_wispr_unavailable: Optional[Callable[[], None]] = None,
+        state_probe: Optional["WisprStateProbe"] = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         # ---- Callbacks (invoked from background threads) ------------------
         self.on_transcription = on_transcription
         self.on_wake = on_wake
         # Fired once per dictation when the post-dictation worker finishes.
-        # Receives ``captured: bool`` — True when a clipboard transcript was
-        # captured within the wait window (i.e. on_transcription also fired),
-        # False when none arrived (timeout) or clipboard polling is off. The
-        # listener uses this to decide whether to re-arm or recover.
+        # Receives ``captured: bool`` (and an optional ``reason`` str) — True
+        # when a clipboard transcript was captured within the wait window (i.e.
+        # on_transcription also fired), False when none arrived (timeout/off).
+        # The listener uses this to decide whether to re-arm or recover.
         self.on_dictation_end = on_dictation_end
         # Fired when a stop pattern ('stop', 'σταμάτα', ...) is detected
         # while JARVIS is speaking. Listener uses this to interrupt TTS.
         self.on_stop = on_stop
+        # Fired when a dictation START tap could not be confirmed to have put
+        # Wispr Flow into recording (closed-loop only). The listener uses this
+        # to show an honest "Wispr did not start" instead of a false "listening".
+        self.on_wispr_unavailable = on_wispr_unavailable
+
+        # Injectable clock seams so the confirm-poll and the min-tap-gap are
+        # testable without wall-clock waits.
+        self._monotonic = monotonic
+        self._sleep = sleep
 
         # ---- Config (read defensively — Phase B may not have populated
         # these fields yet) -------------------------------------------------
@@ -220,6 +248,32 @@ class WisprBridge:
             cfg, "wispr_hot_window_sec", DEFAULT_HOT_WINDOW_SEC))
         self.suppress_autotype = bool(getattr(
             cfg, "wispr_suppress_autotype", DEFAULT_SUPPRESS_AUTOTYPE))
+
+        # ---- Closed-loop synchronisation + cheap guards -------------------
+        # The bridge drives Wispr with a single TOGGLE hotkey and cannot, on its
+        # own, know whether a tap landed. With closed-loop on we reconcile every
+        # tap against Wispr's REAL recording state via ``WisprStateProbe`` (a
+        # local mic-usage read), so a missed/extra tap self-corrects instead of
+        # inverting the mapping for the rest of the session. Fail-open: when the
+        # probe can't tell (``is_recording() -> None``) we keep the old
+        # belief-only behaviour, so this is never worse than before.
+        self._closed_loop = bool(getattr(cfg, "wispr_closed_loop_enabled", True))
+        self._confirm_timeout_sec = float(getattr(
+            cfg, "wispr_confirm_timeout_sec", 1.2))
+        self._min_tap_gap_sec = float(getattr(cfg, "wispr_min_tap_gap_sec", 0.5))
+        combo = getattr(cfg, "wispr_hands_free_combo", None)
+        self._hands_free_combo = self._normalise_combo(combo)
+        if state_probe is not None:
+            self._state_probe = state_probe
+        elif self._closed_loop:
+            self._state_probe = WisprStateProbe()
+        else:
+            # Closed-loop disabled -> a probe that always says "unknown", so the
+            # bridge stays on the fail-open belief-only path.
+            self._state_probe = WisprStateProbe(reader=lambda: None)
+        # Last toggle-tap timestamp (min-tap-gap guard).
+        self._last_tap_ts = 0.0
+
         # Wake mic = the persisted audio-input selection (by stable endpoint id,
         # friendly name as fallback) resolved to a sounddevice index. Resolved
         # here for construction and AGAIN in start()/reconnect so a device that
@@ -903,59 +957,199 @@ class WisprBridge:
                 self._do_release_keys()
 
     def _do_press_keys(self) -> None:
-        """Start Wispr Flow's hands-free dictation by tapping Ctrl+Win+Space
-        (the hands-free toggle shortcut). The keys are released immediately
-        — Wispr Flow stays in hands-free mode until we tap the same combo
-        again. ``_keys_held`` is reused as a "hands-free active" sentinel
-        to prevent double-tapping (which would cancel mid-dictation)."""
-        with self._keys_lock:
-            if self._keys_held:
-                return  # already in hands-free mode
-            try:
-                self._tap_hands_free_toggle_locked()
-                self._keys_held = True  # sentinel — hands-free is now active
-                debug_log("Tapped Ctrl+Win+Space (started hands-free dictation)", "voice")
-            except Exception as e:
-                print(f"[ERROR] Failed to start hands-free dictation: {e}",
-                      file=sys.stderr, flush=True)
+        """Ensure Wispr Flow is RECORDING (closed-loop start).
+
+        Routes through :meth:`_ensure_recording`, which reads Wispr's real
+        recording state and taps the hands-free toggle only when needed,
+        confirming the result. When the start cannot be confirmed, surface it
+        (Wispr likely never started) rather than silently believing it did."""
+        try:
+            ok = self._ensure_recording(True)
+        except Exception as e:
+            print(f"[ERROR] Failed to start hands-free dictation: {e}",
+                  file=sys.stderr, flush=True)
+            with self._keys_lock:
                 self._force_release_locked()
+            return
+        if not ok:
+            self._handle_unconfirmed_start()
 
     def _do_release_keys(self) -> None:
-        """Stop Wispr Flow's hands-free dictation by tapping Ctrl+Win+Space
-        a second time. Idempotent — if dictation was never started (defensive),
-        the tap is skipped."""
+        """Ensure Wispr Flow is NOT recording (closed-loop stop).
+
+        Routes through :meth:`_ensure_recording`. Idempotent: if Wispr is
+        already idle, no tap is sent."""
+        try:
+            self._ensure_recording(False)
+        except Exception as e:
+            print(f"[ERROR] Failed to stop hands-free dictation cleanly: {e}",
+                  file=sys.stderr, flush=True)
+
+    def _handle_unconfirmed_start(self) -> None:
+        """A START tap could not be confirmed to have put Wispr into recording.
+
+        Overridden behaviour is filled in by the honest-HUD path; the base
+        action is to log it so the desync is visible rather than silent."""
+        debug_log(
+            "ensure_recording: dictation start could not be confirmed — "
+            "Wispr Flow may not have started recording",
+            "voice",
+        )
+
+    # ----------------------------------------------------------------------
+    # Closed-loop level-seeking
+    # ----------------------------------------------------------------------
+
+    def _read_probe(self) -> Optional[bool]:
+        """Wispr's real recording state, or None when it cannot be determined."""
+        try:
+            return self._state_probe.is_recording()
+        except Exception:
+            return None
+
+    def _ensure_recording(self, target: bool) -> bool:
+        """Bring Wispr Flow's recording state to ``target``, verified.
+
+        Level-seeking, not blind toggling:
+          * probe says ``None`` (unknown)  -> fall back to belief-only toggling
+            (today's behaviour) so we are never worse than before.
+          * observed == target             -> reconcile belief, send NO tap
+            (this is the inversion-healing step).
+          * observed != target             -> tap once, confirm; on failure tap
+            once more and re-confirm; still failing -> return False.
+
+        Runs on the key-worker thread (called from _do_press/_do_release), so
+        the bounded confirm-poll never blocks the audio callback. Returns True
+        when the target state is reached/believed, False when a needed tap could
+        not be confirmed.
+        """
         with self._keys_lock:
-            if not self._keys_held:
-                return  # nothing to stop
-            try:
-                self._tap_hands_free_toggle_locked()
-                debug_log("Tapped Ctrl+Win+Space (stopped hands-free dictation)", "voice")
-            except Exception as e:
-                print(f"[ERROR] Failed to stop hands-free dictation cleanly: {e}",
-                      file=sys.stderr, flush=True)
-            finally:
-                self._keys_held = False
+            observed = self._read_probe()
+            if observed is None:
+                return self._toggle_to_belief_locked(target)
+            if observed == target:
+                self._keys_held = target
+                return True
+            # Observed state differs from target -> a tap is required.
+            self._emit_toggle_tap_locked()
+            if self._confirm_locked(target):
+                self._keys_held = target
+                return True
+            debug_log(
+                f"ensure_recording: tap did not reach target={target}; re-tapping",
+                "voice",
+            )
+            self._emit_toggle_tap_locked()
+            if self._confirm_locked(target):
+                self._keys_held = target
+                return True
+            debug_log(
+                f"ensure_recording: could not reach target={target} after re-tap",
+                "voice",
+            )
+            return False
+
+    def _toggle_to_belief_locked(self, target: bool) -> bool:
+        """Fail-open path (probe unknown): tap iff the local belief differs.
+
+        Mirrors the historical belief-only behaviour exactly — a single tap to
+        start when not held, a single tap to stop when held — so a machine
+        without an observable Wispr state behaves as it did before, plus the
+        cheap guards (configurable combo, min inter-tap gap). CALLER HOLDS LOCK."""
+        if target:
+            if self._keys_held:
+                return True
+            self._emit_toggle_tap_locked()
+            self._keys_held = True
+            return True
+        if not self._keys_held:
+            return True
+        self._emit_toggle_tap_locked()
+        self._keys_held = False
+        return True
+
+    def _confirm_locked(self, target: bool) -> bool:
+        """Poll Wispr's real state until it equals ``target`` or we time out.
+
+        CALLER HOLDS LOCK. If the probe goes blind (returns None) for the whole
+        window and never contradicts the target, we do NOT claim failure — a
+        blind corrective tap could itself invert state."""
+        deadline = self._monotonic() + self._confirm_timeout_sec
+        saw_definite = False
+        while self._monotonic() < deadline:
+            obs = self._read_probe()
+            if obs == target:
+                return True
+            if obs is not None:
+                saw_definite = True
+            self._sleep(0.05)
+        obs = self._read_probe()
+        if obs == target:
+            return True
+        if not saw_definite and obs is None:
+            return True
+        return False
+
+    def _emit_toggle_tap_locked(self) -> None:
+        """Tap the hands-free toggle, honouring the minimum inter-tap gap.
+
+        Wispr's own docs note that starting/stopping very quickly can freeze
+        Flow with the bubble stuck on 'Listening'; we enforce a minimum quiet
+        interval between consecutive taps. CALLER HOLDS LOCK."""
+        gap = self._min_tap_gap_sec
+        if gap > 0:
+            since = self._monotonic() - self._last_tap_ts
+            if 0.0 <= since < gap:
+                self._sleep(gap - since)
+        self._tap_hands_free_toggle_locked()
+        self._last_tap_ts = self._monotonic()
 
     def _tap_hands_free_toggle_locked(self) -> None:
-        """Tap Ctrl+Win+Space briefly. CALLER MUST HOLD ``self._keys_lock``.
+        """Tap the configured hands-free chord briefly. CALLER HOLDS LOCK.
 
-        We press in the order Ctrl → Win → Space and release in the reverse
-        order (Space → Win → Ctrl) with tiny gaps, mimicking what a human's
-        fingers would do. Wispr Flow's keystroke detector listens for the
-        Space press inside an active Ctrl+Win modifier combo and toggles
-        hands-free dictation on/off in response.
-        """
-        self._keyboard.press(Key.ctrl)
-        time.sleep(KEY_INTER_PRESS_DELAY)
-        self._keyboard.press(Key.cmd)
-        time.sleep(KEY_INTER_PRESS_DELAY)
-        self._keyboard.press(Key.space)
-        time.sleep(KEY_INTER_PRESS_DELAY)
-        self._keyboard.release(Key.space)
-        time.sleep(KEY_INTER_PRESS_DELAY)
-        self._keyboard.release(Key.cmd)
-        time.sleep(KEY_INTER_PRESS_DELAY)
-        self._keyboard.release(Key.ctrl)
+        Presses each key of ``wispr_hands_free_combo`` in order and releases in
+        reverse order with tiny gaps, mimicking a human's fingers. Wispr Flow's
+        keystroke detector toggles hands-free dictation on the chord. The combo
+        is configurable so it can match a user's actual Wispr binding (a hard-
+        coded chord that does not match makes every tap a silent no-op)."""
+        keys = self._combo_keys()
+        for k in keys:
+            self._keyboard.press(k)
+            time.sleep(KEY_INTER_PRESS_DELAY)
+        for k in reversed(keys):
+            self._keyboard.release(k)
+            time.sleep(KEY_INTER_PRESS_DELAY)
+
+    def _combo_keys(self) -> list:
+        """Resolve the configured combo names to pynput keys/chars.
+
+        Unknown names are dropped (with a log); if nothing resolves we fall
+        back to the default Ctrl+Win+Space so a bad config can't disable taps."""
+        keys: list = []
+        for name in self._hands_free_combo:
+            k = _COMBO_KEYS.get(name)
+            if k is not None:
+                keys.append(k)
+            elif len(name) == 1:
+                keys.append(name)  # a literal character key
+            else:
+                debug_log(f"unknown hands-free combo key '{name}' — skipped", "voice")
+        if not keys:
+            debug_log(
+                "hands-free combo resolved to nothing — using default Ctrl+Win+Space",
+                "voice",
+            )
+            return [Key.ctrl, Key.cmd, Key.space]
+        return keys
+
+    @staticmethod
+    def _normalise_combo(combo: Any) -> list:
+        """Lowercased list of combo key names; default Ctrl+Win+Space if invalid."""
+        default = ["ctrl", "cmd", "space"]
+        if not isinstance(combo, (list, tuple)) or not combo:
+            return default
+        names = [str(x).strip().lower() for x in combo if str(x).strip()]
+        return names or default
 
     def _force_release_locked(self) -> None:
         """Defensive cleanup. With tap-and-release semantics nothing should

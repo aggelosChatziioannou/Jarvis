@@ -95,6 +95,173 @@ class _ScoringWakeModel:
 
 
 # ===========================================================================
+# W7 — closed-loop level-seeking (_ensure_recording) + cheap guards
+# ===========================================================================
+
+class _FakeWispr:
+    """Simulates Wispr Flow's real recording state and whether our toggle tap
+    actually reaches it. ``tap()`` flips the state only when ``tap_works``."""
+
+    def __init__(self, recording: bool = False, tap_works: bool = True):
+        self.recording = recording
+        self.tap_works = tap_works
+        self.taps = 0
+
+    def tap(self) -> None:
+        self.taps += 1
+        if self.tap_works:
+            self.recording = not self.recording
+
+
+def _make_closed_loop_bridge(fake: "_FakeWispr", **cfg_attrs):
+    """Bridge wired to a fake Wispr: the probe reads ``fake.recording`` and the
+    toggle tap drives ``fake.tap``. Confirm/gap collapsed to 0 for determinism
+    unless overridden."""
+    from jarvis.listening.wispr_state import WisprStateProbe
+
+    cfg = SimpleNamespace(
+        wispr_closed_loop_enabled=True,
+        wispr_confirm_timeout_sec=0.0,
+        wispr_min_tap_gap_sec=0.0,
+        **cfg_attrs,
+    )
+    bridge = WisprBridge(
+        cfg,
+        on_transcription=lambda text: None,
+        state_probe=WisprStateProbe(reader=lambda: fake.recording),
+        sleep=lambda s: None,
+    )
+    bridge._tap_hands_free_toggle_locked = fake.tap  # type: ignore[assignment]
+    return bridge
+
+
+@pytest.mark.unit
+class TestEnsureRecording:
+    """`_ensure_recording(target)` reconciles against Wispr's REAL state and
+    taps only when needed, confirming the result — so a missed/extra tap
+    self-corrects instead of inverting the mapping for the session."""
+
+    def test_desync_heal_no_tap_when_already_recording(self):
+        # Wispr is already recording but belief was False (inverted). Asking to
+        # start must NOT tap (that would STOP Wispr); it reconciles belief.
+        fake = _FakeWispr(recording=True)
+        bridge = _make_closed_loop_bridge(fake)
+        bridge._keys_held = False
+
+        assert bridge._ensure_recording(True) is True
+        assert fake.taps == 0
+        assert fake.recording is True          # still recording
+        assert bridge._keys_held is True       # belief reconciled
+
+    def test_normal_start_taps_once_and_confirms(self):
+        fake = _FakeWispr(recording=False, tap_works=True)
+        bridge = _make_closed_loop_bridge(fake)
+
+        assert bridge._ensure_recording(True) is True
+        assert fake.taps == 1
+        assert fake.recording is True
+        assert bridge._keys_held is True
+
+    def test_missed_press_retaps_then_reports_failure(self):
+        # Tap never reaches Wispr (swallowed combo / wrong binding): one
+        # corrective re-tap, then honest failure.
+        fake = _FakeWispr(recording=False, tap_works=False)
+        bridge = _make_closed_loop_bridge(fake)
+
+        assert bridge._ensure_recording(True) is False
+        assert fake.taps == 2                  # initial + one corrective re-tap
+        assert fake.recording is False
+
+    def test_normal_stop_taps_once(self):
+        fake = _FakeWispr(recording=True, tap_works=True)
+        bridge = _make_closed_loop_bridge(fake)
+        bridge._keys_held = True
+
+        assert bridge._ensure_recording(False) is True
+        assert fake.taps == 1
+        assert fake.recording is False
+        assert bridge._keys_held is False
+
+    def test_fail_open_belief_only_when_probe_unknown(self):
+        # Closed-loop disabled -> probe returns None -> exactly today's
+        # belief-only behaviour: one START tap, one STOP tap, no double tap.
+        taps = []
+        cfg = SimpleNamespace(
+            wispr_closed_loop_enabled=False,
+            wispr_min_tap_gap_sec=0.0,
+        )
+        bridge = WisprBridge(cfg, on_transcription=lambda t: None,
+                             sleep=lambda s: None)
+        bridge._tap_hands_free_toggle_locked = lambda: taps.append(1)  # type: ignore
+
+        assert bridge._ensure_recording(True) is True
+        assert len(taps) == 1 and bridge._keys_held is True
+        assert bridge._ensure_recording(True) is True   # already held
+        assert len(taps) == 1                            # no extra tap
+        assert bridge._ensure_recording(False) is True
+        assert len(taps) == 2 and bridge._keys_held is False
+
+
+@pytest.mark.unit
+class TestHandsFreeComboAndGap:
+    """Configurable hands-free chord + minimum inter-tap gap (cheap guards)."""
+
+    def test_configurable_combo_is_tapped(self, monkeypatch):
+        from pynput.keyboard import Key
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.time, "sleep", lambda s: None)
+
+        bridge = _make_bridge(wispr_hands_free_combo=["ctrl", "alt", "space"])
+        rec = _RecorderKeyboard()
+        bridge._keyboard = rec
+
+        bridge._tap_hands_free_toggle_locked()
+
+        assert rec.presses == [Key.ctrl, Key.alt, Key.space]
+        assert rec.releases == [Key.space, Key.alt, Key.ctrl]  # reverse order
+
+    def test_unknown_combo_key_falls_back_to_default(self, monkeypatch):
+        from pynput.keyboard import Key
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.time, "sleep", lambda s: None)
+
+        bridge = _make_bridge(wispr_hands_free_combo=["boguskey"])
+        rec = _RecorderKeyboard()
+        bridge._keyboard = rec
+
+        bridge._tap_hands_free_toggle_locked()
+
+        assert rec.presses == [Key.ctrl, Key.cmd, Key.space]  # default fallback
+
+    def test_min_tap_gap_enforced_between_consecutive_taps(self):
+        class _Clock:
+            def __init__(self):
+                self.t = 1000.0
+                self.sleeps = []
+
+            def now(self):
+                return self.t
+
+            def sleep(self, s):
+                self.sleeps.append(s)
+                self.t += s
+
+        clock = _Clock()
+        bridge = WisprBridge(
+            SimpleNamespace(wispr_min_tap_gap_sec=0.5),
+            on_transcription=lambda t: None,
+            monotonic=clock.now,
+            sleep=clock.sleep,
+        )
+        bridge._tap_hands_free_toggle_locked = lambda: None  # type: ignore
+
+        bridge._emit_toggle_tap_locked()   # first tap: last_tap_ts was 0 -> no gap
+        bridge._emit_toggle_tap_locked()   # immediate second tap -> must wait the gap
+
+        assert clock.sleeps == [0.5]
+
+
+# ===========================================================================
 # W1 — safer auto-type erase (data-loss guard)
 # ===========================================================================
 
