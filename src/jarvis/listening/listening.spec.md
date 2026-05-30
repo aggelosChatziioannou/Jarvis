@@ -108,6 +108,8 @@ Before the listener announces "Listening!", it pre-loads every model the first e
       "What do you know about me, Jarvis?"
 ```
 
+Warmup covers chat, the intent judge, and (when `tool_selection_strategy == "llm"`) the tool router, de-duplicated when roles share a model. **When `vision_enabled` is true the vision model (`vision_model`, e.g. `qwen2.5vl:3b`) is also warmed** (`warmup-vision` thread, skipped if it shares an already-warmed model). This is so the first `seeScreen` hits a resident model: under VRAM contention a cold vision load + image eval can exceed the per-call `vision_timeout_sec`, which otherwise surfaces as "the vision system is taking a long time to wake up" on the first ask after boot. All warmups are best-effort, parallel, and joined under a shared deadline before "Listening!".
+
 The weather example adapts to location availability: if `location_enabled` is true, a location source is configured (`location_auto_detect` or a manual `location_ip_address`), **and** the GeoLite2 database is present (`is_location_available()` returns true), the plain form is shown; otherwise the `[your city]` placeholder form is shown so the user understands they must substitute a real city name in their query.
 
 On small models, a caveat line is appended above a more involved example to set expectations (`⚠️ Small model in use (…). Assume it can't infer — spell out the steps for anything more involved:`). The Chrome MCP tip continues to appear as its own block when the browser tool is detected.
@@ -168,6 +170,8 @@ While TTS is playing, echo rejection and stop commands are handled with fast tex
 **Echo handling:**
 - Transcripts during TTS are flagged with `is_during_tts=true`
 - Intent judge uses this context to identify echo
+
+**Wispr backend (openWakeWord push-to-talk) — two independent suspends:** wake detection is paused two separate ways, and they must NOT share a flag. A transient *speaking-pause* (`_speak_paused`) is raised while JARVIS talks and auto-lifted ~0.8 s after speech ends, so the echo tail can't false-trigger the wake model. The user *MUTE* from the HUD/control bus sets a distinct *user-mute* (`_user_muted`). The post-speak resume lifts only the speaking-pause, so a user MUTE survives JARVIS speaking (including autonomous spoken reminders) and is cleared solely by UNMUTE/TRIGGER. Collapsing both into one flag was the bug where mute stopped working after any TTS. A per-frame silence gate (`wispr_wake_rms_floor`, ungained int16 RMS ≈ −44 dBFS) additionally skips the wake model on near-silent frames so a quiet room can't produce phantom wakes, without lowering the threshold or touching recall on real speech.
 
 ## Rolling Transcript Buffer
 

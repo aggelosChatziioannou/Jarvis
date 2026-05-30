@@ -27,6 +27,10 @@ def _create_mock_config(**kwargs):
     mock_cfg.voice_device = kwargs.get("voice_device", None)
     mock_cfg.voice_debug = kwargs.get("voice_debug", False)
     mock_cfg.tune_enabled = kwargs.get("tune_enabled", False)
+    # Vision off by default (matches real config) so warmup tests that don't
+    # opt in keep their exact thread counts.
+    mock_cfg.vision_enabled = kwargs.get("vision_enabled", False)
+    mock_cfg.vision_model = kwargs.get("vision_model", "qwen2.5vl:3b")
     return mock_cfg
 
 
@@ -1597,6 +1601,70 @@ class TestLlmWarmup:
         threads = listener._start_llm_warmup()
         assert threads == []
         assert listener._llm_warmup_results == {}
+
+    def test_warms_vision_model_when_enabled(self):
+        """vision_enabled → the vision model is warmed too, so the first
+        seeScreen call hits a resident model instead of a cold load that
+        overruns the per-call vision timeout (field failure: 'vision is taking
+        a long time to wake up' on the first ask after boot)."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", judge_model="gemma4:e2b"
+        )
+        listener.cfg.vision_enabled = True
+        listener.cfg.vision_model = "qwen2.5vl:3b"
+        with patch(
+            "jarvis.listening.listener.warm_up_ollama_model", return_value=True
+        ) as warm, patch(
+            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+        ):
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        warmed_models = [c.args[1] for c in warm.call_args_list]
+        assert "qwen2.5vl:3b" in warmed_models
+        assert listener._llm_warmup_results["vision"] == ("qwen2.5vl:3b", True)
+
+    def test_does_not_warm_vision_when_disabled(self):
+        """vision disabled (default) → no vision warmup, no extra thread."""
+        listener = _make_listener_for_warmup(
+            chat_model="llama3.1", judge_model="gemma4:e2b"
+        )
+        listener.cfg.vision_enabled = False
+        listener.cfg.vision_model = "qwen2.5vl:3b"
+        with patch(
+            "jarvis.listening.listener.warm_up_ollama_model", return_value=True
+        ) as warm, patch(
+            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+        ):
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        warmed_models = [c.args[1] for c in warm.call_args_list]
+        assert "qwen2.5vl:3b" not in warmed_models
+        assert "vision" not in listener._llm_warmup_results
+
+    def test_does_not_double_warm_vision_sharing_chat_model(self):
+        """If the vision model equals the chat model (unusual), don't spawn a
+        redundant warmup thread for it."""
+        listener = _make_listener_for_warmup(
+            chat_model="qwen2.5vl:3b", judge_model="gemma4:e2b"
+        )
+        listener.cfg.vision_enabled = True
+        listener.cfg.vision_model = "qwen2.5vl:3b"
+        with patch(
+            "jarvis.listening.listener.warm_up_ollama_model", return_value=True
+        ) as warm, patch(
+            "jarvis.listening.intent_judge.warm_up_ollama_model", return_value=True
+        ):
+            threads = listener._start_llm_warmup()
+            for t in threads:
+                t.join(timeout=2.0)
+
+        # chat warmup already loaded the model; no separate vision thread.
+        vision_threads = [t for t in threads if t.name == "warmup-vision"]
+        assert vision_threads == []
 
     def test_records_failure_from_helper(self):
         """A False return from the helper shows up in the results dict."""

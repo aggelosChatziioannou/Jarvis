@@ -3201,6 +3201,25 @@ class VoiceListener(threading.Thread):
 
             threads.append(threading.Thread(target=_warm_router, daemon=True, name="warmup-router"))
 
+        # Vision model — warmed only when vision is enabled, so the first
+        # seeScreen call hits a resident model instead of paying the cold-load
+        # cost. Under VRAM contention (chat 9B + judge/router 4B pinned) a cold
+        # qwen2.5vl load + image eval can exceed the per-call vision timeout,
+        # surfacing as "the vision system is taking a long time to wake up" on
+        # the first ask after boot. Skipped when it shares a model already
+        # warmed above. Best-effort and parallel like the others.
+        vision_enabled = bool(getattr(self.cfg, "vision_enabled", False))
+        vision_model = str(getattr(self.cfg, "vision_model", "") or "").strip()
+        vision_shared = bool(vision_model) and vision_model in {
+            chat_model, judge_model, router_model,
+        }
+        if vision_enabled and vision_model and base_url and not vision_shared:
+            def _warm_vision() -> None:
+                ok = warm_up_ollama_model(base_url, vision_model, timeout=chat_timeout)
+                self._llm_warmup_results["vision"] = (vision_model, ok)
+
+            threads.append(threading.Thread(target=_warm_vision, daemon=True, name="warmup-vision"))
+
         for t in threads:
             t.start()
 
