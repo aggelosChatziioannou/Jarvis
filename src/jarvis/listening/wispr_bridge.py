@@ -125,7 +125,7 @@ VAD_THRESHOLD = 0.5
 
 DEFAULT_WAKE_MODEL = "hey_jarvis_v0.1"
 DEFAULT_WAKE_THRESHOLD = 0.1
-DEFAULT_WAKE_RMS_FLOOR = 200.0   # ungained int16 RMS (~-44 dBFS); below = silence
+DEFAULT_WAKE_RMS_FLOOR = 0.0     # ungained int16 RMS trigger gate; 0.0 = off (far-field-safe; model self-rejects silence)
 DEFAULT_SILENCE_MS = 800
 DEFAULT_MIN_DICTATION_SEC = 2.0
 DEFAULT_MAX_DICTATION_SEC = 30

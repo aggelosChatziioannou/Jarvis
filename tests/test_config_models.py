@@ -284,6 +284,41 @@ class TestWakeGainConfig:
         assert load_settings().wispr_wake_gain == 1.0
 
 
+class TestWakeRmsFloorConfig:
+    """wispr_wake_rms_floor: ungained int16 RMS below which a wake frame is
+    treated as silence and the TRIGGER is skipped (the model is still fed).
+
+    Defaults to 0.0 (off): the recall-tuned far-field model rejects silence on
+    its own, and a non-zero floor must stay below far-field RMS (~100-200 for
+    the PD200X at 2-3 m) or it drops distant wakes. Must be config-tunable so a
+    user can opt back into a guard without a code change.
+    """
+
+    def test_default_is_off(self):
+        config = get_default_config()
+        assert config.get("wispr_wake_rms_floor") == 0.0
+
+    def test_round_trips_through_settings(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"wispr_wake_rms_floor": 50.0}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        assert load_settings().wispr_wake_rms_floor == 50.0
+
+    def test_invalid_value_falls_back_to_off(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"wispr_wake_rms_floor": "loud"}))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        assert load_settings().wispr_wake_rms_floor == 0.0
+
+
 class TestModelConsistency:
     """Tests for overall model configuration consistency."""
 

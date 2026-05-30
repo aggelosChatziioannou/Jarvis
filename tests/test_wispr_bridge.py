@@ -715,6 +715,22 @@ class TestWakeContinuousFeed:
         bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))
         assert bridge.wake_model.frames == []    # speaking -> not fed
 
+    def test_default_floor_allows_far_field_wake(self):
+        """Far-field regression guard: with NO rms_floor configured the bridge
+        DEFAULT must not gate a quiet far-field frame. ~131 int16 RMS (about
+        a 2-3 m 'Hey Jarvis' on the PD200X) with a high model score must still
+        trigger. A default of 200 silently dropped these distant wakes."""
+        import numpy as np
+        # wispr_wake_rms_floor intentionally omitted -> exercises the default.
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_threshold=0.3)
+        bridge.wake_model = _ScoringWakeModel(0.99)
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        # 0.004 * 32767 ~ 131 -> int16 frame ~131 RMS (far-field, below old 200).
+        bridge._process_wake(np.full(1280, 0.004, dtype=np.float32))
+        assert bridge.wake_model.frames                       # fed (primed)
+        assert triggered and abs(triggered[0] - 0.99) < 1e-6  # AND triggers
+
 
 # ===========================================================================
 # W10 — startup / unmute priming of the stateful wake model
