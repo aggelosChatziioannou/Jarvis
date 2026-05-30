@@ -354,12 +354,30 @@ _TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
 # have side effects and their own safety gating. See planner.spec.md.
 VISION_DIRECT_EXEC_TOOLS = frozenset({"seeScreen", "readScreen", "locateOnScreen"})
 
+# Matches a screen-perception tool name as a whole word ANYWHERE in a step.
+# Anywhere (not just the leading token) because the legacy router+planner path
+# sometimes emits a prose step naming the tool mid-sentence ("Check the user's
+# screen using seeScreen") rather than leading with it like the fused path does
+# ("seeScreen"). The \b guards against substring false matches (seeScreenshot…).
+_VISION_STEP_RE = re.compile(
+    r"\b(" + "|".join(re.escape(t) for t in sorted(VISION_DIRECT_EXEC_TOOLS)) + r")\b"
+)
+
+
+def vision_tool_in_step(step: str) -> Optional[str]:
+    """Return the screen-perception tool named in ``step`` (bare or prose), or
+    None. ``"seeScreen"`` and ``"Check the user's screen using seeScreen"`` both
+    return ``"seeScreen"``; used to normalise a prose step to its tool name so
+    the resolver fast-paths it."""
+    m = _VISION_STEP_RE.search(step or "")
+    return m.group(1) if m else None
+
 
 def step_names_vision_tool(step: str) -> bool:
-    """True when a plan step's leading tool name is a screen-perception tool
-    that must be force-executed regardless of chat-model size."""
-    m = _TOOL_NAME_HEAD_RE.match(step or "")
-    return bool(m and m.group(1) in VISION_DIRECT_EXEC_TOOLS)
+    """True when a plan step references a screen-perception tool that must be
+    force-executed regardless of chat-model size (bare ``seeScreen`` or prose
+    ``Check the user's screen using seeScreen`` both qualify)."""
+    return vision_tool_in_step(step) is not None
 
 
 def tool_names_in_plan(
@@ -812,6 +830,7 @@ __all__ = [
     "tool_steps_of",
     "tool_names_in_plan",
     "step_names_vision_tool",
+    "vision_tool_in_step",
     "VISION_DIRECT_EXEC_TOOLS",
     "plan_has_unresolved_tool_steps",
     "plan_requires_memory",

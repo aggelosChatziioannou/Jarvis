@@ -29,6 +29,7 @@ from .planner import (
     tool_steps_of,
     tool_names_in_plan,
     step_names_vision_tool,
+    vision_tool_in_step,
     plan_has_unresolved_tool_steps,
     plan_requires_memory,
     strip_memory_directives,
@@ -2333,10 +2334,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # them natively instead hallucinates the screen ("your screen is mostly
         # blank" with the tool never invoked). Forcing the next plan step when
         # it names a vision tool guarantees Jarvis actually looks.
-        if (
-            len(action_plan) > 1
-            and not _plan_under_specified
-        ):
+        if len(action_plan) > 1:
             _plan_tool_steps = tool_steps_of(action_plan)
             _tool_results_so_far = (
                 sum(1 for m in messages if m.get("tool_name"))
@@ -2347,14 +2345,25 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 if 0 <= _tool_results_so_far < len(_plan_tool_steps)
                 else ""
             )
-            _direct_exec_active = use_text_tools or step_names_vision_tool(_next_step_text)
+            # A screen-perception step forces direct-exec on ANY model size AND
+            # even when the plan looks under-specified — a prose step like
+            # "Check the user's screen using seeScreen" (legacy router+planner
+            # path) still clearly means seeScreen. Normalise it to the bare tool
+            # name so the resolver fast-paths it deterministically.
+            _vtool = vision_tool_in_step(_next_step_text)
+            if _vtool is not None:
+                _next_step_text = _vtool
+            _direct_exec_active = (
+                (use_text_tools and not _plan_under_specified)
+                or _vtool is not None
+            )
             if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
                 try:
                     _prior = list(invoked_tools_history)
                     _resolved = _resolve_plan_step(
                         cfg=cfg,
-                        next_step_text=_plan_tool_steps[_tool_results_so_far],
+                        next_step_text=_next_step_text,
                         prior_results=_prior,
                         tools_schema=tools_json_schema or [],
                     )

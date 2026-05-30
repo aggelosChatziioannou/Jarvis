@@ -825,3 +825,16 @@ class TestStepNamesVisionTool:
     def test_not_fooled_by_prefix(self):
         from jarvis.reply.planner import step_names_vision_tool
         assert step_names_vision_tool("seeScreenshotThing") is False
+
+    def test_matches_vision_tool_in_prose_step(self):
+        # The legacy planner sometimes emits a prose step that names the tool
+        # mid-sentence instead of leading with it (field case: a Greek screen
+        # query routed through router+planner produced "Check the user's screen
+        # using seeScreen"). Direct-exec must still fire for it.
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("Check the user's screen using seeScreen") is True
+        assert step_names_vision_tool("Use readScreen to transcribe the window") is True
+
+    def test_prose_without_tool_name_is_not_vision(self):
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("Check what is displayed on the monitor") is False
