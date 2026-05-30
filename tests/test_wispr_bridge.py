@@ -79,6 +79,21 @@ def _make_bridge(**cfg_attrs):
     return bridge
 
 
+class _ScoringWakeModel:
+    """Fake openWakeWord model: records every ``predict(frame)`` and returns a
+    fixed score, so tests can assert the model is FED (the regression guard)
+    independently of whether a frame is loud enough to trigger."""
+
+    def __init__(self, score: float = 0.0):
+        self.frames: list = []
+        self.score = score
+
+    def predict(self, frame):
+        import numpy as np
+        self.frames.append(np.asarray(frame).copy())
+        return {"hey_jarvis": self.score}
+
+
 # ===========================================================================
 # W1 — safer auto-type erase (data-loss guard)
 # ===========================================================================
@@ -610,3 +625,159 @@ class TestWakeGain:
         bridge._process_wake(np.full(1280, 0.5, dtype=np.float32))
         peak = int(np.abs(bridge.wake_model.frames[0]).max())
         assert peak <= 32767
+
+
+# ===========================================================================
+# W9 — continuous feeding (stateful openWakeWord must be fed every frame)
+# ===========================================================================
+
+@pytest.mark.unit
+class TestWakeContinuousFeed:
+    """openWakeWord is STATEFUL: its classifier window only advances when
+    predict() is called, and needs ~1.3s of CONTINUOUS frames before it
+    scores a real wake. So the model must be fed EVERY frame; the RMS floor
+    gates only the TRIGGER, never the predict() call. Gating predict() on
+    silence starved the window -> 'Hey Jarvis' scored 0.125 then climbed to
+    0.929 -> missed wakes (the regression this guards)."""
+
+    def _idle_bridge(self, **cfg):
+        bridge = _make_bridge(**cfg)
+        bridge._state = State.IDLE
+        bridge._user_muted = False
+        bridge._speak_paused = False
+        bridge._wake_cooldown = 0
+        return bridge
+
+    def test_predict_called_on_subfloor_frame(self):
+        """THE regression guard: a near-silent frame (RMS << floor) must still
+        be fed to the model so its window stays primed. Empty under the bug."""
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_rms_floor=200.0)
+        bridge.wake_model = _ScoringWakeModel(0.0)
+        # int16 ~33 RMS, far below floor 200 (the old code skipped predict()).
+        bridge._process_wake(np.full(1280, 0.001, dtype=np.float32))
+        assert len(bridge.wake_model.frames) == 1
+
+    def test_subfloor_frame_does_not_trigger(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_rms_floor=200.0,
+                                   wispr_wake_threshold=0.3)
+        bridge.wake_model = _ScoringWakeModel(0.99)  # would trigger if not gated
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280, 0.001, dtype=np.float32))
+        assert len(bridge.wake_model.frames) == 1   # fed (primed)
+        assert triggered == []                       # but quiet -> no trigger
+
+    def test_above_floor_high_score_triggers(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_rms_floor=200.0,
+                                   wispr_wake_threshold=0.3)
+        bridge.wake_model = _ScoringWakeModel(0.99)
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))  # rms ~9830
+        assert triggered and abs(triggered[0] - 0.99) < 1e-6
+
+    def test_above_floor_low_score_does_not_trigger(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_rms_floor=200.0,
+                                   wispr_wake_threshold=0.3)
+        bridge.wake_model = _ScoringWakeModel(0.05)  # below threshold
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))
+        assert bridge.wake_model.frames          # fed
+        assert triggered == []                   # score below threshold
+
+    def test_hot_window_feeds_model_but_does_not_trigger(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_rms_floor=200.0,
+                                   wispr_wake_threshold=0.3)
+        bridge._state = State.HOT_WINDOW
+        bridge.wake_model = _ScoringWakeModel(0.99)
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))
+        assert bridge.wake_model.frames          # fed (keep window warm)
+        assert triggered == []                   # HOT_WINDOW never wakes
+
+    def test_muted_does_not_feed_model(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_rms_floor=200.0)
+        bridge.wake_model = _ScoringWakeModel(0.99)
+        bridge._user_muted = True
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))
+        assert bridge.wake_model.frames == []    # muted -> not fed
+        assert bridge._wake_buf == []
+        bridge._user_muted = False
+        bridge._speak_paused = True
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))
+        assert bridge.wake_model.frames == []    # speaking -> not fed
+
+
+# ===========================================================================
+# W10 — startup / unmute priming of the stateful wake model
+# ===========================================================================
+
+@pytest.mark.unit
+class TestWakePriming:
+    """Prime openWakeWord with silence at startup (and on unmute) so the FIRST
+    'Hey Jarvis' hits a full classifier window instead of cold-starting."""
+
+    class _PrimeRecorder:
+        def __init__(self):
+            self.frames: list = []
+            self.reset_calls = 0
+
+        def reset(self):
+            self.reset_calls += 1
+
+        def predict(self, frame):
+            import numpy as np
+            self.frames.append(np.asarray(frame).copy())
+            return {"hey_jarvis": 0.0}
+
+    def test_prime_feeds_silent_frames_and_resets(self):
+        import numpy as np
+        from jarvis.listening.wispr_bridge import WAKE_PRIME_FRAMES, WAKE_FRAME_SIZE
+        bridge = _make_bridge()
+        bridge.wake_model = self._PrimeRecorder()
+        bridge._prime_wake_model()
+        assert bridge.wake_model.reset_calls == 1
+        assert len(bridge.wake_model.frames) == WAKE_PRIME_FRAMES
+        for f in bridge.wake_model.frames:
+            assert f.dtype == np.int16
+            assert len(f) == WAKE_FRAME_SIZE
+            assert int(np.abs(f).max()) == 0     # silence
+
+    def test_prime_without_reset_method_still_feeds(self):
+        from jarvis.listening.wispr_bridge import WAKE_PRIME_FRAMES
+        bridge = _make_bridge()
+        bridge.wake_model = _ScoringWakeModel(0.0)   # no reset() method
+        bridge._prime_wake_model()
+        assert len(bridge.wake_model.frames) == WAKE_PRIME_FRAMES
+
+    def test_prime_is_best_effort_on_predict_error(self):
+        bridge = _make_bridge()
+
+        class _Boom:
+            def predict(self, frame):
+                raise RuntimeError("boom")
+
+        bridge.wake_model = _Boom()
+        bridge._prime_wake_model()   # must not raise
+
+    def test_prime_noop_without_model(self):
+        bridge = _make_bridge()
+        bridge.wake_model = None
+        bridge._prime_wake_model()   # must not raise
+
+    def test_resume_reprimes(self):
+        from jarvis.listening.wispr_bridge import WAKE_PRIME_FRAMES
+        bridge = _make_bridge()
+        bridge.wake_model = self._PrimeRecorder()
+        bridge._user_muted = True
+        bridge.resume()
+        assert bridge._user_muted is False
+        assert len(bridge.wake_model.frames) == WAKE_PRIME_FRAMES

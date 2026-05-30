@@ -101,6 +101,11 @@ except Exception:
 
 SAMPLE_RATE = 16000              # openWakeWord + Silero both require 16 kHz
 WAKE_FRAME_SIZE = 1280           # openWakeWord requires 1280 samples (80ms)
+# Silent frames fed to openWakeWord at startup (and on unmute) so its stateful
+# classifier window is primed before the first real "Hey Jarvis" — mirrors the
+# PRIME_SEC warmup in _recall_check.py. ~1.5s at 80ms/frame (>=16 to fill the
+# 16-embedding window).
+WAKE_PRIME_FRAMES = 19
 VAD_FRAME_SIZE = 512             # Silero v5 requires exactly 512 samples @16k
 AUDIO_BLOCK_SIZE = 512           # ~32ms @16k; small for VAD responsiveness
 KEY_INTER_PRESS_DELAY = 0.05     # 50ms between Ctrl and Win events
@@ -120,6 +125,7 @@ VAD_THRESHOLD = 0.5
 
 DEFAULT_WAKE_MODEL = "hey_jarvis_v0.1"
 DEFAULT_WAKE_THRESHOLD = 0.1
+DEFAULT_WAKE_RMS_FLOOR = 200.0   # ungained int16 RMS (~-44 dBFS); below = silence
 DEFAULT_SILENCE_MS = 800
 DEFAULT_MIN_DICTATION_SEC = 2.0
 DEFAULT_MAX_DICTATION_SEC = 30
@@ -197,6 +203,11 @@ class WisprBridge:
         # (never the dictation/transcript path), so a weak/distant "Hey Jarvis"
         # is amplified into openWakeWord's useful range. 1.0 = no change.
         self.wake_gain = float(getattr(cfg, "wispr_wake_gain", 1.0))
+        # Below this ungained int16 RMS a wake frame is treated as silence and
+        # openWakeWord is skipped (recall-safe phantom-wake guard). See
+        # _process_wake.
+        self._wake_rms_floor = float(getattr(
+            cfg, "wispr_wake_rms_floor", DEFAULT_WAKE_RMS_FLOOR))
         self.silence_ms = int(getattr(
             cfg, "wispr_silence_ms", DEFAULT_SILENCE_MS))
         self.min_dictation_sec = float(getattr(
@@ -245,11 +256,15 @@ class WisprBridge:
         # Audio stream
         self.audio_stream: Optional[sd.InputStream] = None
 
-        # Mute / pause state — set by MUTE from the control bus. When True
-        # we still keep the audio stream open (so we can resume instantly)
-        # but ``_process_wake`` short-circuits without ever calling the
-        # wake model. In-flight dictations are allowed to complete.
-        self._paused = False
+        # Two INDEPENDENT reasons wake detection may be suspended. They must
+        # never share a flag: collapsing them let the post-speak resume (after
+        # JARVIS talks) silently lift a user MUTE.
+        #   _user_muted   — user MUTE from the control bus (pause/resume).
+        #   _speak_paused — transient: JARVIS is speaking / echo-tail cooldown.
+        # The audio stream stays open in both cases (instant resume); only
+        # ``_process_wake`` short-circuits. In-flight dictations finish.
+        self._user_muted = False
+        self._speak_paused = False
 
         # Keyboard worker
         self._keyboard = Controller()
@@ -486,6 +501,10 @@ class WisprBridge:
                 device=self.device,
                 callback=self._audio_callback,
             )
+            # Prime the stateful wake model BEFORE going live so the first
+            # "Hey Jarvis" after boot hits a full classifier window, and so no
+            # audio-callback predict() races the prime loop.
+            self._prime_wake_model()
             self.audio_stream.start()
         except Exception as e:
             print(f"[ERROR] Failed to open audio input stream: {e}",
@@ -561,21 +580,30 @@ class WisprBridge:
             return True
 
     def pause(self) -> None:
-        """Suspend wake-word detection (used by MUTE from the control bus).
+        """Suspend wake-word detection on a user MUTE (control bus).
 
-        The audio stream stays open so we can resume instantly, but
-        ``_process_wake`` short-circuits while paused. If currently
-        DICTATING, we let the in-flight dictation complete naturally —
-        we don't abort mid-utterance because that would leave Wispr Flow
-        recording.
+        Sets the user-mute flag, which is INDEPENDENT of the transient
+        speaking-pause (``_speak_paused``) raised while JARVIS talks. The two
+        must never share a flag, otherwise the post-speak resume would
+        silently lift a user's mute. The audio stream stays open so we can
+        resume instantly, but ``_process_wake`` short-circuits while muted. If
+        currently DICTATING, we let the in-flight dictation complete naturally.
         """
-        self._paused = True
+        self._user_muted = True
         debug_log("WisprBridge paused (mic muted)", "voice")
         print("🔇 Wispr bridge paused — wake word ignored", flush=True)
 
     def resume(self) -> None:
-        """Re-enable wake-word detection after a previous ``pause()``."""
-        self._paused = False
+        """Clear the user-mute flag after a previous ``pause()`` (control bus).
+
+        Only the user MUTE is lifted here; the speaking-pause is managed
+        separately by :meth:`set_speaking`.
+        """
+        self._user_muted = False
+        # The classifier window went stale while muted (we stopped feeding the
+        # model). Re-prime so the first "Hey Jarvis" after unmute hits a full
+        # window instead of cold-starting.
+        self._prime_wake_model()
         debug_log("WisprBridge resumed (mic unmuted)", "voice")
         print("🔊 Wispr bridge resumed — listening for 'Hey Jarvis'", flush=True)
 
@@ -590,9 +618,11 @@ class WisprBridge:
             if self._state == State.DICTATING:
                 debug_log("trigger_now: already DICTATING, ignoring", "voice")
                 return False
-        # Auto-unpause if muted — explicit trigger overrides mute.
-        if self._paused:
-            self.resume()
+        # Explicit manual trigger overrides BOTH the user mute and any
+        # transient speaking-pause.
+        if self._user_muted or self._speak_paused:
+            self._user_muted = False
+            self._speak_paused = False
         print("⚡ Manual trigger via HUD — tapping hands-free shortcut",
               flush=True)
         self._start_dictation(score=1.0)
@@ -767,14 +797,11 @@ class WisprBridge:
             self._post_speak_resume_timer = None
 
         if speaking_now:
-            # Suspend wake detection while JARVIS speaks. Even if the user
-            # has no monitors/headphones with active output, openWakeWord
-            # at threshold 0.1 has been observed firing on JARVIS's own
-            # voice coming through the desktop mic.
-            try:
-                self.pause()
-            except Exception as e:
-                debug_log(f"pause failed inside set_speaking: {e!r}", "voice")
+            # Suspend wake detection while JARVIS speaks via the dedicated
+            # speaking-pause flag — NOT the user-mute flag. Even with no
+            # monitors/headphones, openWakeWord at a low threshold has been
+            # observed firing on JARVIS's own voice through the desktop mic.
+            self._speak_paused = True
             try:
                 self.enter_hot_window()
             except Exception as e:
@@ -794,13 +821,15 @@ class WisprBridge:
                     still_speaking = self._jarvis_speaking
                 if still_speaking:
                     return
-                try:
-                    self.resume()
-                except Exception as e:
-                    debug_log(
-                        f"resume failed inside post-speak cooldown: {e!r}",
-                        "voice",
-                    )
+                # Lift ONLY the speaking-pause. A user MUTE (``_user_muted``)
+                # set from the control bus MUST survive JARVIS speaking — it is
+                # cleared solely by UNMUTE/TRIGGER, never by this timer. This is
+                # the fix for "mute stops working after Jarvis talks".
+                self._speak_paused = False
+                debug_log(
+                    "post-speak cooldown elapsed — speaking-pause lifted",
+                    "voice",
+                )
 
             self._post_speak_resume_timer = threading.Timer(
                 self._post_speak_cooldown_sec, _resume_after_cooldown,
@@ -1203,20 +1232,50 @@ class WisprBridge:
     # Audio processing
     # ----------------------------------------------------------------------
 
+    def _prime_wake_model(self) -> None:
+        """Warm openWakeWord's stateful classifier window with silence.
+
+        The model needs ~16 consecutive embeddings before it scores reliably;
+        on a cold model (startup) or one gone stale while muted, the first real
+        "Hey Jarvis" lands on a near-empty window and under-scores. Reset (if
+        the build exposes it) then feed ``WAKE_PRIME_FRAMES`` int16-zero frames
+        so the next live utterance hits a full window. Mirrors the silence
+        priming in ``_recall_check.py``. Best-effort: never raises.
+        """
+        model = getattr(self, "wake_model", None)
+        if model is None:
+            return
+        try:
+            reset = getattr(model, "reset", None)  # oww 0.6.0 may not expose it
+            if callable(reset):
+                reset()
+            silent = np.zeros(WAKE_FRAME_SIZE, dtype=np.int16)
+            for _ in range(WAKE_PRIME_FRAMES):
+                model.predict(silent)
+        except Exception as e:
+            debug_log(f"wake-model prime skipped: {e!r}", "voice")
+
     def _process_wake(self, audio_f32: np.ndarray) -> None:
         """
         Buffer audio as int16 PCM and run openWakeWord in 1280-sample frames.
 
-        While in HOT_WINDOW state we skip the wake-model entirely — the
-        VAD path is the one allowed to trigger dictation.
+        openWakeWord is STATEFUL: its melspec→embedding→classifier window only
+        advances on predict() calls and needs ~1.3s of CONTINUOUSLY-fed frames
+        before it scores a real "Hey Jarvis" reliably. So we feed EVERY frame
+        to the model (even silent ones) to keep that window primed. The RMS
+        floor and the IDLE/cooldown/HOT_WINDOW checks gate only the *trigger
+        decision* — never the model — so a quiet room still can't produce a
+        phantom wake while recall stays high.
 
-        When ``self._paused`` is True (MUTE from the control bus) we
-        drain the input buffer but don't call the wake model — saves CPU
-        AND guarantees no wake fires while muted.
+        When muted (``self._user_muted``) or while JARVIS is speaking
+        (``self._speak_paused``) we drain the input buffer and don't call the
+        wake model — guarantees no wake fires. The two flags are kept separate
+        so a post-speak resume can't lift a user's mute. After such a gap the
+        window is re-primed on resume (see :meth:`_prime_wake_model`).
         """
-        if self._paused:
+        if self._user_muted or self._speak_paused:
             # Drain so we don't accumulate a buffer that would replay on
-            # resume — the user expects mute to be silent, not delayed.
+            # resume — the user expects mute/pause to be silent, not delayed.
             self._wake_buf.clear()
             return
 
@@ -1237,6 +1296,12 @@ class WisprBridge:
             if self._wake_cooldown > 0:
                 self._wake_cooldown -= 1
 
+            # Feed EVERY frame to the model. openWakeWord is STATEFUL: its
+            # classifier window only advances on predict() calls and needs
+            # ~1.3s of CONTINUOUS frames before it scores a real wake. Gating
+            # the model on silence (as a previous build did) starved the
+            # window, so the first frames of a real "Hey Jarvis" under-scored
+            # (~0.125) and only climbed after several frames — missed wakes.
             try:
                 predictions = self.wake_model.predict(frame)
             except Exception as e:
@@ -1244,12 +1309,23 @@ class WisprBridge:
                       file=sys.stderr, flush=True)
                 return
 
-            # Only consider triggers when truly idle and not in cooldown.
-            # HOT_WINDOW intentionally skips the wake check — the user is
-            # in a follow-up turn.
+            # Trigger gate. Only consider a wake when truly idle and not in
+            # cooldown. HOT_WINDOW intentionally skips the wake check — the user
+            # is in a VAD-driven follow-up turn — but the model stayed fed above
+            # so its window is warm for the next wake.
             with self._state_lock:
                 is_idle = self._state == State.IDLE
             if not is_idle or self._wake_cooldown > 0:
+                continue
+
+            # Silence/energy gate on the TRIGGER only (never the model). A
+            # near-silent frame can't be a real "Hey Jarvis", yet the
+            # recall-tuned model at a low threshold could still score it as one
+            # (quiet-room phantom). Normalise by wake_gain so a high software
+            # gain can't defeat the gate; real speech (RMS in the thousands) is
+            # untouched.
+            rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+            if rms / max(self.wake_gain, 1e-6) < self._wake_rms_floor:
                 continue
 
             # predictions is dict {model_name: float in [0,1]}
