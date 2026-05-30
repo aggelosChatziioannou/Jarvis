@@ -56,7 +56,28 @@ class VisionEngine:
 
     def observe(self, monitor: MonitorRef = "primary") -> dict:
         img = self.capture.capture_monitor(monitor)
+        # Diagnostic: a "blank screen" report is either a black capture (mean
+        # luminance ~0) or a real capture the model summarised as empty. Log
+        # both so the two are distinguishable from the daemon logs.
+        try:
+            _thumb = img.convert("L").resize((32, 32))
+            _data = list(_thumb.getdata())
+            _mean = sum(_data) / len(_data)
+            _nonblack = sum(1 for p in _data if p > 16) / len(_data) * 100
+            debug_log(
+                f"vision_engine: observe capture monitor={_mon_name(monitor)} "
+                f"size={getattr(img, 'size', None)} mean_lum={_mean:.1f} "
+                f"non_black={_nonblack:.0f}% (mean~0 = black capture vs content)",
+                "vision",
+            )
+        except Exception:
+            pass
         description = self.client.describe(img)
+        debug_log(
+            f"vision_engine: observe desc_len={len(description) if description else 0} "
+            f"preview={(description or '')[:80]!r}",
+            "vision",
+        )
         if description is None:
             # Capture worked but the vision model did not respond (timeout or
             # still loading). Surface an explicit unavailable status so the

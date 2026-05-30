@@ -28,6 +28,7 @@ from .planner import (
     progress_nudge,
     tool_steps_of,
     tool_names_in_plan,
+    step_names_vision_tool,
     plan_has_unresolved_tool_steps,
     plan_requires_memory,
     strip_memory_directives,
@@ -2324,9 +2325,16 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # all plan tool steps are exhausted, at which point it synthesises
         # a final reply from the accumulated results.
         # See planner.spec.md.
+        #
+        # Direct-exec normally runs only for SMALL models (use_text_tools).
+        # EXCEPTION: screen-perception tools (seeScreen/readScreen/
+        # locateOnScreen) are force-executed on ANY model size. Their result is
+        # unknowable without running them, so a LARGE model "trusted" to call
+        # them natively instead hallucinates the screen ("your screen is mostly
+        # blank" with the tool never invoked). Forcing the next plan step when
+        # it names a vision tool guarantees Jarvis actually looks.
         if (
-            use_text_tools
-            and len(action_plan) > 1
+            len(action_plan) > 1
             and not _plan_under_specified
         ):
             _plan_tool_steps = tool_steps_of(action_plan)
@@ -2334,7 +2342,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 sum(1 for m in messages if m.get("tool_name"))
                 - _plan_steps_baseline
             )
-            if 0 <= _tool_results_so_far < len(_plan_tool_steps):
+            _next_step_text = (
+                _plan_tool_steps[_tool_results_so_far]
+                if 0 <= _tool_results_so_far < len(_plan_tool_steps)
+                else ""
+            )
+            _direct_exec_active = use_text_tools or step_names_vision_tool(_next_step_text)
+            if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
                 try:
                     _prior = list(invoked_tools_history)

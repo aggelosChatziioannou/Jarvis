@@ -154,6 +154,18 @@ The engine consumes the plan in two phases.
   the tool directly, bypassing the chat model for that turn. This
   keeps small models on-rails without relying on their native
   tool-call reliability.
+- **Screen-perception exception (any model size).** Direct-exec also
+  fires when the next plan tool step names a screen-perception tool
+  (`seeScreen` / `readScreen` / `locateOnScreen`, see
+  `step_names_vision_tool` / `VISION_DIRECT_EXEC_TOOLS`), even on LARGE
+  models where `use_text_tools` is False. Rationale: a screen tool's
+  result is impossible to know without executing it, so a large model
+  "trusted" to call it natively instead hallucinates the screen ("your
+  screen is mostly blank" with the tool never invoked). Forcing the step
+  guarantees Jarvis actually looks. Action tools
+  (`clickScreen`/`typeOnScreen`/`scrollScreen`) are excluded — they have
+  side effects and their own safety gating, so they stay on the normal
+  model-driven path.
 - The chat model still runs the final synthesis turn so the reply is
   phrased in the daemon's voice using its own profile and persona.
 

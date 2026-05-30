@@ -169,10 +169,10 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: list of plan steps (max `MAX_STEPS` = 5). Gates memory enrichment (#3 / #4) and augments the tool router (#7 — planner's picks are unioned in, not replacing). Single-step `["Reply to the user."]` plans are the planner's positive "no memory, no tools" signal. An empty list is fail-open — the engine reverts to running #3 unconditionally. Consumed further by the engine to build the `ACTION PLAN:` system-message block and drive the direct-exec loop (#13) for small models.
 - **Limits**: `planner_timeout_sec` (6s). Fail-open → `[]`.
 
-## 13. Plan Step Resolver (per direct-exec turn, small models)
+## 13. Plan Step Resolver (per direct-exec turn, small models + screen tools)
 
 - **File**: [src/jarvis/reply/planner.py](src/jarvis/reply/planner.py) — `resolve_next_tool_call()`.
-- **Trigger**: top of each agentic-loop iteration when `use_text_tools` is True AND the plan from #12 still has unexecuted tool steps. Runs instead of the chat model for that turn. **Fast path skips the LLM entirely** when the step is fully concrete (tool name + `key='value'` args, no `<placeholder>`); the LLM call only fires when entity substitution or key remapping is needed.
+- **Trigger**: top of each agentic-loop iteration when the plan from #12 still has unexecuted tool steps AND either (a) `use_text_tools` is True (SMALL models, every step), or (b) the next plan step names a screen-perception tool (`seeScreen`/`readScreen`/`locateOnScreen`, via `step_names_vision_tool`) — forced on **any** model size because a large model trusted to call these natively hallucinates the screen instead of looking. Runs instead of the chat model for that turn. **Fast path skips the LLM entirely** when the step is fully concrete (tool name + `key='value'` args, no `<placeholder>`); the LLM call only fires when entity substitution or key remapping is needed.
 - **Model**: same chain as #12.
 - **Inputs**: next planned step text, prior tool calls (name + args + result excerpt), per-turn tool schema.
 - **System prompt**: `_STEP_RESOLVER_SYSTEM` at [planner.py:300](src/jarvis/reply/planner.py:300). Teaches one-JSON-object output, placeholder substitution from prior results, `null` for synthesis steps.

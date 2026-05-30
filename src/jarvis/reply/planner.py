@@ -345,6 +345,22 @@ def tool_steps_of(plan: Sequence[str]) -> List[str]:
 
 _TOOL_NAME_HEAD_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)")
 
+# Screen-perception tools whose result is impossible to know without executing
+# them. A LARGE chat model "trusted" to call these natively will instead
+# hallucinate the screen contents (field failure: "your screen is mostly
+# blank" with the tool never invoked), so the engine force-executes them via
+# the plan direct-exec path on ANY model size — not only small models. Action
+# tools (clickScreen/typeOnScreen/scrollScreen) are deliberately excluded: they
+# have side effects and their own safety gating. See planner.spec.md.
+VISION_DIRECT_EXEC_TOOLS = frozenset({"seeScreen", "readScreen", "locateOnScreen"})
+
+
+def step_names_vision_tool(step: str) -> bool:
+    """True when a plan step's leading tool name is a screen-perception tool
+    that must be force-executed regardless of chat-model size."""
+    m = _TOOL_NAME_HEAD_RE.match(step or "")
+    return bool(m and m.group(1) in VISION_DIRECT_EXEC_TOOLS)
+
 
 def tool_names_in_plan(
     plan: Sequence[str], known_names: Sequence[str],
@@ -795,6 +811,8 @@ __all__ = [
     "resolve_next_tool_call",
     "tool_steps_of",
     "tool_names_in_plan",
+    "step_names_vision_tool",
+    "VISION_DIRECT_EXEC_TOOLS",
     "plan_has_unresolved_tool_steps",
     "plan_requires_memory",
     "strip_memory_directives",

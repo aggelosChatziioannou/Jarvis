@@ -788,3 +788,40 @@ class TestPlanHasUnresolvedToolSteps:
         assert plan_has_unresolved_tool_steps(
             plan, ["chrome-devtools__navigate_page"]
         ) is False
+
+
+class TestStepNamesVisionTool:
+    """Screen-perception steps must be detectable so the engine can force
+    direct-exec for them on ANY model size (a large model trusted to call
+    seeScreen natively hallucinates the screen instead of looking)."""
+
+    def test_seescreen_bare_is_vision(self):
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("seeScreen") is True
+
+    def test_seescreen_with_args_is_vision(self):
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("seeScreen monitor=primary") is True
+
+    def test_read_and_locate_are_vision(self):
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("readScreen") is True
+        assert step_names_vision_tool("locateOnScreen target='Save'") is True
+
+    def test_non_vision_tool_is_not(self):
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("getWeather location='Paris'") is False
+        assert step_names_vision_tool("Reply to the user.") is False
+        assert step_names_vision_tool("") is False
+
+    def test_action_screen_tools_not_forced(self):
+        # Only OBSERVE-safe perception tools are force-executed. Action tools
+        # (clickScreen/typeOnScreen/scrollScreen) have side effects + safety
+        # gating, so they stay on the normal path.
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("clickScreen target='OK'") is False
+        assert step_names_vision_tool("typeOnScreen text='hi'") is False
+
+    def test_not_fooled_by_prefix(self):
+        from jarvis.reply.planner import step_names_vision_tool
+        assert step_names_vision_tool("seeScreenshotThing") is False
