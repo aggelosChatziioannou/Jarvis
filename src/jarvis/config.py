@@ -178,6 +178,14 @@ class Settings:
     wispr_hot_window_sec: float    # Seconds after reply during which follow-up does not need wake word (default 10.0)
     wispr_suppress_autotype: bool  # Send backspaces to erase Wispr Flow's auto-typed text (default True)
     wispr_mic_device: int | str | None  # Mic device for the bridge; None = system default
+    # Closed-loop start/stop synchronisation (reconcile against Wispr's real mic-recording state)
+    wispr_closed_loop_enabled: bool        # Read Wispr's real recording state and reconcile before/after taps (default True)
+    wispr_hands_free_combo: list[str]      # Wispr hands-free toggle chord to simulate, e.g. ["ctrl","cmd","space"] (default)
+    wispr_min_tap_gap_sec: float           # Minimum gap between consecutive toggle taps to dodge Wispr's rapid-toggle freeze (default 0.5)
+    wispr_confirm_timeout_sec: float       # How long to poll Wispr's mic state to confirm a tap took effect (default 1.2)
+    wispr_clipboard_grace_sec: float       # Extra grace after the clipboard wait before declaring no-capture (default 2.0)
+    wispr_erase_max_chars: int             # Cap on auto-type erase backspaces; longer transcripts skip erase (default 300)
+    wispr_barge_in_interrupt: bool         # Tear down TTS on speech onset during a hot window (default True)
 
     # Whisper Speech Recognition
     whisper_model: str
@@ -770,6 +778,13 @@ def get_default_config() -> Dict[str, Any]:
         "wispr_clipboard_wait_sec": 6.0,
         "wispr_hot_window_sec": 10.0,
         "wispr_suppress_autotype": True,
+        "wispr_closed_loop_enabled": True,
+        "wispr_hands_free_combo": ["ctrl", "cmd", "space"],
+        "wispr_min_tap_gap_sec": 0.5,
+        "wispr_confirm_timeout_sec": 1.2,
+        "wispr_clipboard_grace_sec": 2.0,
+        "wispr_erase_max_chars": 300,
+        "wispr_barge_in_interrupt": True,
         "wispr_mic_device": None,
 
         "whisper_model": "large-v3-turbo",
@@ -1169,6 +1184,33 @@ def load_settings() -> Settings:
         except (TypeError, ValueError):
             wispr_mic_device = str(wispr_mic_device_val)
 
+    # Closed-loop sync + guards
+    wispr_closed_loop_enabled = bool(merged.get("wispr_closed_loop_enabled", True))
+    _combo_raw = merged.get("wispr_hands_free_combo", ["ctrl", "cmd", "space"])
+    if isinstance(_combo_raw, (list, tuple)) and _combo_raw:
+        wispr_hands_free_combo = [str(k).strip().lower() for k in _combo_raw if str(k).strip()]
+        if not wispr_hands_free_combo:
+            wispr_hands_free_combo = ["ctrl", "cmd", "space"]
+    else:
+        wispr_hands_free_combo = ["ctrl", "cmd", "space"]
+    try:
+        wispr_min_tap_gap_sec = float(merged.get("wispr_min_tap_gap_sec", 0.5))
+    except (TypeError, ValueError):
+        wispr_min_tap_gap_sec = 0.5
+    try:
+        wispr_confirm_timeout_sec = float(merged.get("wispr_confirm_timeout_sec", 1.2))
+    except (TypeError, ValueError):
+        wispr_confirm_timeout_sec = 1.2
+    try:
+        wispr_clipboard_grace_sec = float(merged.get("wispr_clipboard_grace_sec", 2.0))
+    except (TypeError, ValueError):
+        wispr_clipboard_grace_sec = 2.0
+    try:
+        wispr_erase_max_chars = int(merged.get("wispr_erase_max_chars", 300))
+    except (TypeError, ValueError):
+        wispr_erase_max_chars = 300
+    wispr_barge_in_interrupt = bool(merged.get("wispr_barge_in_interrupt", True))
+
     whisper_model = str(merged.get("whisper_model", "large-v3-turbo"))
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
     if whisper_backend not in ("auto", "mlx", "faster-whisper"):
@@ -1508,6 +1550,13 @@ def load_settings() -> Settings:
         wispr_hot_window_sec=wispr_hot_window_sec,
         wispr_suppress_autotype=wispr_suppress_autotype,
         wispr_mic_device=wispr_mic_device,
+        wispr_closed_loop_enabled=wispr_closed_loop_enabled,
+        wispr_hands_free_combo=wispr_hands_free_combo,
+        wispr_min_tap_gap_sec=wispr_min_tap_gap_sec,
+        wispr_confirm_timeout_sec=wispr_confirm_timeout_sec,
+        wispr_clipboard_grace_sec=wispr_clipboard_grace_sec,
+        wispr_erase_max_chars=wispr_erase_max_chars,
+        wispr_barge_in_interrupt=wispr_barge_in_interrupt,
 
         # Whisper Speech Recognition
         whisper_model=whisper_model,

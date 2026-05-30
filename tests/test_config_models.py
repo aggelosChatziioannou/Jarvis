@@ -319,6 +319,68 @@ class TestWakeRmsFloorConfig:
         assert load_settings().wispr_wake_rms_floor == 0.0
 
 
+class TestWisprClosedLoopConfig:
+    """Closed-loop sync + guard config fields for the Wispr bridge.
+
+    These drive the WisprStateProbe reconciliation (`wispr_closed_loop_enabled`,
+    `wispr_confirm_timeout_sec`), the cheap guards (`wispr_hands_free_combo`,
+    `wispr_min_tap_gap_sec`), the capture-path grace (`wispr_clipboard_grace_sec`),
+    and the two previously read-but-undeclared fields (`wispr_erase_max_chars`,
+    `wispr_barge_in_interrupt`). All must be tunable without a code change.
+    """
+
+    def test_defaults_present(self):
+        config = get_default_config()
+        assert config.get("wispr_closed_loop_enabled") is True
+        assert config.get("wispr_hands_free_combo") == ["ctrl", "cmd", "space"]
+        assert config.get("wispr_min_tap_gap_sec") == 0.5
+        assert config.get("wispr_confirm_timeout_sec") == 1.2
+        assert config.get("wispr_clipboard_grace_sec") == 2.0
+        assert config.get("wispr_erase_max_chars") == 300
+        assert config.get("wispr_barge_in_interrupt") is True
+
+    def test_settings_exposes_fields_with_defaults(self, tmp_path, monkeypatch):
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text("{}")
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        s = load_settings()
+        assert s.wispr_closed_loop_enabled is True
+        assert s.wispr_hands_free_combo == ["ctrl", "cmd", "space"]
+        assert s.wispr_min_tap_gap_sec == 0.5
+        assert s.wispr_confirm_timeout_sec == 1.2
+        assert s.wispr_clipboard_grace_sec == 2.0
+        assert s.wispr_erase_max_chars == 300
+        assert s.wispr_barge_in_interrupt is True
+
+    def test_round_trips_custom_values(self, tmp_path, monkeypatch):
+        import json as _json
+        from jarvis.config import load_settings
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({
+            "wispr_closed_loop_enabled": False,
+            "wispr_hands_free_combo": ["ctrl", "alt", "space"],
+            "wispr_min_tap_gap_sec": 0.8,
+            "wispr_confirm_timeout_sec": 2.0,
+            "wispr_clipboard_grace_sec": 3.5,
+            "wispr_erase_max_chars": 120,
+            "wispr_barge_in_interrupt": False,
+        }))
+        monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+        s = load_settings()
+        assert s.wispr_closed_loop_enabled is False
+        assert s.wispr_hands_free_combo == ["ctrl", "alt", "space"]
+        assert s.wispr_min_tap_gap_sec == 0.8
+        assert s.wispr_confirm_timeout_sec == 2.0
+        assert s.wispr_clipboard_grace_sec == 3.5
+        assert s.wispr_erase_max_chars == 120
+        assert s.wispr_barge_in_interrupt is False
+
+
 class TestModelConsistency:
     """Tests for overall model configuration consistency."""
 
