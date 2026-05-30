@@ -203,6 +203,45 @@ class TestEnsureRecording:
 
 
 @pytest.mark.unit
+class TestStartupReconciliation:
+    """At startup the bridge aligns belief with Wispr's real state, forcing a
+    stuck-recording Wispr back to a known idle so the first turn isn't inverted."""
+
+    def test_forces_off_when_recording_at_boot(self):
+        fake = _FakeWispr(recording=True, tap_works=True)
+        bridge = _make_closed_loop_bridge(fake)
+
+        bridge._reconcile_initial_state()
+
+        assert fake.taps == 1            # synchronous force-off tap
+        assert fake.recording is False
+        assert bridge._keys_held is False
+
+    def test_noop_when_idle_at_boot(self):
+        fake = _FakeWispr(recording=False)
+        bridge = _make_closed_loop_bridge(fake)
+
+        bridge._reconcile_initial_state()
+
+        assert fake.taps == 0
+        assert bridge._keys_held is False
+
+    def test_noop_when_probe_unknown(self):
+        taps = []
+        bridge = WisprBridge(
+            SimpleNamespace(wispr_closed_loop_enabled=False),
+            on_transcription=lambda t: None,
+            sleep=lambda s: None,
+        )
+        bridge._tap_hands_free_toggle_locked = lambda: taps.append(1)  # type: ignore
+
+        bridge._reconcile_initial_state()
+
+        assert taps == []
+        assert bridge._keys_held is False
+
+
+@pytest.mark.unit
 class TestHandsFreeComboAndGap:
     """Configurable hands-free chord + minimum inter-tap gap (cheap guards)."""
 

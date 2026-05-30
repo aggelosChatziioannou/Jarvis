@@ -559,6 +559,10 @@ class WisprBridge:
             # "Hey Jarvis" after boot hits a full classifier window, and so no
             # audio-callback predict() races the prime loop.
             self._prime_wake_model()
+            # Reconcile against Wispr's real state before accepting wakes: if
+            # Wispr was left recording (e.g. across a crash/restart), force it
+            # OFF to a known IDLE so the first dictation isn't inverted.
+            self._reconcile_initial_state()
             self.audio_stream.start()
         except Exception as e:
             print(f"[ERROR] Failed to open audio input stream: {e}",
@@ -1048,6 +1052,29 @@ class WisprBridge:
                 "voice",
             )
             return False
+
+    def _reconcile_initial_state(self) -> None:
+        """At startup, align belief with Wispr's real state.
+
+        If Wispr is found already recording (e.g. it was left on across a
+        crash/restart, or auto-stopped logic left it inverted), force it OFF to
+        a known IDLE synchronously — NOT via the key queue (the worker may not
+        be draining yet) and exempt from the min-tap gap (there is no prior tap
+        to gate against). Fail-open: when the probe can't tell, leave the
+        construction-time belief (``_keys_held = False``) untouched."""
+        observed = self._read_probe()
+        if observed is None:
+            return
+        with self._keys_lock:
+            if observed:
+                self._tap_hands_free_toggle_locked()  # synchronous force-off
+                self._keys_held = False
+                debug_log(
+                    "startup: Wispr was recording -> forced OFF to a known idle",
+                    "voice",
+                )
+            else:
+                self._keys_held = False
 
     def _toggle_to_belief_locked(self, target: bool) -> bool:
         """Fail-open path (probe unknown): tap iff the local belief differs.
