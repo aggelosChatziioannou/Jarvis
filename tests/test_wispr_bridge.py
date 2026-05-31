@@ -209,6 +209,58 @@ class TestEnsureRecording:
 
 
 @pytest.mark.unit
+class TestAbortCancelsAndDiscards:
+    """The HUD STOP button must cancel everything: stop Wispr recording AND
+    discard whatever was heard so far (never dispatch it to Jarvis)."""
+
+    def test_abort_forces_wispr_off_and_idle(self):
+        fake = _FakeWispr(recording=True, tap_works=True)
+        bridge = _make_closed_loop_bridge(fake)
+        bridge._state = State.DICTATING
+
+        bridge.abort()
+
+        assert fake.recording is False       # Wispr forced OFF
+        assert bridge._state == State.IDLE    # bridge back to a known idle
+
+    def test_abort_discards_in_flight_transcript(self, monkeypatch):
+        # A transcript captured around the STOP must NOT reach Jarvis.
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.pyperclip, "paste", lambda: "user words", raising=False)
+
+        transcripts, ends = [], []
+        bridge = _make_bridge(
+            wispr_clipboard_wait_sec=0.2, wispr_clipboard_grace_sec=0.0,
+            wispr_suppress_autotype=False)
+        bridge.watch_clipboard = True
+        bridge.on_transcription = lambda t: transcripts.append(t)
+        bridge.on_dictation_end = lambda c, r=None: ends.append((c, r))
+
+        gen = bridge._abort_generation
+        bridge.abort()                                   # user pressed STOP
+        bridge._post_dictation_worker("base", None, gen)  # worker of the aborted turn
+
+        assert transcripts == []   # heard text discarded, never dispatched
+        assert ends == []          # no spurious dictation-end notice either
+
+    def test_worker_still_dispatches_when_not_aborted(self, monkeypatch):
+        import jarvis.listening.wispr_bridge as wb
+        monkeypatch.setattr(wb.pyperclip, "paste", lambda: "hello there", raising=False)
+
+        transcripts = []
+        bridge = _make_bridge(
+            wispr_clipboard_wait_sec=0.3, wispr_clipboard_grace_sec=0.0,
+            wispr_suppress_autotype=False)
+        bridge.watch_clipboard = True
+        bridge.on_transcription = lambda t: transcripts.append(t)
+
+        gen = bridge._abort_generation
+        bridge._post_dictation_worker("base", None, gen)  # gen unchanged -> dispatch
+
+        assert transcripts == ["hello there"]
+
+
+@pytest.mark.unit
 class TestHotWindowFollowUpsOffByDefault:
     """The user wants Wispr to open ONLY on the wake word or the lightning
     button, never automatically after a reply. So the hot-window follow-up

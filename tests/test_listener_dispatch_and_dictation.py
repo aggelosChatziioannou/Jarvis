@@ -145,6 +145,26 @@ class TestThinkingTuneBoundToProcessing:
         assert starts and starts[0] == 1   # tune starts when processing begins
 
 
+# ── L1c: STOP button must abort the Wispr side too ───────────────────────────
+
+
+class TestStopButtonAbortsWispr:
+    """reset_everything (the STOP entry point) must cancel the Wispr side:
+    stop recording and discard any in-flight transcript, not just the LLM/TTS."""
+
+    def test_reset_everything_aborts_wispr_bridge(self):
+        listener = _make_listener()
+        bridge = MagicMock()
+        listener._wispr_bridge = bridge
+        listener.tts = None
+        listener._clear_audio_buffers = lambda: None
+        listener._stop_thinking_tune = lambda: None
+
+        listener.reset_everything()
+
+        bridge.abort.assert_called_once()
+
+
 # ── L2: failed dictation must not leave the tune/face stuck ──────────────────
 
 

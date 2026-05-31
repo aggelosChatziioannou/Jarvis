@@ -311,6 +311,11 @@ class WisprBridge:
         # OS clipboard sequence number at wake time (Windows). Lets us detect an
         # identical re-utterance (same text) because the sequence still advances.
         self._clipboard_baseline_seq: Optional[int] = None
+        # Monotonic counter bumped by :meth:`abort` (HUD STOP). A post-dictation
+        # worker captures the value at spawn and DROPS its transcript if the
+        # counter has since advanced — so audio heard around a STOP never
+        # reaches the consumer.
+        self._abort_generation: int = 0
 
         # Audio stream
         self.audio_stream: Optional[sd.InputStream] = None
@@ -641,6 +646,38 @@ class WisprBridge:
                 f"reconnect: wake mic reopened on device {new_device!r}", "voice"
             )
             return True
+
+    def abort(self) -> None:
+        """Cancel the current interaction NOW (HUD STOP button).
+
+        Unlike :meth:`pause` (which only mutes future wakes and lets an
+        in-flight dictation finish), this is the hard cancel the STOP button
+        needs: it (1) bumps the abort generation so any in-flight
+        post-dictation worker DROPS its transcript instead of dispatching it to
+        the assistant, (2) drops any DICTATING/HOT_WINDOW state back to IDLE and
+        cancels the hot-window timer, and (3) forces Wispr Flow OFF to a known
+        idle. Best-effort and fail-open: never raises into the caller.
+        """
+        # (1) Invalidate any transcript captured around the STOP.
+        with self._keys_lock:
+            self._abort_generation += 1
+        # (2) Leave DICTATING/HOT_WINDOW immediately.
+        with self._state_lock:
+            self._state = State.IDLE
+        with self._hot_window_lock:
+            if self._hot_window_timer is not None:
+                try:
+                    self._hot_window_timer.cancel()
+                except Exception:
+                    pass
+                self._hot_window_timer = None
+        self._wake_cooldown = 0
+        # (3) Force Wispr recording OFF (closed-loop level-seek; fail-open).
+        try:
+            self._ensure_recording(False)
+        except Exception as e:
+            debug_log(f"abort: force-off raised: {e!r}", "voice")
+        print("⏹  Aborted — Wispr stopped and current input discarded", flush=True)
 
     def pause(self) -> None:
         """Suspend wake-word detection on a user MUTE (control bus).
@@ -1320,7 +1357,8 @@ class WisprBridge:
         if reason in ("silence", "timeout"):
             threading.Thread(
                 target=self._post_dictation_worker,
-                args=(self._clipboard_baseline, self._clipboard_baseline_seq),
+                args=(self._clipboard_baseline, self._clipboard_baseline_seq,
+                      self._abort_generation),
                 name="WisprPostDictationWorker",
                 daemon=True,
             ).start()
@@ -1342,7 +1380,12 @@ class WisprBridge:
     # Transcription capture (via clipboard) + dispatch
     # ----------------------------------------------------------------------
 
-    def _post_dictation_worker(self, baseline: str, baseline_seq: Optional[int] = None) -> None:
+    def _post_dictation_worker(
+        self,
+        baseline: str,
+        baseline_seq: Optional[int] = None,
+        dictation_gen: Optional[int] = None,
+    ) -> None:
         """
         Runs after each completed dictation. Polls the clipboard for up to
         ``clipboard_wait_sec`` + ``wispr_clipboard_grace_sec`` waiting for Wispr
@@ -1363,7 +1406,13 @@ class WisprBridge:
         """
         captured = False
         reason: Optional[str] = None
+
+        def _aborted() -> bool:
+            return dictation_gen is not None and dictation_gen != self._abort_generation
+
         try:
+            if _aborted():
+                return  # STOP fired for this turn — discard, UI already torn down
             if not self.watch_clipboard:
                 # No clipboard polling — just wait long enough for Wispr Flow
                 # to finish auto-typing before we erase it.
@@ -1371,7 +1420,9 @@ class WisprBridge:
                 time.sleep(self.clipboard_wait_sec)
             else:
                 reason, captured = self._poll_clipboard_for_transcript(
-                    baseline, baseline_seq)
+                    baseline, baseline_seq, dictation_gen)
+                if _aborted():
+                    return  # STOP fired mid-poll — drop the transcript
                 if not captured and not self.shutdown_event.is_set():
                     debug_log(
                         f"No transcript appeared within "
@@ -1391,7 +1442,7 @@ class WisprBridge:
                         except Exception as e:
                             debug_log(f"no-capture force-off raised: {e!r}", "voice")
         finally:
-            if self.on_dictation_end is not None:
+            if not _aborted() and self.on_dictation_end is not None:
                 try:
                     self.on_dictation_end(captured, reason)
                 except Exception as e:
@@ -1399,7 +1450,8 @@ class WisprBridge:
                               "voice")
 
     def _poll_clipboard_for_transcript(
-        self, baseline: str, baseline_seq: Optional[int]
+        self, baseline: str, baseline_seq: Optional[int],
+        dictation_gen: Optional[int] = None,
     ) -> tuple[Optional[str], bool]:
         """Poll the clipboard until a NEW transcript appears or we time out.
 
@@ -1424,6 +1476,8 @@ class WisprBridge:
             if cur_seq is not None and baseline_seq is not None and cur_seq != baseline_seq:
                 seq_moved = True
             if changed and current.strip():
+                if dictation_gen is not None and dictation_gen != self._abort_generation:
+                    return "aborted", False  # STOP fired — do not dispatch
                 self._dispatch_transcription(current)
                 return None, True
             time.sleep(CLIPBOARD_POLL_INTERVAL)

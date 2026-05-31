@@ -937,6 +937,15 @@ class VoiceListener(threading.Thread):
             self._set_bridge_speaking(False)
         except Exception:
             pass
+        # STOP must also cancel the Wispr side: force recording OFF and discard
+        # any transcript captured around the STOP so it never reaches the
+        # assistant (the LLM cancel only unwinds at reply-engine boundaries).
+        bridge = getattr(self, "_wispr_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.abort()
+            except Exception as e:
+                debug_log(f"reset_everything: wispr abort failed: {e}", "voice")
 
     # ------------------------------------------------------------------
     # Query publishing helpers (sync UI text display with WebSocket state)
