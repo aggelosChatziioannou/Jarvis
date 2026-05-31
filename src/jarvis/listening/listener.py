@@ -887,6 +887,14 @@ class VoiceListener(threading.Thread):
         call repeatedly and from any thread.
         """
         print("⏹  STOP — TTS interrupted, LLM cancelled, memory cleared", flush=True)
+        # Open the post-abort suppression window FIRST, so even if a step below
+        # raises, a late transcript captured around this STOP is still dropped by
+        # feed_transcript. A fresh wake (_on_wispr_wake) clears the window.
+        try:
+            suppress_sec = float(getattr(self.cfg, "wispr_post_abort_suppress_sec", 1.5))
+        except (TypeError, ValueError):
+            suppress_sec = 1.5
+        self._post_abort_suppress_until = time.monotonic() + max(0.0, suppress_sec)
         # TTS interrupt
         try:
             if self.tts is not None:
@@ -4454,6 +4462,19 @@ class VoiceListener(threading.Thread):
         if not text:
             return
 
+        # STOP guard: drop any transcript that lands inside the post-abort
+        # suppression window. After a STOP (reset_everything) a late echo /
+        # phantom / leftover transcript could otherwise re-enter the cascade and
+        # restart the thinking tune, which is exactly what forced the user to
+        # press STOP twice. A genuine new engagement clears the window via
+        # _on_wispr_wake, so deliberate re-use is never blocked.
+        if time.monotonic() < getattr(self, "_post_abort_suppress_until", 0.0):
+            debug_log(
+                f"feed_transcript: dropped (post-STOP suppression): '{text[:40]}'",
+                "voice",
+            )
+            return
+
         # Strip leading wake word if Wispr Flow captured it. The wake
         # word fires ~200ms before PTT, so Wispr Flow's recording can
         # easily include the wake word at the head of the transcript.
@@ -4461,6 +4482,17 @@ class VoiceListener(threading.Thread):
         if not text:
             debug_log("feed_transcript: text empty after wake-word strip", "voice")
             return
+
+        # Never route a pure stop/interrupt utterance into the cascade as a
+        # query. Reuse the bridge's language-agnostic stop pattern (single
+        # source of truth) rather than hardcoding stop words here.
+        try:
+            from .wispr_bridge import WisprBridge
+            if WisprBridge._STOP_PATTERN.match(text):
+                debug_log("feed_transcript: dropped pure-stop transcript", "voice")
+                return
+        except Exception:
+            pass
 
         debug_log(f"feed_transcript → cascade: '{text[:80]}'", "voice")
         try:
@@ -4494,6 +4526,9 @@ class VoiceListener(threading.Thread):
         PROCESSING indicator, not a listening one. While the user is still
         speaking we only show the LISTENING face/popup; the tune begins when
         processing begins (``_dispatch_query``)."""
+        # A genuine new wake clears any post-STOP suppression window so a
+        # deliberate re-engagement right after a STOP is never dropped.
+        self._post_abort_suppress_until = 0.0
         try:
             self._set_face_state_listening()
         except Exception:

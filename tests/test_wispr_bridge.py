@@ -1071,7 +1071,8 @@ class TestWakeContinuousFeed:
         bridge.wake_model = _ScoringWakeModel(0.99)
         triggered = []
         bridge._start_dictation = lambda score: triggered.append(score)
-        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))  # rms ~9830
+        # Two frames (debounce default is 2): rms ~9830, well above the floor.
+        bridge._process_wake(np.full(2560, 0.3, dtype=np.float32))
         assert triggered and abs(triggered[0] - 0.99) < 1e-6
 
     def test_above_floor_low_score_does_not_trigger(self):
@@ -1122,9 +1123,88 @@ class TestWakeContinuousFeed:
         triggered = []
         bridge._start_dictation = lambda score: triggered.append(score)
         # 0.004 * 32767 ~ 131 -> int16 frame ~131 RMS (far-field, below old 200).
-        bridge._process_wake(np.full(1280, 0.004, dtype=np.float32))
+        # Two frames satisfy the debounce default (a real far-field wake holds
+        # the score across many more than two 80ms frames).
+        bridge._process_wake(np.full(2560, 0.004, dtype=np.float32))
         assert bridge.wake_model.frames                       # fed (primed)
         assert triggered and abs(triggered[0] - 0.99) < 1e-6  # AND triggers
+
+
+# ===========================================================================
+# W9b — consecutive-frame debounce (a single noise/echo spike must not fire)
+# ===========================================================================
+
+@pytest.mark.unit
+class TestWakeConsecutiveFrames:
+    """A real 'Hey Jarvis' sustains a high score across many 80ms frames; an
+    isolated noise/echo spike scores high on ONE frame. Requiring N consecutive
+    frames >= threshold before triggering kills the single-frame phantom (the
+    observed 0.32 one) without hurting a genuine, sustained wake."""
+
+    def _idle_bridge(self, **cfg):
+        bridge = _make_bridge(**cfg)
+        bridge._state = State.IDLE
+        bridge._user_muted = False
+        bridge._speak_paused = False
+        bridge._wake_cooldown = 0
+        return bridge
+
+    def test_default_consec_frames_is_2(self):
+        assert _make_bridge()._wake_consec_frames == 2
+
+    def test_single_high_frame_does_not_trigger_when_consec_2(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_threshold=0.3,
+                                   wispr_wake_consec_frames=2)
+        bridge.wake_model = _ScoringWakeModel(0.99)   # would fire on 1 frame today
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))  # exactly ONE frame
+        assert triggered == []   # one frame is not enough -> no phantom
+
+    def test_two_consecutive_high_frames_trigger_when_consec_2(self):
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_threshold=0.3,
+                                   wispr_wake_consec_frames=2)
+        bridge.wake_model = _ScoringWakeModel(0.99)
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(2560, 0.3, dtype=np.float32))  # TWO frames
+        assert triggered and abs(triggered[0] - 0.99) < 1e-6
+
+    def test_subthreshold_frame_breaks_the_run(self):
+        """high, low, high, high with consec=2: the low frame resets the run, so
+        only the final two consecutive highs fire it (exactly once)."""
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_threshold=0.3,
+                                   wispr_wake_consec_frames=2)
+        seq = iter([0.99, 0.05, 0.99, 0.99])
+
+        class _SeqModel:
+            def __init__(self):
+                self.frames = []
+
+            def predict(self, frame):
+                import numpy as _np
+                self.frames.append(_np.asarray(frame).copy())
+                return {"hey_jarvis": next(seq)}
+
+        bridge.wake_model = _SeqModel()
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280 * 4, 0.3, dtype=np.float32))  # 4 frames
+        assert len(triggered) == 1
+
+    def test_consec_1_preserves_single_frame_trigger(self):
+        """consec=1 is the legacy single-frame behaviour (back-compat)."""
+        import numpy as np
+        bridge = self._idle_bridge(wispr_wake_gain=1.0, wispr_wake_threshold=0.3,
+                                   wispr_wake_consec_frames=1)
+        bridge.wake_model = _ScoringWakeModel(0.99)
+        triggered = []
+        bridge._start_dictation = lambda score: triggered.append(score)
+        bridge._process_wake(np.full(1280, 0.3, dtype=np.float32))  # ONE frame
+        assert triggered and abs(triggered[0] - 0.99) < 1e-6
 
 
 # ===========================================================================

@@ -171,6 +171,7 @@ class Settings:
     wispr_wake_threshold: float    # Detection confidence threshold 0.0-1.0 (default 0.1)
     wispr_wake_gain: float         # Software gain on the wake-detection audio ONLY (default 1.0)
     wispr_wake_rms_floor: float    # Ungained int16 RMS below which a wake frame is gated as silence on the TRIGGER only; 0.0 = off (default 0.0)
+    wispr_wake_consec_frames: int  # Consecutive 80ms frames >= threshold required to fire the wake (debounce; 1 = legacy single-frame; default 2)
     wispr_silence_ms: int          # Silero VAD silence ms for PTT release (default 800)
     wispr_min_dictation_sec: float # Suppress early VAD release for this many seconds (default 2.0)
     wispr_max_dictation_sec: int   # Hard timeout for dictation (default 30)
@@ -185,6 +186,7 @@ class Settings:
     wispr_confirm_timeout_sec: float       # How long to poll Wispr's mic state to confirm a tap took effect (default 1.2)
     wispr_clipboard_grace_sec: float       # Extra grace after the clipboard wait before declaring no-capture (default 2.0)
     wispr_erase_max_chars: int             # Cap on auto-type erase backspaces; longer transcripts skip erase (default 300)
+    wispr_post_abort_suppress_sec: float   # After a STOP, drop Wispr transcripts arriving within this many seconds so one press cancels everything; a fresh wake clears it (default 1.5)
     wispr_barge_in_interrupt: bool         # Tear down TTS on speech onset during a hot window (default True)
 
     # Whisper Speech Recognition
@@ -766,6 +768,12 @@ def get_default_config() -> Dict[str, Any]:
         "wispr_wake_model": "hey_jarvis_v0.1",
         "wispr_wake_threshold": 0.1,
         "wispr_wake_gain": 1.0,
+        # Consecutive 80ms frames at/above threshold required to fire the wake.
+        # A real "Hey Jarvis" sustains a high score across many frames; an
+        # isolated noise/echo spike scores high on ONE frame, so a debounce of 2
+        # rejects single-frame phantoms with negligible cost to a genuine wake.
+        # 1 = legacy single-frame behaviour.
+        "wispr_wake_consec_frames": 2,
         # Ungained int16 RMS below which a wake frame is treated as silence and
         # the TRIGGER is skipped (the model is still fed every frame). 0.0 = off:
         # the recall-tuned far-field model rejects silence itself, and a non-zero
@@ -785,6 +793,11 @@ def get_default_config() -> Dict[str, Any]:
         "wispr_clipboard_grace_sec": 2.0,
         "wispr_erase_max_chars": 300,
         "wispr_barge_in_interrupt": True,
+        # After a STOP (HUD button / reset_everything), drop any Wispr transcript
+        # that lands within this window so a single press cancels everything
+        # instead of a late echo/phantom restarting the cascade. A genuine new
+        # wake clears it, so deliberate re-engagement is never blocked.
+        "wispr_post_abort_suppress_sec": 1.5,
         "wispr_mic_device": None,
 
         "whisper_model": "large-v3-turbo",
@@ -1154,6 +1167,12 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         wispr_wake_rms_floor = 0.0
     try:
+        wispr_wake_consec_frames = int(merged.get("wispr_wake_consec_frames", 2))
+    except (TypeError, ValueError):
+        wispr_wake_consec_frames = 2
+    if wispr_wake_consec_frames < 1:
+        wispr_wake_consec_frames = 1
+    try:
         wispr_silence_ms = int(merged.get("wispr_silence_ms", 800))
     except (TypeError, ValueError):
         wispr_silence_ms = 800
@@ -1209,6 +1228,12 @@ def load_settings() -> Settings:
         wispr_erase_max_chars = int(merged.get("wispr_erase_max_chars", 300))
     except (TypeError, ValueError):
         wispr_erase_max_chars = 300
+    try:
+        wispr_post_abort_suppress_sec = float(merged.get("wispr_post_abort_suppress_sec", 1.5))
+    except (TypeError, ValueError):
+        wispr_post_abort_suppress_sec = 1.5
+    if wispr_post_abort_suppress_sec < 0:
+        wispr_post_abort_suppress_sec = 0.0
     wispr_barge_in_interrupt = bool(merged.get("wispr_barge_in_interrupt", True))
 
     whisper_model = str(merged.get("whisper_model", "large-v3-turbo"))
@@ -1543,6 +1568,7 @@ def load_settings() -> Settings:
         wispr_wake_threshold=wispr_wake_threshold,
         wispr_wake_gain=wispr_wake_gain,
         wispr_wake_rms_floor=wispr_wake_rms_floor,
+        wispr_wake_consec_frames=wispr_wake_consec_frames,
         wispr_silence_ms=wispr_silence_ms,
         wispr_min_dictation_sec=wispr_min_dictation_sec,
         wispr_max_dictation_sec=wispr_max_dictation_sec,
@@ -1556,6 +1582,7 @@ def load_settings() -> Settings:
         wispr_confirm_timeout_sec=wispr_confirm_timeout_sec,
         wispr_clipboard_grace_sec=wispr_clipboard_grace_sec,
         wispr_erase_max_chars=wispr_erase_max_chars,
+        wispr_post_abort_suppress_sec=wispr_post_abort_suppress_sec,
         wispr_barge_in_interrupt=wispr_barge_in_interrupt,
 
         # Whisper Speech Recognition

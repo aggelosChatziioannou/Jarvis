@@ -127,6 +127,7 @@ VAD_THRESHOLD = 0.5
 DEFAULT_WAKE_MODEL = "hey_jarvis_v0.1"
 DEFAULT_WAKE_THRESHOLD = 0.1
 DEFAULT_WAKE_RMS_FLOOR = 0.0     # ungained int16 RMS trigger gate; 0.0 = off (far-field-safe; model self-rejects silence)
+DEFAULT_WAKE_CONSEC_FRAMES = 2   # consecutive frames >= threshold required to fire (debounce; 1 = legacy single-frame)
 DEFAULT_SILENCE_MS = 800
 DEFAULT_MIN_DICTATION_SEC = 2.0
 DEFAULT_MAX_DICTATION_SEC = 30
@@ -236,6 +237,14 @@ class WisprBridge:
         # _process_wake.
         self._wake_rms_floor = float(getattr(
             cfg, "wispr_wake_rms_floor", DEFAULT_WAKE_RMS_FLOOR))
+        # Debounce: require this many CONSECUTIVE frames at/above threshold
+        # before firing, so a single noise/echo spike (e.g. the observed 0.32
+        # phantom) can't trigger a wake. ``_wake_consec`` counts the current run
+        # and is reset whenever the run breaks (sub-threshold frame, silence
+        # gate, or leaving IDLE). 1 reproduces the legacy single-frame trigger.
+        self._wake_consec_frames = max(1, int(getattr(
+            cfg, "wispr_wake_consec_frames", DEFAULT_WAKE_CONSEC_FRAMES)))
+        self._wake_consec = 0
         self.silence_ms = int(getattr(
             cfg, "wispr_silence_ms", DEFAULT_SILENCE_MS))
         self.min_dictation_sec = float(getattr(
@@ -1613,6 +1622,9 @@ class WisprBridge:
         priming in ``_recall_check.py``. Best-effort: never raises.
         """
         model = getattr(self, "wake_model", None)
+        # Priming resets the stateful classifier window, so any in-progress
+        # consecutive-frame run is no longer valid.
+        self._wake_consec = 0
         if model is None:
             return
         try:
@@ -1647,6 +1659,7 @@ class WisprBridge:
             # Drain so we don't accumulate a buffer that would replay on
             # resume — the user expects mute/pause to be silent, not delayed.
             self._wake_buf.clear()
+            self._wake_consec = 0  # a pause breaks any in-progress wake run
             return
 
         # Apply the wake-only software gain, then clip safely to int16. This
@@ -1686,6 +1699,7 @@ class WisprBridge:
             with self._state_lock:
                 is_idle = self._state == State.IDLE
             if not is_idle or self._wake_cooldown > 0:
+                self._wake_consec = 0
                 continue
 
             # Silence/energy gate on the TRIGGER only (never the model). A
@@ -1693,16 +1707,25 @@ class WisprBridge:
             # recall-tuned model at a low threshold could still score it as one
             # (quiet-room phantom). Normalise by wake_gain so a high software
             # gain can't defeat the gate; real speech (RMS in the thousands) is
-            # untouched.
+            # untouched. A silent frame also breaks the consecutive run.
             rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
             if rms / max(self.wake_gain, 1e-6) < self._wake_rms_floor:
+                self._wake_consec = 0
                 continue
 
-            # predictions is dict {model_name: float in [0,1]}
-            for _model_name, score in predictions.items():
-                if score >= self.wake_threshold:
-                    self._start_dictation(float(score))
-                    break  # only trigger once per frame
+            # predictions is dict {model_name: float in [0,1]}. Require
+            # ``_wake_consec_frames`` CONSECUTIVE frames at/above threshold
+            # before firing: a single noise/echo spike scores high on ONE frame,
+            # while a real "Hey Jarvis" holds the score across many. This is the
+            # debounce that kills single-frame phantoms (the observed 0.32).
+            best = max(predictions.values()) if predictions else 0.0
+            if best >= self.wake_threshold:
+                self._wake_consec += 1
+                if self._wake_consec >= self._wake_consec_frames:
+                    self._wake_consec = 0
+                    self._start_dictation(float(best))
+            else:
+                self._wake_consec = 0
 
     def _process_vad(self, audio_f32: np.ndarray) -> None:
         """

@@ -239,3 +239,66 @@ class TestWisprDictationEndSurfacesFailure:
 
         out = capsys.readouterr().out
         assert "🔇" not in out
+
+
+# ── E: STOP must suppress a late transcript so one press cancels everything ──
+
+
+class TestPostAbortSuppressesLateTranscript:
+    """The HUD STOP (reset_everything) opens a short suppression window. Any
+    Wispr transcript that arrives within it (a leftover/echo/phantom captured
+    around the STOP) is DROPPED instead of restarting the cascade + thinking
+    tune — which is what forced the user to press STOP twice. A genuine new
+    engagement (a fresh wake) clears the window, so deliberate re-use is never
+    blocked."""
+
+    def _stop_ready_listener(self):
+        listener = _make_listener()
+        listener._wispr_bridge = MagicMock()
+        listener.tts = None
+        listener._clear_audio_buffers = lambda: None
+        listener._stop_thinking_tune = lambda: None
+        return listener
+
+    def test_late_transcript_within_window_is_dropped(self):
+        listener = self._stop_ready_listener()
+        dispatched = []
+        listener._dispatch_wispr_transcript_to_cascade = lambda t: dispatched.append(t)
+
+        listener.reset_everything()          # opens the suppression window
+        listener.feed_transcript("some late garbage transcript")
+
+        assert dispatched == []              # dropped, never re-enters the cascade
+
+    def test_transcript_after_window_dispatches(self):
+        listener = self._stop_ready_listener()
+        dispatched = []
+        listener._dispatch_wispr_transcript_to_cascade = lambda t: dispatched.append(t)
+        listener._post_abort_suppress_until = 0.0   # window already elapsed
+
+        listener.feed_transcript("what time is it")
+
+        assert dispatched == ["what time is it"]
+
+    def test_fresh_wake_clears_suppression(self):
+        listener = self._stop_ready_listener()
+        dispatched = []
+        listener._dispatch_wispr_transcript_to_cascade = lambda t: dispatched.append(t)
+
+        listener.reset_everything()          # opens the window
+        listener._on_wispr_wake()            # a real new wake re-engages
+        listener.feed_transcript("turn on the lights")
+
+        assert dispatched == ["turn on the lights"]   # legit re-use not blocked
+
+    def test_pure_stop_transcript_is_dropped(self):
+        """A transcript that is ENTIRELY a stop word must never be routed into
+        the cascade as a query (no window needed)."""
+        listener = self._stop_ready_listener()
+        dispatched = []
+        listener._dispatch_wispr_transcript_to_cascade = lambda t: dispatched.append(t)
+        listener._post_abort_suppress_until = 0.0
+
+        listener.feed_transcript("stop")
+
+        assert dispatched == []
