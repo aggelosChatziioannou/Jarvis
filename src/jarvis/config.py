@@ -55,6 +55,22 @@ def get_supported_model_ids() -> set[str]:
     return set(SUPPORTED_CHAT_MODELS.keys())
 
 
+def uses_local_whisper(cfg) -> bool:
+    """True when the local faster-whisper STT model is actually loaded.
+
+    The assistant loads the local Whisper model ONLY when
+    ``stt_backend == "whisper"``. With ``stt_backend == "wispr"`` the cloud
+    Wispr Flow bridge owns speech-to-text and the local Whisper model is never
+    loaded into VRAM (the listener's ``run()`` dispatches to the Wispr backend
+    and returns before any model load; the dictation engine, when enabled,
+    reuses the listener's model rather than loading its own — see
+    dictation.spec.md). This is the single source of truth that keeps the
+    startup log honest about what is in VRAM, so it never claims to be
+    "loading Whisper" when the cloud backend is active.
+    """
+    return str(getattr(cfg, "stt_backend", "whisper")) == "whisper"
+
+
 def _default_dictation_hotkey() -> str:
     """Return the platform-appropriate default dictation hotkey.
 

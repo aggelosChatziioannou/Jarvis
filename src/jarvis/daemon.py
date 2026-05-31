@@ -48,7 +48,7 @@ def get_active_listener():
     """Return the running VoiceListener, or None if Jarvis hasn't started one yet."""
     return _active_listener
 
-from .config import load_settings
+from .config import load_settings, uses_local_whisper
 from .memory.db import Database
 from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memory
 from .output.tts import create_tts_engine
@@ -359,7 +359,10 @@ def main() -> None:
     debug_log("daemon started", "jarvis")
     print("✓ Daemon started", flush=True)
     print(f"🧠 Using chat model: {cfg.ollama_chat_model}", flush=True)
-    print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
+    if uses_local_whisper(cfg):
+        print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
+    else:
+        print("🎤 STT: Wispr Flow (cloud) — local Whisper not loaded", flush=True)
 
     # ─── Deadlock guard: pre-import heavy C-extension stack on MAIN thread ───
     # openWakeWord imports sklearn → scipy.special (large C-extension .pyd's).
@@ -529,13 +532,19 @@ def main() -> None:
         print("  TTS disabled", flush=True)
 
     # Initialize voice listening (only if dependencies available)
-    print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
+    if uses_local_whisper(cfg):
+        print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
+    else:
+        print("🎤 Initializing voice listener (Wispr Flow STT — no local Whisper load)...", flush=True)
     voice_thread: Optional[threading.Thread] = None
     device_watcher = None
     voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
     _set_active_listener(voice_thread)
     voice_thread.start()
-    print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+    if uses_local_whisper(cfg):
+        print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
+    else:
+        print("✓ Voice listener thread started (Wispr Flow bridge — openWakeWord + Silero VAD)", flush=True)
 
     # Live audio device-change watcher (Core Audio IMMNotificationClient). On any
     # add/remove/state/default change it (a) signals the UI to re-fetch the

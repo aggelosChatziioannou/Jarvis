@@ -439,3 +439,32 @@ class TestModelConsistency:
                 f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['vram']}) because the intent judge "
                 f"(gemma4:e2b) always runs alongside the chat model"
             )
+
+
+class TestUsesLocalWhisper:
+    """`uses_local_whisper(cfg)` is the single source of truth for whether the
+    local faster-whisper model is actually loaded into VRAM. It drives honest
+    startup logging: with the Wispr Flow (cloud) backend the local Whisper model
+    is never loaded, so the startup log must not claim it is."""
+
+    def test_whisper_backend_loads_local_whisper(self):
+        from types import SimpleNamespace
+        from jarvis.config import uses_local_whisper
+        assert uses_local_whisper(SimpleNamespace(stt_backend="whisper")) is True
+
+    def test_wispr_backend_does_not_load_local_whisper(self):
+        from types import SimpleNamespace
+        from jarvis.config import uses_local_whisper
+        assert uses_local_whisper(SimpleNamespace(stt_backend="wispr")) is False
+
+    def test_default_backend_is_whisper(self):
+        from types import SimpleNamespace
+        from jarvis.config import uses_local_whisper
+        # No stt_backend set -> defaults to the local Whisper path.
+        assert uses_local_whisper(SimpleNamespace()) is True
+
+    def test_unknown_backend_treated_as_not_local(self):
+        from types import SimpleNamespace
+        from jarvis.config import uses_local_whisper
+        # Only the explicit "whisper" backend loads the local model.
+        assert uses_local_whisper(SimpleNamespace(stt_backend="something-else")) is False
