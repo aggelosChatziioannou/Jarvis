@@ -109,6 +109,42 @@ class TestDispatchForwardsFusedToolsAndPlan:
         assert not listener._last_fused_plan
 
 
+# ── L1b: thinking tune is a PROCESSING indicator, not a LISTENING one ────────
+
+
+class TestThinkingTuneBoundToProcessing:
+    """The 'thinking/σκέφτομαι' tune must play only while the model is
+    processing the query — NOT while the user is still speaking (listening).
+    On the Wispr path it used to start at wake time."""
+
+    def test_wispr_wake_does_not_start_tune(self):
+        listener = _make_listener()
+        starts = []
+        listener._start_thinking_tune = lambda: starts.append(1)
+        faces = []
+        listener._set_face_state_listening = lambda: faces.append(1)
+
+        listener._on_wispr_wake()
+
+        assert starts == []      # tune NOT started during listening
+        assert faces == [1]      # but the face/popup still shows LISTENING
+
+    def test_dispatch_query_starts_tune_at_processing(self):
+        listener = _make_listener()
+        listener._try_easter_egg_daddys_home = lambda q: False
+        listener._try_fast_path = lambda q: None
+        listener._clear_audio_buffers = lambda: None
+        listener._stop_thinking_tune = lambda: None
+        listener.tts = None
+        starts = []
+        listener._start_thinking_tune = lambda: starts.append(1)
+
+        with patch("jarvis.reply.engine.run_reply_engine", lambda *a, **k: None):
+            listener._dispatch_query("what time is it")
+
+        assert starts and starts[0] == 1   # tune starts when processing begins
+
+
 # ── L2: failed dictation must not leave the tune/face stuck ──────────────────
 
 

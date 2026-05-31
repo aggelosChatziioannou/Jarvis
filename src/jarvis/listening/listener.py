@@ -2101,6 +2101,12 @@ class VoiceListener(threading.Thread):
         if self._try_easter_egg_daddys_home(query):
             return
 
+        # Processing has begun: start the thinking tune HERE (not at wake/
+        # listening time). It is a PROCESSING indicator. The fast path below
+        # stops it immediately for quick replies; the engine path keeps it
+        # until TTS playback starts (_on_playback_started -> _stop_thinking_tune).
+        self._start_thinking_tune()
+
         # FAST-PATH: try direct MCP routing for common phrases.
         # Skips intent judge + chat LLM entirely (~5x latency reduction).
         # See src/jarvis/listening/fast_paths.py for the pattern registry.
@@ -4473,11 +4479,12 @@ class VoiceListener(threading.Thread):
         """Called from the bridge's audio thread the instant the wake
         word fires (BEFORE the dictation completes). SHORT — do not
         block the audio callback. Heavy work happens in
-        ``feed_transcript`` later once the transcript arrives."""
-        try:
-            self._start_thinking_tune()
-        except Exception:
-            pass
+        ``feed_transcript`` later once the transcript arrives.
+
+        The thinking tune is deliberately NOT started here: it is a
+        PROCESSING indicator, not a listening one. While the user is still
+        speaking we only show the LISTENING face/popup; the tune begins when
+        processing begins (``_dispatch_query``)."""
         try:
             self._set_face_state_listening()
         except Exception:
