@@ -776,7 +776,7 @@ def get_default_config() -> Dict[str, Any]:
         "wispr_min_dictation_sec": 2.0,
         "wispr_max_dictation_sec": 30,
         "wispr_clipboard_wait_sec": 6.0,
-        "wispr_hot_window_sec": 10.0,
+        "wispr_hot_window_sec": 0.0,
         "wispr_suppress_autotype": True,
         "wispr_closed_loop_enabled": True,
         "wispr_hands_free_combo": ["ctrl", "cmd", "space"],
@@ -1170,9 +1170,9 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         wispr_clipboard_wait_sec = 6.0
     try:
-        wispr_hot_window_sec = float(merged.get("wispr_hot_window_sec", 10.0))
+        wispr_hot_window_sec = float(merged.get("wispr_hot_window_sec", 0.0))
     except (TypeError, ValueError):
-        wispr_hot_window_sec = 10.0
+        wispr_hot_window_sec = 0.0
     wispr_suppress_autotype = bool(merged.get("wispr_suppress_autotype", True))
     wispr_mic_device_val = merged.get("wispr_mic_device", None)
     if wispr_mic_device_val in (None, "", "null"):

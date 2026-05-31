@@ -319,6 +319,7 @@ class TestWakeRmsFloorConfig:
         assert load_settings().wispr_wake_rms_floor == 0.0
 
 
+@pytest.mark.unit
 class TestWisprClosedLoopConfig:
     """Closed-loop sync + guard config fields for the Wispr bridge.
 
@@ -328,6 +329,12 @@ class TestWisprClosedLoopConfig:
     and the two previously read-but-undeclared fields (`wispr_erase_max_chars`,
     `wispr_barge_in_interrupt`). All must be tunable without a code change.
     """
+
+    def test_hot_window_followups_off_by_default(self):
+        # Wispr must open only on wake word / lightning button, never auto after
+        # a reply -> the follow-up hot window is OFF (0) by default.
+        config = get_default_config()
+        assert config.get("wispr_hot_window_sec") == 0
 
     def test_defaults_present(self):
         config = get_default_config()

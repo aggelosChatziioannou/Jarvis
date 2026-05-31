@@ -131,7 +131,7 @@ DEFAULT_SILENCE_MS = 800
 DEFAULT_MIN_DICTATION_SEC = 2.0
 DEFAULT_MAX_DICTATION_SEC = 30
 DEFAULT_CLIPBOARD_WAIT_SEC = 6.0
-DEFAULT_HOT_WINDOW_SEC = 10.0
+DEFAULT_HOT_WINDOW_SEC = 0.0     # 0 = follow-ups OFF; Wispr opens only on wake word or the lightning trigger (never auto after a reply)
 DEFAULT_SUPPRESS_AUTOTYPE = True
 DEFAULT_MIC_DEVICE: Optional[Any] = None
 

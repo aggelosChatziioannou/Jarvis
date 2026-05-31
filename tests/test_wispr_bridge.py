@@ -209,6 +209,25 @@ class TestEnsureRecording:
 
 
 @pytest.mark.unit
+class TestHotWindowFollowUpsOffByDefault:
+    """The user wants Wispr to open ONLY on the wake word or the lightning
+    button, never automatically after a reply. So the hot-window follow-up
+    (which reopens Wispr on a bare VAD onset) must be OFF by default."""
+
+    def test_enter_hot_window_is_noop_by_default(self):
+        # No wispr_hot_window_sec on the cfg -> falls back to the code default,
+        # which must be 0 (off): enter_hot_window leaves the bridge IDLE.
+        bridge = _make_bridge()
+        assert bridge._state == State.IDLE
+        bridge.enter_hot_window()
+        assert bridge._state == State.IDLE   # did NOT arm a follow-up window
+
+    def test_default_hot_window_sec_is_zero(self):
+        from jarvis.listening.wispr_bridge import DEFAULT_HOT_WINDOW_SEC
+        assert DEFAULT_HOT_WINDOW_SEC == 0.0
+
+
+@pytest.mark.unit
 class TestUnconfirmedStart:
     """When a START tap can't be confirmed, the bridge reverts DICTATING and
     fires on_wispr_unavailable instead of leaving a false 'listening'."""
