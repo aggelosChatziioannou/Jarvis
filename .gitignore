@@ -48,14 +48,8 @@ debug_audio/
 .env
 **/.env
 
-# Wake-word training scratch scripts, configs, and logs (one-off experiments
-# from the custom "Hey Jarvis" training session — not part of the app or the
-# test suite; regenerate from scripts/ as needed)
+# Wake-word training scratch (one-off experiments from the custom "Hey Jarvis"
+# training session — WSL-path-hardcoded, not part of the app or test suite).
+# Gathered under wakeword-training/; logs/configs/scripts stay local-only.
+wakeword-training/
 _oww_*.log
-_clip_eval.py
-_direct_eval.py
-_fetch_rirs.py
-_inject_real_positives.py
-_recall_check.py
-_split_wakeword.py
-_hey_jarvis.yaml
