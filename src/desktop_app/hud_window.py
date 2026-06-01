@@ -291,8 +291,14 @@ class SystemPanel(QFrame):
         self._rows["mic"].setText(f"● MIC      {mic_name} · {sr // 1000} kHz · {compute}")
 
         chat = getattr(cfg, "ollama_chat_model", "—")
-        whisper = getattr(cfg, "whisper_model", "—")
-        self._rows["model"].setText(f"● MODEL    {chat}  ·  whisper {whisper}")
+        # STT is backend-aware: the local Whisper model is only loaded on the
+        # whisper backend. On the Wispr backend STT is the Wispr Flow cloud and
+        # no local Whisper is loaded, so don't claim a whisper model.
+        if getattr(cfg, "stt_backend", "whisper") == "wispr":
+            stt = "Wispr Flow (cloud)"
+        else:
+            stt = f"whisper {getattr(cfg, 'whisper_model', '—')}"
+        self._rows["model"].setText(f"● MODEL    {chat}  ·  STT {stt}")
 
         mcps = getattr(cfg, "mcps", {}) or {}
         self._rows["mcps"].setText(f"● MCPS     {len(mcps)} connected")

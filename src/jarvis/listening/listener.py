@@ -666,8 +666,9 @@ class VoiceListener(threading.Thread):
         except Exception as e:
             debug_log(f"API server startup failed (non-fatal): {e}", "voice")
 
-        # Optional Porcupine wake detector — runs alongside Whisper-based wake
-        # detection; either path can set _wake_timestamp. Only spins up when
+        # Optional Porcupine wake detector — alternative to the Whisper backend's
+        # transcript-based wake (the Wispr backend uses openWakeWord instead).
+        # Either path can set _wake_timestamp. Only spins up when
         # `porcupine_enabled: true` is set in config and the key is present.
         self._porcupine = None
         try:

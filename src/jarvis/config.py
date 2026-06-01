@@ -192,7 +192,7 @@ class Settings:
     wispr_min_dictation_sec: float # Suppress early VAD release for this many seconds (default 2.0)
     wispr_max_dictation_sec: int   # Hard timeout for dictation (default 30)
     wispr_clipboard_wait_sec: float # Max wait for Wispr Flow transcript to appear in clipboard (default 6.0)
-    wispr_hot_window_sec: float    # Seconds after reply during which follow-up does not need wake word (default 10.0)
+    wispr_hot_window_sec: float    # Seconds after reply a follow-up needs no wake word (default 0.0 = OFF; follow-ups require the wake word or the lightning trigger)
     wispr_suppress_autotype: bool  # Send backspaces to erase Wispr Flow's auto-typed text (default True)
     wispr_mic_device: int | str | None  # Mic device for the bridge; None = system default
     # Closed-loop start/stop synchronisation (reconcile against Wispr's real mic-recording state)
@@ -304,8 +304,10 @@ class Settings:
     # When `tool_selection_strategy == "llm"`, this model does the routing.
     # Empty string means "reuse `ollama_chat_model`" (the default).
     tool_router_model: str
-    # Optional override for the post-turn evaluator LLM. Empty string means
-    # "fall back to intent_judge_model, then ollama_chat_model" (the default).
+    # DEPRECATED: the post-turn evaluator no longer runs (replaced by the
+    # planner, see docs/llm_contexts.md #12 and reply/evaluator.spec.md). These
+    # evaluator_* fields are retained only so old configs still load; they are
+    # ignored by the reply engine.
     evaluator_model: str
     # None = auto (on for SMALL models, off for LARGE). Explicit true/false forces.
     evaluator_enabled: Optional[bool]
@@ -313,16 +315,14 @@ class Settings:
     # prevents a small model from churning through the escape hatch forever
     # when no tool really fits.
     tool_search_max_calls: int
-    # Upper bound on evaluator-driven nudges per reply. Each time the
-    # evaluator says "continue" with a nudge, the nudge is injected into
-    # the next turn's system message. This cap stops nudge ping-pong when
-    # the model keeps producing prose despite the nudge.
+    # DEPRECATED (see evaluator_model above): the evaluator-driven nudge loop
+    # no longer runs. Retained for config back-compat; ignored by the engine.
     evaluator_nudge_max: int
     # Optional override for the pre-loop task-list planner model. Empty
     # string means "fall back to tool_router_model → intent_judge_model →
     # ollama_chat_model" (the default). The planner is a small
     # classification-shaped pass so it rides the same small-model chain
-    # as the router and the evaluator.
+    # as the router.
     planner_model: str
     # Whether the pre-loop planner is enabled. True = planner always runs;
     # False = planner never runs (legacy behaviour, with the

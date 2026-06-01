@@ -3044,7 +3044,7 @@ class CompletePage(QWizardPage):
 
         tips = QLabel(
             "• Say your wake word (e.g. 'Jarvis') anywhere in your sentence to activate the assistant\n"
-            "• After Jarvis replies, speak your follow-up — no need to repeat the wake word\n"
+            "• Say the wake word again for each new request (wake-word-free follow-ups are off by default)\n"
             "• Jarvis will appear in your system tray (menu bar on macOS)\n"
             "• Right-click the tray icon to access settings and controls\n"
             "• View logs by clicking '📝 View Logs' in the tray menu"

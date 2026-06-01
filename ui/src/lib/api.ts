@@ -47,6 +47,10 @@ async function jdel<T>(path: string): Promise<T> {
 // ---------- Types ----------
 
 export interface VoiceStatePayload {
+  // NOTE: the daemon never emits 'synthesizing' — src/jarvis/output/tts.py
+  // collapses the internal synthesizing phase to 'thinking' before publishing.
+  // The 'synthesizing' branches in the orb/status components are therefore dead
+  // (kept for now to avoid a type-union refactor); 'thinking' is what shows.
   state: 'idle' | 'listening' | 'thinking' | 'synthesizing' | 'speaking';
   isMuted: boolean;
   uptime: number;

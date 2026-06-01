@@ -4,7 +4,7 @@ Division of labour (per the approved plan):
   - **Tesseract** does exact bilingual text transcription (Greek + English).
     Small vision models are unreliable at Greek glyphs, so they are never used
     for the text path.
-  - **Vision model** (moondream) does scene/UI description and element locating.
+  - **Vision model** (qwen2.5vl:3b) does scene/UI description and element locating.
 
 All methods return raw structures (text, coordinates) — never prose. The reply
 engine's LLM loop + system prompt format the spoken answer.

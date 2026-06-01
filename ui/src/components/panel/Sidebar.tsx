@@ -153,7 +153,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, expanded, onTogg
           transition: 'all 0.25s ease',
         }}
       >
-        {isExpanded ? 'v2.0.0-alpha' : 'v2'}
+        {isExpanded ? 'Jarvis' : 'J'}
       </div>
     </div>
   );

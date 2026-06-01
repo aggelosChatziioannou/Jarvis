@@ -94,7 +94,7 @@ def _validate_tool_args_against_schema(
     """Return a short error string when args don't satisfy the input schema.
 
     Lightweight check limited to the failure modes that matter for direct-exec:
-    unknown argument keys (the main evaluator-hallucination case) and missing
+    unknown argument keys (a small-model hallucination case) and missing
     required keys. Type-checking is intentionally not enforced here — the
     tool implementations own that — because a stricter pre-check would
     reject too many borderline cases and force fallbacks unnecessarily.

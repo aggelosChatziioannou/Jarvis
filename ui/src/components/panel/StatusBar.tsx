@@ -73,7 +73,6 @@ export default function StatusBar() {
           }}
         />
         <span>{connected ? 'Connected' : 'Offline'}</span>
-        <span style={{ marginLeft: 8, opacity: 0.5 }}>v2.0.0-alpha</span>
       </div>
     </div>
   );

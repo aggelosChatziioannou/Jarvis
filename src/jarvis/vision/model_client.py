@@ -1,4 +1,4 @@
-"""Client for a local Ollama vision model (default: moondream).
+"""Client for a local Ollama vision model (default: qwen2.5vl:3b).
 
 Owns the vision domain's request shape: PIL Image → base64 PNG → multimodal
 Ollama call (via ``jarvis.llm.call_vision_model``) → text, plus robust parsing

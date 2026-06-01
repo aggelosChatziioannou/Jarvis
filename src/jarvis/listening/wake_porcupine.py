@@ -2,8 +2,9 @@
 
 Picovoice Porcupine listens for a single wake word ("jarvis") continuously
 in a dedicated thread. When it fires, we mark `_wake_timestamp` exactly
-the same way the Whisper-based detector does, so the rest of the listener
-pipeline (intent judge → reply engine) is unchanged.
+the same way the Whisper backend's transcript-based detector does, so the rest
+of the listener pipeline (intent judge → reply engine) is unchanged. (The live
+Wispr backend detects wake with openWakeWord, not this path.)
 
 Why bother:
   - Detection latency drops from ~500ms (Whisper segment) to ~30ms (Porcupine frame).
