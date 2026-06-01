@@ -156,7 +156,8 @@ callback.)
 |-----|---------|---------|
 | `stt_backend` | `whisper` | `wispr` (Wispr Flow bridge) or `whisper` (local). |
 | `wispr_wake_model` | `hey_jarvis_v0.1` | openWakeWord model **name** or an **absolute path** to a custom `.onnx`. |
-| `wispr_wake_threshold` | `0.1` | Min model score (0–1) to trigger a wake. |
+| `wispr_wake_threshold` | `0.1` | Min model score (0–1) to trigger a wake. For a custom far‑field model ~`0.45` is recommended (a genuine wake scores ~0.77; lower invites quiet‑room phantoms). |
+| `wispr_wake_consec_frames` | `2` | Consecutive 80 ms frames ≥ threshold required to fire (debounce). A real "Hey Jarvis" sustains many frames; an isolated noise/echo spike does not. `1` = legacy single‑frame. |
 | `wispr_wake_gain` | `1.0` | Software gain on the **wake‑only** audio copy (boosts distant speech). |
 | `wispr_wake_rms_floor` | **`0.0` (off)** | Ungained int16 RMS below which a frame is treated as silence and the **trigger** is skipped (the model is still fed). **0 = off.** A non‑zero floor must stay **below** far‑field RMS (~100–200 on a PD200X at 2–3 m) or it silently drops distant wakes — that exact regression (a floor of 200 gated ~half of measured 3 m utterances) is why the default is 0; the recall‑tuned model already rejects silence (a silent frame scores ≈ 0.0007). Wired through `config.py` (dataclass + loader + constructor); the bridge fallback constant is `DEFAULT_WAKE_RMS_FLOOR` in `wispr_bridge.py`. |
 | `wispr_silence_ms` | `800` | Silero‑VAD trailing silence to release push‑to‑talk. |

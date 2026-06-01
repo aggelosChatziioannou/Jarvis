@@ -2,9 +2,12 @@
 
 Running record of every functional / architectural change made to this fork of Jarvis.
 Newest first. Each entry names the files touched, what the change does, and the reason.
-At the bottom there is a **Plan-mapping table** that pairs each change with the relevant
-item in `~/.claude/plans/plain-you-are-a-sparkling-kahn.md` (the latency-reduction plan),
-so we can review whether the plan is still up-to-date or needs adjustments.
+
+> Note: this is **fork-local history**, NOT the current configuration. Model names
+> in old entries (e.g. qwen3.5:9b-8k) are point-in-time; for what actually runs now
+> see `AGENTS.md` and the live config. The **Plan-mapping table** at the bottom
+> references `~/.claude/plans/plain-you-are-a-sparkling-kahn.md`, a machine-local
+> planning file that other readers will not have.
 
 Format per entry:
 ```

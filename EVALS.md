@@ -2,6 +2,8 @@
 
 **Generated:** 2026-05-04 (gemma4:e2b column refreshed with retry-aware outcomes from a full `--single` run; gpt-oss:20b column inherited unchanged from the 2026-04-27 regen)
 
+> **⚠️ Stale snapshot.** This report predates two pipeline changes: the **planner replaced the evaluator** (cases named "Evaluator …" describe a component that no longer runs, see `src/jarvis/reply/evaluator.spec.md`), and the live setup now runs **qwen3.5:9b‑4k** (the columns here are gemma4:e2b / gpt-oss:20b). Treat the numbers as historical. Regenerate against the current pipeline with `scripts/run_evals.*` before quoting accuracy.
+
 ## 📊 TL;DR
 
 **Overall:** 🟢 **340/354 passed (96.0%)** across all categories *(small-model column re-baselined from a fresh `gemma4:e2b` run with up to 3× retries; three new tests added in #352, one intent-judge regression introduced by `a8f133c` recovered by the prompt fix in this PR — see "Intent judge" below)*

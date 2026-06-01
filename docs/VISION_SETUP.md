@@ -33,8 +33,9 @@ automatically — no config needed.
 - **qwen2.5vl:3b** does "what do you see" (`seeScreen`) and is the **grounding fallback**
   for icons / coloured buttons that have no readable text.
 - **moondream was tested and rejected**: via Ollama it returns empty for every coordinate
-  prompt (no grounding) and is prompt-fragile at describing. See the Phase-1 report
-  ([vision_test_report.md](vision_test_report.md)).
+  prompt (no grounding) and is prompt-fragile at describing. (The Phase-1 comparison
+  report is generated locally by the vision verification script under `scripts/vision/`;
+  it is not committed.)
 
 ## Verify Ollama is on the GPU
 
