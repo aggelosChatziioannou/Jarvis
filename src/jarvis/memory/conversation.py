@@ -1094,6 +1094,29 @@ class DialogueMemory:
             self._cleanup_old_messages()
 
 
+def _drop_hallucination_chunks(chunks: List[str]) -> List[str]:
+    """Drop whole-utterance STT hallucinations from diary chunks before summarising.
+
+    Shares the graph extractor's deterministic, language-agnostic blocklist
+    (``looks_like_hallucination``): pure-punctuation utterances and known
+    artifacts ('thanks for watching', 'subtitles by amara.org', sound markers)
+    that survive cloud STT shouldn't be woven into the daily summary, which then
+    feeds vector recall and the graph extractor. Chunks are ``"Role: content"``;
+    only the content is judged. Fail-open: if the blocklist can't be imported,
+    chunks pass through unchanged."""
+    try:
+        from ..listening.hallucinations import looks_like_hallucination
+    except Exception:
+        return chunks
+    out: List[str] = []
+    for chunk in chunks:
+        content = chunk.split(": ", 1)[1] if ": " in chunk else chunk
+        if looks_like_hallucination(content):
+            continue
+        out.append(chunk)
+    return out
+
+
 def generate_conversation_summary(
     recent_chunks: List[str],
     previous_summary: Optional[str],
@@ -1119,6 +1142,9 @@ def generate_conversation_summary(
     """
     from ..llm import call_llm_direct, call_llm_streaming
 
+    # Deterministic belt: strip pure-hallucination chunks (STT artifacts) before
+    # they reach the summariser — mirrors the graph extractor's guard.
+    recent_chunks = _drop_hallucination_chunks(recent_chunks)
     chunks_text = "\n".join(recent_chunks[-10:])  # Last 10 chunks to keep context manageable
 
     system_prompt = """You are a conversation summariser for a personal AI assistant. Your job is to create concise daily summaries of conversations that will be stored in a diary for future reference.
