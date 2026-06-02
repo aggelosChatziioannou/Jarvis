@@ -167,6 +167,19 @@ def get_state() -> Dict[str, Any]:
     return {**_voice_state, "uptime": time.time() - _started_at}
 
 
+@app.get("/api/version")
+def get_version_info() -> Dict[str, Any]:
+    """App version + release channel for the console StatusBar.
+
+    Local-only and non-sensitive. Sourced from the canonical core
+    ``jarvis.get_version`` so the console matches the desktop app.
+    """
+    from . import get_version
+
+    version, channel = get_version()
+    return {"version": version, "channel": channel}
+
+
 # ---------- Commands (proxy to control_bus) ----------
 
 class CommandResponse(BaseModel):
