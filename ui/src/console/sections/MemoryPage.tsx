@@ -3,9 +3,11 @@ import Zone1MemoryCore from '@/console/zones/Zone1MemoryCore';
 import Zone2Timeline from '@/console/zones/Zone2Timeline';
 import Zone3DetailPanel from '@/console/zones/Zone3DetailPanel';
 import type { GraphNode, Reminder } from '@/console/types';
-import { sampleNodes } from '@/console/data/demo';
+import { MemoryDataProvider, useMemoryDataCtx } from '@/console/services/MemoryDataContext';
+import { adaptToGraphNode } from '@/console/lib/memoryMap';
 
-export default function MemoryPage() {
+function MemoryPageInner() {
+  const { graphNodes } = useMemoryDataCtx();
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
   const [zone2Collapsed, setZone2Collapsed] = useState(false);
@@ -18,17 +20,16 @@ export default function MemoryPage() {
       setSelectedNode(null);
       return;
     }
-    const node = sampleNodes.find((n) => n.id === id) ?? null;
-    setSelectedNode(node);
+    const node = graphNodes.find((n) => n.id === id && n.type === 'memory') ?? null;
+    setSelectedNode(node ? adaptToGraphNode(node) : null);
     setSelectedReminder(null);
-  }, []);
+  }, [graphNodes]);
 
   const handleReminderSelect = useCallback((reminder: Reminder | null) => {
     setSelectedReminder(reminder);
     setSelectedNode(null);
   }, []);
 
-  // Calculate flex ratios based on which zones are collapsed
   const getZone1Flex = () => {
     if (zone2Collapsed && zone3Collapsed) return 100;
     if (zone2Collapsed || zone3Collapsed) return 72;
@@ -37,18 +38,10 @@ export default function MemoryPage() {
 
   return (
     <div className="flex gap-3 h-full">
-      {/* Zone 1: Memory Graph */}
-      <div
-        className="min-w-0 transition-all duration-300 ease-out"
-        style={{ flex: `${getZone1Flex()}` }}
-      >
-        <Zone1MemoryCore
-          selectedNodeId={selectedNodeId}
-          onNodeSelect={handleNodeSelectById}
-        />
+      <div className="min-w-0 transition-all duration-300 ease-out" style={{ flex: `${getZone1Flex()}` }}>
+        <Zone1MemoryCore selectedNodeId={selectedNodeId} onNodeSelect={handleNodeSelectById} />
       </div>
 
-      {/* Zone 2: Timeline — collapsible */}
       <div
         className="transition-all duration-300 ease-out"
         style={{
@@ -65,7 +58,6 @@ export default function MemoryPage() {
         />
       </div>
 
-      {/* Zone 3: Detail Panel — collapsible */}
       <div
         className="transition-all duration-300 ease-out"
         style={{
@@ -83,5 +75,13 @@ export default function MemoryPage() {
         />
       </div>
     </div>
+  );
+}
+
+export default function MemoryPage() {
+  return (
+    <MemoryDataProvider>
+      <MemoryPageInner />
+    </MemoryDataProvider>
   );
 }

@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, Calendar, Clock } from 'lucide-react';
 import Card from '@/console/components/Card';
 import MiniCalendar from './MiniCalendar';
 import EventStream from './EventStream';
-import { sampleReminders, sampleEpisodic } from '@/console/data/demo';
+import { useMemoryDataCtx } from '@/console/services/MemoryDataContext';
 import type { Reminder } from '@/console/types';
 
 interface Props {
@@ -22,16 +22,19 @@ export default function Zone2Timeline({
   onToggleCollapse,
 }: Props) {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const { reminders, episodic } = useMemoryDataCtx();
 
   const eventDates = useMemo(
-    () => sampleReminders.map((r) => parseISO(r.date)),
-    []
+    () => reminders.filter((r) => r.date).map((r) => parseISO(r.date)),
+    [reminders]
   );
 
   const memoryDates = useMemo(
-    () => sampleEpisodic.map((e) => parseISO(e.date)),
-    []
+    () => episodic.filter((e) => e.date).map((e) => parseISO(e.date)),
+    [episodic]
   );
+
+  const itemCount = reminders.length + episodic.length;
 
   return (
     <Card className="h-full flex flex-col relative" noPadding>
@@ -88,7 +91,7 @@ export default function Zone2Timeline({
               <h3 className="text-[11px] font-semibold tracking-[0.08em] text-[#94a3b8] uppercase">
                 Events
               </h3>
-              <span className="text-[10px] text-[#475569]">{sampleReminders.length + sampleEpisodic.length} items</span>
+              <span className="text-[10px] text-[#475569]">{itemCount} items</span>
             </div>
 
             {/* Event stream */}

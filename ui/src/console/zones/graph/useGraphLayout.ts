@@ -66,6 +66,8 @@ export interface LayoutOptions {
   searchQuery?: string;
   visibleCategories?: Set<string>;
   showEmphasis?: boolean;
+  /** Real (mapped) graph nodes; defaults to the demo mock when omitted. */
+  nodes?: MemoryNode[];
 }
 
 export function useGraphLayout(options: LayoutOptions = {}) {
@@ -73,6 +75,7 @@ export function useGraphLayout(options: LayoutOptions = {}) {
     searchQuery = '',
     visibleCategories = new Set(categories.map((c) => c.type)),
     showEmphasis = false,
+    nodes: inputNodes = memoryNodes,
   } = options;
   const searchLower = searchQuery.toLowerCase().trim();
 
@@ -80,7 +83,7 @@ export function useGraphLayout(options: LayoutOptions = {}) {
     const nodeMap = new Map<string, GraphLayoutNode>();
     const connections: GraphConnection[] = [];
 
-    const centralNode = memoryNodes.find((n) => n.type === 'central');
+    const centralNode = inputNodes.find((n) => n.type === 'central');
     if (!centralNode) return { nodes: [], connections: [] };
 
     const centralLayout: GraphLayoutNode = {
@@ -93,7 +96,7 @@ export function useGraphLayout(options: LayoutOptions = {}) {
     };
     nodeMap.set(centralLayout.id, centralLayout);
 
-    const categoryNodes = memoryNodes.filter((n) => n.type === 'category');
+    const categoryNodes = inputNodes.filter((n) => n.type === 'category');
     categoryNodes.forEach((cat, i) => {
       const angle = CATEGORY_ANGLES[cat.category] ?? 0;
       const x = Math.cos(angle) * CATEGORY_RADIUS;
@@ -122,7 +125,7 @@ export function useGraphLayout(options: LayoutOptions = {}) {
       });
     });
 
-    const memoryLeafs = memoryNodes.filter((n) => n.type === 'memory');
+    const memoryLeafs = inputNodes.filter((n) => n.type === 'memory');
     const memoriesPerCategory = new Map<string, MemoryNode[]>();
     memoryLeafs.forEach((mem) => {
       const list = memoriesPerCategory.get(mem.category) ?? [];
@@ -193,7 +196,7 @@ export function useGraphLayout(options: LayoutOptions = {}) {
 
     const nodes = Array.from(nodeMap.values());
     return { nodes, connections };
-  }, [searchLower, visibleCategories, showEmphasis]);
+  }, [searchLower, visibleCategories, showEmphasis, inputNodes]);
 }
 
 export { getNodeColor, getNodeGlow };

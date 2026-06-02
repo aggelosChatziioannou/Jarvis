@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { categories } from '@/console/data/graphMock';
+import { useMemoryDataCtx } from '@/console/services/MemoryDataContext';
 import { useGraphLayout } from './useGraphLayout';
 import type { GraphLayoutNode } from './useGraphLayout';
 import { useZoomPan } from './useZoomPan';
@@ -110,7 +111,8 @@ export default function MemoryGraphZone({
     zoomIn, zoomOut, resetView,
   } = useZoomPan(containerRef);
 
-  const { nodes, connections } = useGraphLayout({ searchQuery, visibleCategories: allCategories, showEmphasis });
+  const { graphNodes } = useMemoryDataCtx();
+  const { nodes, connections } = useGraphLayout({ searchQuery, visibleCategories: allCategories, showEmphasis, nodes: graphNodes });
   const visibleMemoryCount = nodes.filter((n) => n.type === 'memory' && n.visible).length;
 
   useEffect(() => {
