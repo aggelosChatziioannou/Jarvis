@@ -33,6 +33,7 @@ from . import control_bus
 from . import config_safety
 from .config import default_config_path, load_config, _save_json, _load_json
 from .debug import debug_log
+from .utils.redact import scrub_secrets
 
 
 API_HOST = "127.0.0.1"
@@ -882,8 +883,17 @@ class _StdoutMirror:
             if not stripped:
                 continue
             level = _classify_log_level(stripped)
+            # Privacy: the Live Logs buffer + SSE feed are served over the
+            # unauthenticated loopback API. Scrub emails / card numbers / API
+            # keys / tokens / keyword-anchored credentials before a transcript,
+            # reply, or always-on error line is stored. scrub_secrets keeps the
+            # line readable (no whitespace collapse) so logs stay useful.
             try:
-                publish_log(level, stripped)
+                safe = scrub_secrets(stripped)
+            except Exception:
+                safe = stripped
+            try:
+                publish_log(level, safe)
             except Exception:
                 pass
         return len(text)
