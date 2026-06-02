@@ -61,7 +61,7 @@ screenshotable). `useConnection()` exposes `{ state, connected, version }`;
 | Dashboard | 4 | mock today; later `/ws/state` + `/api/system/metrics` + `/api/services/status` |
 | Memory | 3 | mock today; later graph + reminders endpoints |
 | Audio I/O | 2 | mock today; later `/ws/state` + `/api/audio/devices` + `/api/config` |
-| Live Logs | 1 | mock today; later `/ws/logs` |
+| Live Logs | 1 | DONE - live `/ws/logs` (backfills ~100 on connect) via `console/lib/logMap.ts`; fail-open to demo generator |
 | Settings | 5 | not built yet |
 
 Phase 0 wires only the shell StatusBar; pages keep their mock/demo data until
