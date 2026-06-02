@@ -183,40 +183,18 @@ def test_local_files_write_append_delete(tmp_path):
 @pytest.mark.unit
 def test_fetch_web_page_success(monkeypatch):
     """Test fetchWebPage tool with a mocked successful response."""
-    import jarvis.tools.registry as tools_mod
-    
-    # Mock a successful HTTP response
-    class MockResponse:
-        def __init__(self):
-            self.status_code = 200
-            self.content = b'''
-            <html>
-                <head><title>Test Page</title></head>
-                <body>
-                    <h1>Welcome</h1>
-                    <p>This is a test page with some content.</p>
-                    <a href="https://example.com">Example Link</a>
-                </body>
-            </html>
-            '''
-            self.text = self.content.decode()
-        
-        def raise_for_status(self):
-            pass
+    import jarvis.tools.builtin.fetch_web_page as fwp
 
-        # The production tool wraps the response in ``with requests.get(...)``
-        # so the connection is released deterministically — mirror that here.
-        def __enter__(self):
-            return self
+    # fetchWebPage now routes through the SSRF-safe shared ``safe_fetch``
+    # (validated URL + redirect re-validation + byte cap). Stub it with canned
+    # page bytes so this test covers the tool's extraction, not the transport.
+    html = (
+        b"<html><head><title>Test Page</title></head>"
+        b"<body><h1>Welcome</h1><p>This is a test page with some content.</p></body></html>"
+    )
+    monkeypatch.setattr(fwp, "safe_fetch", lambda url, **kwargs: ("https://example.com", html))
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
 
-    def mock_requests_get(url, **kwargs):
-        return MockResponse()
-    
-    monkeypatch.setattr(tools_mod.requests, 'get', mock_requests_get)
-    
     db = DummyDB()
     cfg = DummyCfg()
     
