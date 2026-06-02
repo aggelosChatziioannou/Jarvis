@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 from ...debug import debug_log
 from ..base import Tool, ToolContext
 from ..types import ToolExecutionResult
+from ._net import safe_fetch, UnsafeURLError
 
 
 class FetchWebPageTool(Tool):
@@ -50,12 +51,11 @@ class FetchWebPageTool(Tool):
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
             }
-            # ``with`` releases the connection back to the pool deterministically
-            # even if BeautifulSoup or the link extraction raises midway.
-            with requests.get(url, headers=headers, timeout=15, allow_redirects=True) as response:
-                response.raise_for_status()
-                response_content = response.content
-                response_text = response.text
+            # SSRF-safe fetch: validates the URL and every redirect hop against
+            # the public-address allowlist, follows redirects manually, and
+            # caps the body size. Shared with webSearch via tools/builtin/_net.
+            url, response_content = safe_fetch(url, headers=headers, timeout=15)
+            response_text = response_content.decode("utf-8", errors="replace")
             try:
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(response_content, 'html.parser')
@@ -113,6 +113,15 @@ class FetchWebPageTool(Tool):
                 debug_log("fetchWebPage: BeautifulSoup not available, returning raw text", "web")
                 context.user_print("✅ Page content fetched (raw).")
                 return ToolExecutionResult(success=True, reply_text=reply_text)
+        except UnsafeURLError as e:
+            # SSRF guard tripped: the URL (or a redirect) pointed at a
+            # private/loopback/metadata address. Refuse without leaking detail.
+            debug_log(f"fetchWebPage: refused unsafe URL: {e}", "web")
+            context.user_print("⚠️ Refused to fetch a non-public address.")
+            return ToolExecutionResult(
+                success=False,
+                reply_text="Failed to fetch page: the URL is not a public web address.",
+            )
         except requests.exceptions.RequestException as e:
             debug_log(f"fetchWebPage: request failed: {e}", "web")
             context.user_print("⚠️ Failed to fetch page.")

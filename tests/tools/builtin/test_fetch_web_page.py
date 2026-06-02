@@ -1,4 +1,10 @@
-"""Tests for fetch web page tool."""
+"""Tests for fetch web page tool.
+
+Transport (SSRF validation, redirect re-validation, byte cap) lives in the
+shared ``tools/builtin/_net.py`` and is covered by ``test__net.py`` +
+``test_fetch_web_page_ssrf.py``. These tests cover the tool's extraction logic
+by stubbing the shared ``safe_fetch`` to return canned page bytes.
+"""
 
 import pytest
 from unittest.mock import Mock, patch
@@ -8,16 +14,7 @@ from src.jarvis.tools.builtin.fetch_web_page import FetchWebPageTool
 from src.jarvis.tools.base import ToolContext
 from src.jarvis.tools.types import ToolExecutionResult
 
-
-def _make_response_mock(**attrs) -> Mock:
-    """Build a Mock that doubles as both the requests response and a context
-    manager (the production code uses ``with requests.get(...) as resp`` so
-    the connection is released deterministically).
-    """
-    resp = Mock(**attrs)
-    resp.__enter__ = Mock(return_value=resp)
-    resp.__exit__ = Mock(return_value=False)
-    return resp
+_FETCH = "src.jarvis.tools.builtin.fetch_web_page.safe_fetch"
 
 
 class TestFetchWebPageTool:
@@ -53,17 +50,13 @@ class TestFetchWebPageTool:
         assert result.success is False
         assert "url" in result.reply_text.lower()
 
-    @patch('requests.get')
-    def test_run_success(self, mock_get):
+    @patch(_FETCH)
+    def test_run_success(self, mock_fetch):
         """Test successful web page fetch."""
-        mock_response = _make_response_mock(
-            status_code=200,
-            text='<html><head><title>Test</title></head><body><p>Content</p></body></html>',
-            content=b'<html><head><title>Test</title></head><body><p>Content</p></body></html>',
-            headers={'content-type': 'text/html'},
-            raise_for_status=Mock(),
+        mock_fetch.return_value = (
+            "https://example.com",
+            b'<html><head><title>Test</title></head><body><p>Content</p></body></html>',
         )
-        mock_get.return_value = mock_response
 
         args = {"url": "https://example.com"}
         result = self.tool.run(args, self.context)
@@ -73,17 +66,13 @@ class TestFetchWebPageTool:
         assert "example.com" in result.reply_text
         self.context.user_print.assert_called()
 
-    @patch('requests.get')
-    def test_run_success_without_beautifulsoup(self, mock_get):
+    @patch(_FETCH)
+    def test_run_success_without_beautifulsoup(self, mock_fetch):
         """Test successful web page fetch without BeautifulSoup."""
-        mock_response = _make_response_mock(
-            status_code=200,
-            text='<html><body>Raw content</body></html>',
-            content=b'<html><body>Raw content</body></html>',
-            headers={'content-type': 'text/html'},
-            raise_for_status=Mock(),
+        mock_fetch.return_value = (
+            "https://example.com",
+            b'<html><body>Raw content</body></html>',
         )
-        mock_get.return_value = mock_response
 
         with patch('builtins.__import__', side_effect=ImportError):
             args = {"url": "https://example.com"}
@@ -93,12 +82,10 @@ class TestFetchWebPageTool:
         assert result.success is True
         assert "Raw Content" in result.reply_text
 
-    @patch('requests.get')
-    def test_run_http_error(self, mock_get):
+    @patch(_FETCH)
+    def test_run_http_error(self, mock_fetch):
         """Test fetch web page with HTTP error."""
-        mock_response = _make_response_mock(status_code=404)
-        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
-        mock_get.return_value = mock_response
+        mock_fetch.side_effect = requests.exceptions.HTTPError("404 Not Found")
 
         args = {"url": "https://example.com/notfound"}
         result = self.tool.run(args, self.context)
@@ -107,10 +94,10 @@ class TestFetchWebPageTool:
         assert result.success is False
         assert "Failed to fetch page" in result.reply_text
 
-    @patch('requests.get')
-    def test_run_request_error(self, mock_get):
+    @patch(_FETCH)
+    def test_run_request_error(self, mock_fetch):
         """Test fetch web page with network error."""
-        mock_get.side_effect = requests.exceptions.RequestException("Network error")
+        mock_fetch.side_effect = requests.exceptions.RequestException("Network error")
 
         args = {"url": "https://example.com"}
         result = self.tool.run(args, self.context)
@@ -119,16 +106,19 @@ class TestFetchWebPageTool:
         assert result.success is False
         assert "Failed to fetch page" in result.reply_text
 
-    def test_run_invalid_url(self):
-        """Test fetch web page with invalid URL."""
+    @patch(_FETCH)
+    def test_run_invalid_url(self, mock_fetch):
+        """An unresolvable/non-public URL is refused by the SSRF guard."""
+        from src.jarvis.tools.builtin._net import UnsafeURLError
+        mock_fetch.side_effect = UnsafeURLError("not public")
         args = {"url": "not-a-url"}
         result = self.tool.run(args, self.context)
         assert isinstance(result, ToolExecutionResult)
         assert result.success is False
         assert "failed" in result.reply_text.lower() or "error" in result.reply_text.lower()
 
-    @patch('requests.get')
-    def test_run_with_links_extraction(self, mock_get):
+    @patch(_FETCH)
+    def test_run_with_links_extraction(self, mock_fetch):
         """Test fetch web page including link extraction when include_links=True."""
         html = (
             '<html><head><title>Links Page</title></head>'
@@ -138,13 +128,7 @@ class TestFetchWebPageTool:
             '<a href="mailto:test@example.com">Mail</a>'
             '</body></html>'
         )
-        mock_response = _make_response_mock(
-            status_code=200,
-            text=html,
-            content=html.encode(),
-            raise_for_status=Mock(),
-        )
-        mock_get.return_value = mock_response
+        mock_fetch.return_value = ("https://example.com", html.encode())
 
         args = {"url": "https://example.com", "include_links": True}
         result = self.tool.run(args, self.context)
