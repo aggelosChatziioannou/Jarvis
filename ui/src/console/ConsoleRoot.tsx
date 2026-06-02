@@ -7,12 +7,14 @@ const DashboardPage = lazy(() => import('@/console/sections/DashboardPage'))
 const MemoryPage = lazy(() => import('@/console/sections/MemoryPage'))
 const AudioPage = lazy(() => import('@/console/sections/AudioPage'))
 const LogsPage = lazy(() => import('@/console/sections/LogsPage'))
+const SettingsPage = lazy(() => import('@/console/sections/SettingsPage'))
 
 const PAGE_TITLES: Record<string, string> = {
   dashboard: 'Dashboard',
   memory: 'Memory',
   audio: 'Audio I/O',
   logs: 'Live Logs',
+  settings: 'Settings',
 }
 
 export default function ConsoleRoot() {
@@ -32,6 +34,7 @@ export default function ConsoleRoot() {
                 {activePage === 'memory' && <MemoryPage />}
                 {activePage === 'audio' && <AudioPage />}
                 {activePage === 'logs' && <LogsPage />}
+                {activePage === 'settings' && <SettingsPage />}
               </div>
             )}
           </Suspense>

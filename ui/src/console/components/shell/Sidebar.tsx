@@ -1,4 +1,4 @@
-import { Home, Brain, Mic, ScrollText } from 'lucide-react'
+import { Home, Brain, Mic, ScrollText, Settings } from 'lucide-react'
 import type { ComponentType } from 'react'
 
 interface ItemData {
@@ -12,6 +12,7 @@ const items: ItemData[] = [
   { icon: Brain, label: 'Memory', id: 'memory' },
   { icon: Mic, label: 'Audio I/O', id: 'audio' },
   { icon: ScrollText, label: 'Live Logs', id: 'logs' },
+  { icon: Settings, label: 'Settings', id: 'settings' },
 ]
 
 interface Props {
