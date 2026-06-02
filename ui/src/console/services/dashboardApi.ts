@@ -33,6 +33,8 @@ export interface ServiceStatus {
   connected: boolean
   detail: string
   count?: number
+  /** Live activity (e.g. Spotify playing, Gmail has unread) for glows. */
+  active?: boolean
 }
 
 export const dashboardApi = {

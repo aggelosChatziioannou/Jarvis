@@ -15,6 +15,18 @@ def no_weather(monkeypatch):
     monkeypatch.setattr(api_server, "_read_weather", lambda: None)
 
 
+@pytest.fixture
+def no_external(monkeypatch):
+    """Stub out all network/IMAP calls so service status is deterministic."""
+    monkeypatch.setattr(api_server, "_read_weather", lambda: None)
+    monkeypatch.setattr(api_server, "_spotify_status", lambda: {
+        "id": "spotify", "name": "Spotify", "enabled": True, "connected": False, "active": False, "detail": "not authorised",
+    })
+    monkeypatch.setattr(api_server, "_gmail_status", lambda: {
+        "id": "gmail", "name": "Gmail", "enabled": True, "connected": False, "active": False, "count": 0, "detail": "not configured",
+    })
+
+
 def test_system_metrics_has_expected_shape(no_weather):
     out = api_server.system_metrics()
     assert isinstance(out["uptime_sec"], float)
@@ -25,7 +37,7 @@ def test_system_metrics_has_expected_shape(no_weather):
     assert out["weather"] is None  # monkeypatched
 
 
-def test_services_status_lists_core_services(tmp_path, monkeypatch, no_weather):
+def test_services_status_lists_core_services(tmp_path, monkeypatch, no_external):
     db = str(tmp_path / "r.db")
     monkeypatch.setattr(api_server, "_resolve_reminder_store", lambda: ReminderStore(db))
     out = api_server.services_status()
@@ -35,7 +47,7 @@ def test_services_status_lists_core_services(tmp_path, monkeypatch, no_weather):
     assert by_id["weather"]["connected"] is False  # weather monkeypatched to None
 
 
-def test_services_status_reminder_count_reflects_store(tmp_path, monkeypatch, no_weather):
+def test_services_status_reminder_count_reflects_store(tmp_path, monkeypatch, no_external):
     from datetime import datetime, timedelta, timezone
 
     db = str(tmp_path / "r.db")

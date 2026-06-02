@@ -62,6 +62,7 @@ screenshotable). `useConnection()` exposes `{ state, connected, version }`;
 | Memory | 3 | DONE (full CRUD) - real graph (`/api/graph/nodes` -> 3-branch view) + node content edit/delete (detail panel -> `/api/graph/node`), timeline (reminders `/api/reminders` + diary `/api/memory`), reminder add/complete/snooze/reschedule/cancel/delete. Provider `MemoryDataContext` fail-open to mock |
 | Audio I/O | 2 | DONE - real state (`/ws/state`), devices (`/api/audio/devices`), sensitivity + device select (`/api/config`), mute/tone; waveform/spectrum/orb-pulse kept as browser mic preview |
 | Live Logs | 1 | DONE - live `/ws/logs` (backfills ~100 on connect) via `console/lib/logMap.ts`; fail-open to demo generator |
+| Services (live) | 6 | DONE (Spotify+Gmail) - `/api/services/status` returns live Spotify now-playing (cached OAuth token, no new flow) + Gmail unread (IMAP app-password from mcps/.env); Gmail unread drives the dashboard glow. Calendar = "not configured" (no Google creds in mcps/.env). |
 | Settings | 5 | DONE - NEW 5th tab; curated config editor (`settingsSchema`) over `/api/config` (masked round-trip, diff-only save), model selects from `/api/llm/models`, MCP toggles via `/api/mcps`. Restart-may-be-required notice |
 
 Phase 0 wires only the shell StatusBar; pages keep their mock/demo data until

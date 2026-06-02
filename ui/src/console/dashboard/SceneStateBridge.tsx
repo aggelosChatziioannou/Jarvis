@@ -29,20 +29,21 @@ export default function SceneStateBridge() {
     setMood(moodFromState(vs))
   }, [vs, setMood])
 
-  const spotify = services.find((s) => s.id === 'spotify')?.connected ?? false
+  const spotifyPlaying = services.find((s) => s.id === 'spotify')?.active ?? false
+  const gmailUnread = services.find((s) => s.id === 'gmail')?.count ?? 0
   const remindersPending = services.find((s) => s.id === 'reminders')?.count ?? 0
   const active = vs === 'listening' || vs === 'thinking' || vs === 'speaking'
 
   useEffect(() => {
     setServices({
-      spotify,
-      gmailUnread: 0, // real unread count lands in Phase 6 (Gmail OAuth)
+      spotify: spotifyPlaying,
+      gmailUnread,
       calendarAlert: false,
       weatherAlert: false,
       taskActive: remindersPending > 0,
       processing: active,
     })
-  }, [spotify, remindersPending, active, setServices])
+  }, [spotifyPlaying, gmailUnread, remindersPending, active, setServices])
 
   return null
 }

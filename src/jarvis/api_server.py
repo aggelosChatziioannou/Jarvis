@@ -788,6 +788,113 @@ def _read_weather() -> Optional[Dict[str, Any]]:
         return None
 
 
+_MCPS_ENV_PATH = Path(__file__).resolve().parents[2] / "mcps" / ".env"
+_spotify_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_SPOTIFY_TTL_SEC = 20.0
+_gmail_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_GMAIL_TTL_SEC = 60.0
+
+
+def _mcp_env() -> Dict[str, str]:
+    """Read non-empty values from mcps/.env (the MCP servers' credential file)."""
+    try:
+        from dotenv import dotenv_values
+
+        return {k: v for k, v in dotenv_values(str(_MCPS_ENV_PATH)).items() if v}
+    except Exception:
+        return {}
+
+
+def _spotify_status() -> Dict[str, Any]:
+    """Live Spotify now-playing via the cached OAuth token (no new auth flow).
+
+    Gated on the cache file existing so we never block on an interactive prompt.
+    Cached briefly so the dashboard poll doesn't hammer the Spotify API.
+    """
+    now = time.time()
+    if _spotify_cache["data"] is not None and now - float(_spotify_cache["at"]) < _SPOTIFY_TTL_SEC:
+        return _spotify_cache["data"]
+    data: Dict[str, Any] = {
+        "id": "spotify", "name": "Spotify", "enabled": True,
+        "connected": False, "active": False, "detail": "not authorised",
+    }
+    try:
+        env = _mcp_env()
+        cache_path = _MCPS_ENV_PATH.parent / ".spotify_cache"
+        if env.get("SPOTIFY_CLIENT_ID") and cache_path.exists():
+            import spotipy
+            from spotipy.oauth2 import SpotifyOAuth
+
+            auth = SpotifyOAuth(
+                client_id=env["SPOTIFY_CLIENT_ID"],
+                client_secret=env.get("SPOTIFY_CLIENT_SECRET", ""),
+                redirect_uri=env.get("SPOTIFY_REDIRECT_URI", ""),
+                scope="user-read-playback-state user-read-currently-playing",
+                cache_path=str(cache_path),
+                open_browser=False,
+            )
+            cached = None
+            try:
+                cached = auth.cache_handler.get_cached_token()
+            except Exception:
+                cached = None
+            if cached:
+                sp = spotipy.Spotify(auth_manager=auth)
+                cur = sp.current_playback()
+                data["connected"] = True
+                if cur and cur.get("item"):
+                    t = cur["item"]
+                    artist = (t.get("artists") or [{}])[0].get("name", "")
+                    playing = bool(cur.get("is_playing"))
+                    data["active"] = playing
+                    data["detail"] = f"{'▶' if playing else '⏸'} {t.get('name', '')} — {artist}".strip(" —")
+                else:
+                    data["detail"] = "idle"
+    except Exception as e:
+        debug_log(f"spotify status failed: {type(e).__name__}", "tools")
+        data["detail"] = "unavailable"
+    _spotify_cache["data"] = data
+    _spotify_cache["at"] = now
+    return data
+
+
+def _gmail_status() -> Dict[str, Any]:
+    """Live Gmail unread count via IMAP app-password (no OAuth). Cached ~60s."""
+    now = time.time()
+    if _gmail_cache["data"] is not None and now - float(_gmail_cache["at"]) < _GMAIL_TTL_SEC:
+        return _gmail_cache["data"]
+    data: Dict[str, Any] = {
+        "id": "gmail", "name": "Gmail", "enabled": True,
+        "connected": False, "active": False, "count": 0, "detail": "not configured",
+    }
+    try:
+        env = _mcp_env()
+        addr = env.get("GMAIL_ADDRESS")
+        pw = (env.get("GMAIL_APP_PASSWORD") or "").replace(" ", "")
+        if addr and pw:
+            import imaplib
+
+            m = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+            try:
+                m.login(addr, pw)
+                m.select("INBOX")
+                _typ, d = m.search(None, "UNSEEN")
+                ids = d[0].split() if d and d[0] else []
+                n = len(ids)
+                data.update({"connected": True, "active": n > 0, "count": n, "detail": f"{n} unread"})
+            finally:
+                try:
+                    m.logout()
+                except Exception:
+                    pass
+    except Exception as e:
+        debug_log(f"gmail status failed: {type(e).__name__}", "tools")
+        data["detail"] = "unavailable"
+    _gmail_cache["data"] = data
+    _gmail_cache["at"] = now
+    return data
+
+
 @app.get("/api/system/metrics")
 def system_metrics() -> Dict[str, Any]:
     out: Dict[str, Any] = {
@@ -876,13 +983,15 @@ def services_status() -> List[Dict[str, Any]]:
         "detail": (f"{round(w['temp_c'])}°C {w['description']}" if w and w.get("temp_c") is not None else "unavailable"),
     })
 
-    # MCP-backed services: enabled flag (auth wiring lands in Phase 6).
-    for sid, name in (("spotify", "Spotify"), ("gmail", "Gmail"), ("calendar", "Calendar")):
-        en = sid in enabled_ids
-        out.append({
-            "id": sid, "name": name, "enabled": en, "connected": en,
-            "detail": "enabled" if en else "disabled",
-        })
+    # Spotify (cached OAuth token) + Gmail (IMAP app-password): live status.
+    out.append(_spotify_status())
+    out.append(_gmail_status())
+    # Calendar: no credentials wired yet.
+    out.append({
+        "id": "calendar", "name": "Calendar",
+        "enabled": "calendar" in enabled_ids, "connected": False,
+        "detail": "not configured",
+    })
     return out
 
 
