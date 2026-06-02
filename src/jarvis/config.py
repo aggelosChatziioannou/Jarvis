@@ -414,6 +414,7 @@ class Settings:
     local_files_root: str = ""                  # if set, confine the localFiles tool to this directory instead of the whole home dir
     memory_semantic_dedup_enabled: bool = False  # embedding-based near-duplicate skip on graph writes (opt-in; high threshold to protect memory integrity)
     memory_semantic_dedup_threshold: float = 0.93
+    memory_forget_semantic_threshold: float = 0.82  # forgetMemory paraphrase recall: embedding cosine >= this PROPOSES a near-match (looser than dedup's 0.93 because it only proposes; the user vetoes before deletion)
     memory_archive_delete_raw: bool = True
 
 
@@ -991,6 +992,7 @@ def get_default_config() -> Dict[str, Any]:
         "local_files_root": "",
         "memory_semantic_dedup_enabled": False,
         "memory_semantic_dedup_threshold": 0.93,
+        "memory_forget_semantic_threshold": 0.82,
         "memory_archive_delete_raw": True,
 
         # Memory & Dialogue
@@ -1442,6 +1444,10 @@ def load_settings() -> Settings:
         memory_semantic_dedup_threshold = float(merged.get("memory_semantic_dedup_threshold", 0.93))
     except (TypeError, ValueError):
         memory_semantic_dedup_threshold = 0.93
+    try:
+        memory_forget_semantic_threshold = float(merged.get("memory_forget_semantic_threshold", 0.82))
+    except (TypeError, ValueError):
+        memory_forget_semantic_threshold = 0.82
     memory_archive_delete_raw = bool(merged.get("memory_archive_delete_raw", True))
 
     # Dialogue memory window and forced diary update share this duration
@@ -1714,6 +1720,7 @@ def load_settings() -> Settings:
         local_files_root=local_files_root,
         memory_semantic_dedup_enabled=memory_semantic_dedup_enabled,
         memory_semantic_dedup_threshold=memory_semantic_dedup_threshold,
+        memory_forget_semantic_threshold=memory_forget_semantic_threshold,
         memory_archive_delete_raw=memory_archive_delete_raw,
 
         # Memory & Dialogue

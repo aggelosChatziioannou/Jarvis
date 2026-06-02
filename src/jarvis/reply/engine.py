@@ -552,6 +552,11 @@ _HINT_MESSAGE_CHAR_LIMIT = 200
 # than a fact note.
 _DIGEST_SKIP_TOOLS = frozenset({
     "getWeather",
+    # forgetMemory's raw result carries protocol discriminators the persona
+    # model must read verbatim (`requires_confirmation:` / `no_match:`). The
+    # small-model digest pass could strip them, which would let the model
+    # confabulate a deletion that never happened. Never digest it.
+    "forgetMemory",
 })
 
 
@@ -1848,6 +1853,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # allow-list mid-loop when the initial routing turned out too narrow.
     if "toolSearchTool" not in allowed_tools:
         allowed_tools.append("toolSearchTool")
+    # When a forgetMemory proposal is awaiting confirmation, keep forgetMemory
+    # in the allow-list for this turn. Otherwise the user's assent ("yes,
+    # delete it") can be lost: the upstream router sometimes classifies the
+    # confirmation turn as a different tool (a diet-related "yes, remove that"
+    # routes to deleteMeal), which would drop forgetMemory from the allow-list
+    # and block the model's confirm call. Safe — the tool only deletes a fresh
+    # pending proposal, and refusals are not routed to a deletion tool, so a
+    # merely-available forgetMemory cannot cause an unwanted delete.
+    try:
+        from ..tools.builtin.forget_memory import has_fresh_pending as _forget_has_pending
+        if (
+            _forget_has_pending()
+            and "forgetMemory" in BUILTIN_TOOLS
+            and "forgetMemory" not in allowed_tools
+        ):
+            allowed_tools.append("forgetMemory")
+    except Exception:
+        pass
     _selected_preview = ", ".join(allowed_tools[:8]) + (
         f" (+{len(allowed_tools) - 8} more)" if len(allowed_tools) > 8 else ""
     )
@@ -2391,9 +2414,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _vtool = vision_tool_in_step(_next_step_text)
             if _vtool is not None:
                 _next_step_text = _vtool
+            # forgetMemory is force-executed on ANY model size too. The chat
+            # model (especially the 9B on the fused path) unreliably emits this
+            # call — it narrates a confabulated "deleted that for you" without
+            # ever invoking the tool — yet the operation must actually run for
+            # "forget X" to propose and for an assent to actually delete. Safe
+            # despite side effects: the tool's propose->confirm + pending state
+            # mean a first call only PROPOSES (deletes nothing), and the upstream
+            # router never routes refusals here, so a routed forget while a
+            # proposal is pending is genuine assent. The bare "forgetMemory" step
+            # fast-parses to (forgetMemory, {}) and the tool derives its subject
+            # from the user's own utterance (the fused argument names are
+            # unreliable). See forget_memory.spec.md.
+            _forget_step = bool(re.match(r"^\s*forgetMemory\b", _next_step_text or ""))
             _direct_exec_active = (
                 (use_text_tools and not _plan_under_specified)
                 or _vtool is not None
+                or _forget_step
             )
             if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
