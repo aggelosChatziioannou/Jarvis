@@ -159,39 +159,46 @@ def discover_mcp_tools(mcps_config: Dict[str, Any]) -> Tuple[Dict[str, ToolSpec]
         return {}, {}
 
     try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         client = MCPClient(mcps_config)
-        discovered_tools = {}
+        discovered_tools: Dict[str, ToolSpec] = {}
         errors: Dict[str, str] = {}
 
-        for server_name in mcps_config.keys():
-            try:
-                tools = client.list_tools(server_name)
-                for tool_info in tools:
-                    tool_name = tool_info.get("name")
-                    if not tool_name:
-                        continue
+        def _discover_one(server_name: str) -> Dict[str, ToolSpec]:
+            specs: Dict[str, ToolSpec] = {}
+            for tool_info in client.list_tools(server_name):
+                tool_name = tool_info.get("name")
+                if not tool_name:
+                    continue
+                full_tool_name = f"{server_name}__{tool_name}"
+                specs[full_tool_name] = ToolSpec(
+                    name=full_tool_name,
+                    description=tool_info.get("description", f"Tool from {server_name} MCP server"),
+                    inputSchema=tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []}),
+                )
+            return specs
 
-                    # Create a unique tool name: server__toolname
-                    full_tool_name = f"{server_name}__{tool_name}"
-
-                    # Create a ToolSpec for this MCP tool
-                    description = tool_info.get("description", f"Tool from {server_name} MCP server")
-                    input_schema = tool_info.get("inputSchema", {"type": "object", "properties": {}, "required": []})
-                    discovered_tools[full_tool_name] = ToolSpec(
-                        name=full_tool_name,
-                        description=description,
-                        inputSchema=input_schema
-                    )
-
-            except BaseException as e:
-                # ExceptionGroups (from anyio TaskGroup) wrap the real cause;
-                # extract the first sub-exception for a useful error message.
-                cause = e
-                if hasattr(e, "exceptions") and e.exceptions:
-                    cause = e.exceptions[0]
-                debug_log(f"Failed to discover tools from MCP server '{server_name}': {cause}", "mcp")
-                errors[server_name] = str(cause)
-                continue
+        # Discover servers CONCURRENTLY: each server has its own persistent
+        # runtime worker, so a slow/hung server (up to its 30s setup timeout)
+        # no longer serialises the others at startup. One server's failure is
+        # captured per-server and never aborts the rest.
+        server_names = list(mcps_config.keys())
+        max_workers = min(len(server_names), 8) or 1
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="mcp-discover") as ex:
+            futures = {ex.submit(_discover_one, name): name for name in server_names}
+            for fut in as_completed(futures):
+                server_name = futures[fut]
+                try:
+                    discovered_tools.update(fut.result())
+                except BaseException as e:
+                    # ExceptionGroups (from anyio TaskGroup) wrap the real cause;
+                    # extract the first sub-exception for a useful error message.
+                    cause = e
+                    if hasattr(e, "exceptions") and e.exceptions:
+                        cause = e.exceptions[0]
+                    debug_log(f"Failed to discover tools from MCP server '{server_name}': {cause}", "mcp")
+                    errors[server_name] = str(cause)
 
         return discovered_tools, errors
 
