@@ -8,7 +8,7 @@ that the catalogue/prompt don't silently lose the vision tools again.
 
 from types import SimpleNamespace
 
-from jarvis.listening.fused_intent import FusedIntentEngine, _TOOL_CATALOGUE
+from jarvis.listening.fused_intent import FusedIntentEngine, build_tool_catalogue
 
 VISION_TOOLS = [
     "seeScreen", "readScreen", "locateOnScreen",
@@ -26,9 +26,9 @@ def _engine():
 
 
 def test_catalogue_lists_every_vision_tool():
-    catalogue_text = "\n".join(_TOOL_CATALOGUE)
+    catalogue_names = {name for name, _desc in build_tool_catalogue()}
     for name in VISION_TOOLS:
-        assert name in catalogue_text, f"fused catalogue missing vision tool {name!r}"
+        assert name in catalogue_names, f"fused catalogue missing vision tool {name!r}"
 
 
 def test_system_prompt_advertises_vision_tools_and_screen_rule():

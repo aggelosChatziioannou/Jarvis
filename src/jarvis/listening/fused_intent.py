@@ -81,31 +81,81 @@ FUSED_INTENT_SCHEMA: dict = {
 }
 
 
-# Hardcoded tool catalogue. KNOWN ISSUE: will rot when the real MCP/tool
-# registry changes. Future work: pass dynamically via cfg/registry. The vision
-# entries below use the EXACT builtin tool names (seeScreen, readScreen, …) so
-# the engine's allow-list resolves them against BUILTIN_TOOLS — see
-# src/jarvis/vision/vision.spec.md.
-_TOOL_CATALOGUE = [
-    "time.now — get current time. args: {}",
-    "time.date — get today's date. args: {}",
-    "weather.current — get current weather. args: {location?: str}",
-    "spotify.play — play music. args: {query: str}",
-    "spotify.pause — pause playback. args: {}",
-    "spotify.next — skip to next track. args: {}",
-    "gmail.send — send an email. args: {to: str, subject: str, body: str}",
-    "calendar.list — list upcoming events. args: {days?: int}",
-    "notes.create — create a note. args: {title: str, body: str}",
-    "web.search — web search. args: {query: str}",
-    # Vision & Screen Interaction (JARVIS can see/act on the user's screen)
-    "seeScreen — describe what is currently on the user's screen (windows, apps, UI elements). args: {monitor?: str}",
-    "readScreen — OCR and transcribe the exact text shown on the screen (English/Greek). args: {monitor?: str}",
-    "locateOnScreen — find where a UI element is and return its coordinates, without clicking. args: {target: str}",
-    "clickScreen — click a UI element identified by its visible label/description. args: {target: str}",
-    "typeOnScreen — type text via the keyboard. args: {text: str}",
-    "scrollScreen — scroll the active window up or down. args: {direction: str, amount?: int}",
-    "confirmScreenAction — execute the screen action awaiting confirmation, when the user agrees. args: {}",
+# Tools the reply engine always injects itself (``stop``) or that exist only as
+# a mid-loop escape hatch (``toolSearchTool``); excluded from the routable
+# catalogue the fused engine advertises so the small model focuses on real,
+# user-facing tools.
+_NON_ROUTABLE_TOOLS = frozenset({"stop", "toolSearchTool"})
+
+
+# Minimal REAL-name fallback used ONLY when the live tool registry can't be
+# imported (keeps the engine functional and — crucially — never advertises a
+# name that doesn't resolve against BUILTIN_TOOLS). ``build_tool_catalogue``
+# below is the normal path and also picks up configured MCP tools.
+_FALLBACK_CATALOGUE: list[tuple[str, str]] = [
+    ("getWeather", "get the current weather / forecast for a location"),
+    ("webSearch", "search the web for current information"),
+    ("fetchWebPage", "fetch and read the text of a specific web page"),
+    ("logMeal", "log a meal the user says they ate"),
+    ("fetchMeals", "look up the user's logged meals / nutrition"),
+    ("deleteMeal", "delete a logged meal"),
+    ("createReminder", "set a time-based reminder"),
+    ("listReminders", "list the user's reminders"),
+    ("cancelReminder", "cancel a reminder"),
+    ("snoozeReminder", "snooze a reminder"),
+    ("localFiles", "read or write files in the user's workspace"),
+    ("screenshot", "capture a screenshot of the screen"),
+    # Vision & Screen Interaction (JARVIS can see/act on the user's screen).
+    ("seeScreen", "describe what is currently on the user's screen"),
+    ("readScreen", "OCR and transcribe the exact text shown on the screen"),
+    ("locateOnScreen", "find where a UI element is, without clicking"),
+    ("clickScreen", "click a UI element by its visible label/description"),
+    ("typeOnScreen", "type text via the keyboard"),
+    ("scrollScreen", "scroll the active window up or down"),
+    ("confirmScreenAction", "execute the screen action awaiting confirmation"),
 ]
+
+
+def build_tool_catalogue() -> list[tuple[str, str]]:
+    """Return the ``(name, short-description)`` catalogue the fused engine advertises.
+
+    Built from the LIVE tool registry — real ``BUILTIN_TOOLS`` names plus any
+    discovered MCP tools — so the names the model emits actually resolve in the
+    reply engine's allow-list. ``generate_tools_json_schema`` silently drops
+    unknown names (``BUILTIN_TOOLS.get(name)`` -> ``None`` -> ``continue``), so a
+    fake/dotted name like ``weather.current`` produces an EMPTY tool schema and
+    the tool can never fire — the bug this replaces.
+
+    The import is deferred so this module stays standalone (no import cycle with
+    ``listener.py``). Falls back to a minimal real-name list if the registry is
+    unavailable, never to fake names.
+    """
+    try:
+        from ..tools.registry import BUILTIN_TOOLS, get_cached_mcp_tools
+    except Exception:  # pragma: no cover - registry should normally import
+        return list(_FALLBACK_CATALOGUE)
+
+    def _first_line(text: str) -> str:
+        lines = (text or "").strip().splitlines()
+        return (lines[0].strip() if lines else "")[:120]
+
+    out: list[tuple[str, str]] = []
+    for name, tool in BUILTIN_TOOLS.items():
+        if name in _NON_ROUTABLE_TOOLS:
+            continue
+        try:
+            desc = _first_line(getattr(tool, "description", "") or "")
+        except Exception:
+            desc = ""
+        out.append((name, desc))
+
+    try:
+        for name, spec in (get_cached_mcp_tools() or {}).items():
+            out.append((name, _first_line(getattr(spec, "description", "") or "")))
+    except Exception:
+        pass
+
+    return out or list(_FALLBACK_CATALOGUE)
 
 
 @dataclass
@@ -156,10 +206,38 @@ class FusedIntentEngine:
         # Match intent_judge.py's configured timeout, but cap at 8s per spec.
         configured = float(getattr(cfg, "intent_judge_timeout_sec", 6.0))
         self.timeout_sec = min(configured, self.DEFAULT_TIMEOUT_SEC)
+        # Build the tool catalogue from the LIVE registry (real names + MCP),
+        # not a hardcoded list. ``_catalogue_names`` is the signature used to
+        # rebuild the prompt when MCP tools are discovered after construction.
+        self._catalogue: list[tuple[str, str]] = build_tool_catalogue()
+        self._catalogue_names: frozenset = frozenset(n for n, _ in self._catalogue)
         self._system_prompt = self._build_system_prompt()
 
+    def _maybe_refresh_catalogue(self) -> None:
+        """Rebuild the catalogue/prompt if the live tool set changed.
+
+        MCP tools are discovered asynchronously at startup, often AFTER the
+        engine is constructed. Re-deriving the catalogue when the name set
+        changes lets the fused engine route to MCP tools (Spotify, Gmail, …)
+        on the live path without an extra LLM call. Cheap: a dict copy + set
+        compare per utterance, prompt rebuild only on change.
+        """
+        try:
+            current = build_tool_catalogue()
+        except Exception:  # pragma: no cover - defensive
+            return
+        names = frozenset(n for n, _ in current)
+        if names != self._catalogue_names:
+            self._catalogue = current
+            self._catalogue_names = names
+            self._system_prompt = self._build_system_prompt()
+            debug_log(f"🧠 Fused catalogue refreshed: {len(names)} tools", "voice")
+
     def _build_system_prompt(self) -> str:
-        tool_list = "\n".join(f"- {t}" for t in _TOOL_CATALOGUE)
+        tool_list = "\n".join(
+            (f"- {name}: {desc}" if desc else f"- {name}")
+            for name, desc in self._catalogue
+        )
         return (
             "You are JARVIS's intent classification + tool routing + execution planning engine.\n\n"
             "Respond ONLY with one JSON object matching this schema. No preamble. No markdown.\n\n"
@@ -179,7 +257,7 @@ class FusedIntentEngine:
             '  - "clarification" if the utterance is ambiguous and needs to be re-asked.\n'
             '- "tools": ordered list. Empty if no tools needed.\n'
             '- "plan": short ordered list of execution steps (max 4). For chat-only replies use ["Reply to user."].\n'
-            '- "fast_path_match": if utterance matches a common pattern (time.now, weather.current, spotify.play, etc.), name it; else null.\n'
+            '- "fast_path_match": if the utterance matches a common pattern (e.g. getWeather, webSearch, logMeal), name it; else null.\n'
             "- SCREEN AWARENESS: JARVIS can see the user's screen. When the user asks (in ANY language) "
             "what you see/observe, to look at / read / describe the screen, or to find / click / type on / "
             "scroll the screen, you MUST select a screen tool (seeScreen / readScreen / locateOnScreen / "
@@ -339,6 +417,9 @@ class FusedIntentEngine:
             On total failure returns a safe default with intent="query".
         """
         t0 = time.time()
+        # Pick up MCP tools discovered after construction so the catalogue the
+        # model sees matches the reply engine's real allow-list.
+        self._maybe_refresh_catalogue()
         user_prompt = self._build_user_prompt(
             transcript, in_hot_window, language, last_tts_text
         )
