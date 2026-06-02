@@ -1137,11 +1137,25 @@ class VoiceListener(threading.Thread):
                 lang_hint = (getattr(self, "_last_detected_language", "") or "en").lower()
                 language = "el" if lang_hint.startswith("el") else "en"
 
+                # If a forgetMemory deletion is awaiting confirmation, tell the
+                # router so it reliably classifies this turn as assent/refusal in
+                # any language. This keeps a refusal ("no, keep it") from routing
+                # to forgetMemory at all (which would otherwise risk a delete via
+                # the tool's subject-match), and an assent to forgetMemory.
+                _pending_confirmation = None
+                try:
+                    from ..tools.builtin.forget_memory import has_fresh_pending as _fm_pending
+                    if _fm_pending():
+                        _pending_confirmation = "forgetMemory"
+                except Exception:
+                    _pending_confirmation = None
+
                 fused = self._fused_intent.classify_route_plan(
                     transcript=text_lower,
                     in_hot_window=could_be_hot_window,
                     language=language,
                     last_tts_text=last_tts_text or None,
+                    pending_confirmation=_pending_confirmation,
                 )
                 elapsed_s = time.time() - t_start
                 print(

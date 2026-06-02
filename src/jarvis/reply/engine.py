@@ -2414,32 +2414,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _vtool = vision_tool_in_step(_next_step_text)
             if _vtool is not None:
                 _next_step_text = _vtool
-            # forgetMemory is force-executed on ANY model size, but ONLY on the
-            # PROPOSE turn (no proposal pending yet). The chat model unreliably
-            # emits the call — it narrates a confabulated "deleted that for you"
-            # without invoking the tool — so forcing the PROPOSE guarantees the
-            # user actually sees what would be removed. The bare "forgetMemory"
-            # step fast-parses to (forgetMemory, {}) and the tool derives its
-            # subject from the user's utterance (the fused argument names are
-            # unreliable). The CONFIRM turn is deliberately NOT force-executed:
-            # it is left to the chat model, which — seeing the prior turn's
-            # requires_confirmation result via dialogue carryover — emits
-            # forgetMemory(confirm=true) on its own assent judgement (mirrors the
-            # vision confirmScreenAction flow). Force-executing the confirm would
-            # have to GUESS consent, which is unsafe (a refusal, or a different
-            # new "forget Y", could be mistaken for assent to the pending Y).
-            # See forget_memory.spec.md.
-            _forget_propose_step = False
-            if re.match(r"^\s*forgetMemory\b", _next_step_text or ""):
-                try:
-                    from ..tools.builtin.forget_memory import has_fresh_pending as _fm_pending
-                    _forget_propose_step = not _fm_pending()
-                except Exception:
-                    _forget_propose_step = True
+            # forgetMemory is force-executed on ANY model size. The chat model
+            # unreliably emits the call — it narrates a confabulated "deleted
+            # that for you" without invoking the tool — so forcing it guarantees
+            # the operation actually runs. SAFETY: a forced call deletes nothing
+            # unless it carries confirm=true, and the only source of confirm=true
+            # is the pending-aware fused router, which sets it ONLY when it
+            # classifies the turn as assent to a pending proposal (refusals route
+            # to no tool, a new "forget Y" routes without confirm). So the forced
+            # PROPOSE ({} → never deletes) and the forced CONFIRM (confirm=true,
+            # only on router-classified assent) are both safe. See
+            # forget_memory.spec.md and #2b in docs/llm_contexts.md.
+            _forget_step = bool(re.match(r"^\s*forgetMemory\b", _next_step_text or ""))
             _direct_exec_active = (
                 (use_text_tools and not _plan_under_specified)
                 or _vtool is not None
-                or _forget_propose_step
+                or _forget_step
             )
             if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
@@ -2453,6 +2443,24 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     )
                     if _resolved is not None:
                         _name, _args = _resolved
+                        # forgetMemory force-exec uses the fused router's own
+                        # arguments (its confirm flag and/or the subject it
+                        # echoed), not the bare step. On the confirm turn the
+                        # pending-aware router echoes the pending fact (or sets
+                        # confirm=true); the tool deletes only on that genuine
+                        # match/confirm and never on a refusal (routed to no
+                        # tool) or a different new subject. See forget_memory.spec.md.
+                        if _name == "forgetMemory":
+                            _args = {}
+                            try:
+                                for _ft in (fused_tools or []):
+                                    if isinstance(_ft, dict) and _ft.get("name") == "forgetMemory":
+                                        _fa = _ft.get("arguments")
+                                        if isinstance(_fa, dict):
+                                            _args = dict(_fa)
+                                        break
+                            except Exception:
+                                _args = {}
                         try:
                             _cand_sig = (
                                 _name,

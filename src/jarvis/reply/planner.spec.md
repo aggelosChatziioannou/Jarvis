@@ -166,19 +166,16 @@ The engine consumes the plan in two phases.
   (`clickScreen`/`typeOnScreen`/`scrollScreen`) are excluded — they have
   side effects and their own safety gating, so they stay on the normal
   model-driven path.
-- **forgetMemory exception (any model size, PROPOSE turn only).** Direct-exec
-  also fires when the next plan tool step names `forgetMemory` AND no proposal
-  is pending (`has_fresh_pending()` is False), on any model size. The chat
-  model is unreliable here — it narrates a confabulated "deleted that for you"
-  without emitting the call — so forcing the PROPOSE guarantees the user sees
-  what would be removed. The bare `forgetMemory` step fast-parses to
-  `(forgetMemory, {})` and the tool derives its subject from the user's
-  utterance. The CONFIRM turn is deliberately NOT force-executed — it is left
-  to the chat model (which sees the propose result via dialogue carryover and
-  emits `forgetMemory(confirm=true)` on judged assent), because force-executing
-  it would have to guess consent. Deletion requires that explicit
-  `confirm=true`, so a forced propose can never delete.
-  See `tools/builtin/forget_memory.spec.md`.
+- **forgetMemory exception (any model size).** Direct-exec also fires when the
+  next plan tool step names `forgetMemory`, on any model size. The chat model is
+  unreliable here — it narrates a confabulated "deleted that for you" without
+  emitting the call — so forcing it guarantees the operation runs. The engine
+  executes it with the fused router's own arguments (the subject it echoed
+  and/or a confirm flag), falling back to the user's utterance. SAFE regardless:
+  the tool deletes only on a genuine assent signal (explicit confirm, or a
+  subject that positively matches the pending proposal), and the pending-aware
+  router routes refusals to no tool, so a forced call can never delete on a
+  refusal or a misheard turn. See `tools/builtin/forget_memory.spec.md`.
 - The chat model still runs the final synthesis turn so the reply is
   phrased in the daemon's voice using its own profile and persona.
 

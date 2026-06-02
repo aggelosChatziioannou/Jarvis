@@ -246,6 +246,33 @@ class ForgetMemoryTool(Tool):
             reply_text="removed: Those facts were already gone from memory.",
         )
 
+    def _confirms_pending(self, store, candidates, pending_matches, context) -> bool:
+        """True if any candidate subject string positively matches the pending
+        proposal's fact lines. The pending-aware router echoes the pending fact
+        on assent ("go ahead" -> subject "you live in Berlin"), so a positive
+        match is genuine consent. A subject that matches nothing (an empty/odd
+        call) or a DIFFERENT stored fact does NOT confirm, so a misfire or a
+        pivot to another request can never delete the pending."""
+        cfg = getattr(context, "cfg", None)
+        base_url = str(getattr(cfg, "ollama_base_url", "") or "")
+        embed_model = str(getattr(cfg, "ollama_embed_model", "") or "")
+        try:
+            threshold = float(getattr(cfg, "memory_forget_semantic_threshold", 0.82) or 0.82)
+        except (TypeError, ValueError):
+            threshold = 0.82
+        from ...memory.graph import normalise_fact
+        pending_norm = {normalise_fact(l) for _id, l in pending_matches}
+        for cand in candidates:
+            if not cand:
+                continue
+            hits = _match_lines(
+                store, cand,
+                base_url=base_url, embed_model=embed_model, threshold=threshold,
+            )
+            if pending_norm & {normalise_fact(l) for _id, l in hits}:
+                return True
+        return False
+
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         args = args if isinstance(args, dict) else {}
         confirm = bool(args.get("confirm"))
@@ -254,30 +281,32 @@ class ForgetMemoryTool(Tool):
         from ...memory.graph import GraphMemoryStore
         store = GraphMemoryStore(context.cfg.db_path)
         try:
-            # ---- DELETION requires an EXPLICIT confirm=true against a fresh
-            # proposal. This is the unbypassable guard: a bare forgetMemory
-            # call (however it was routed or force-executed) can NEVER delete —
-            # only a deliberate confirm signal does. The confirm signal comes
-            # from (a) the engine, which sets confirm=true when it force-executes
-            # forgetMemory while a proposal is already pending (and force-exec is
-            # router-gated, so it fires only on an assent-classified turn —
-            # refusals route elsewhere), or (b) the chat model emitting
-            # forgetMemory(confirm=true) on its own assent judgement (mirrors the
-            # vision engine's confirmScreenAction). A refusal therefore cannot
-            # delete: it carries no confirm=true and does not trigger force-exec.
-            if confirm:
-                _pending_subject, pending_matches = self._fresh_pending()
-                if pending_matches:
+            _pending_subject, pending_matches = self._fresh_pending()
+
+            # ---- A proposal is awaiting the user's decision ----
+            # Confirm (delete) ONLY on a genuine assent signal: an explicit
+            # confirm=true, OR a provided subject that positively matches the
+            # pending fact. The pending-aware fused router routes refusals to NO
+            # tool (so they never reach here) and echoes the pending fact on
+            # assent, while a NEW "forget Y" names a different subject. So a
+            # match == consent; no-match / empty / a different subject == NOT
+            # consent (re-propose instead). This keeps deletion gated on a real
+            # confirmation — a misheard turn, a refusal, or a stray call can
+            # never delete. See forget_memory.spec.md.
+            if pending_matches:
+                red = (getattr(context, "redacted_text", "") or "").strip()
+                candidates = [
+                    str(v).strip() for v in args.values()
+                    if isinstance(v, str) and str(v).strip()
+                ]
+                if red:
+                    candidates.append(red)
+                if confirm or self._confirms_pending(store, candidates, pending_matches, context):
                     return self._confirm(store, pending_matches, context)
-                # confirm=true with no fresh pending (e.g. a premature confirm
-                # on the very first call) — fail safe by proposing instead.
-                debug_log("forgetMemory: confirm with no fresh pending — proposing instead", "memory")
+                # Not a confirmation of the pending — treat as a fresh request.
                 return self._propose(store, subject, context)
 
-            # No explicit confirm -> PROPOSE (deletes nothing). A second
-            # non-confirm call simply re-proposes (replacing any stale pending),
-            # so naming a different fact while one is pending switches targets
-            # rather than confirming the first.
+            # ---- No pending proposal: PROPOSE (deletes nothing) ----
             return self._propose(store, subject, context)
         finally:
             store.close()

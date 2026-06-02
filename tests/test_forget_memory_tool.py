@@ -244,6 +244,33 @@ def test_explicit_confirm_deletes_pending(graph_db, monkeypatch):
     assert "likes hiking" in data
 
 
+def test_assent_echoing_pending_subject_confirms(graph_db, monkeypatch):
+    """The pending-aware router echoes the pending fact on assent ("go ahead"
+    -> subject "you live in London"). A subject that positively matches the
+    pending is genuine consent and deletes."""
+    fm._reset_pending()
+    monkeypatch.setattr(fm, "_embed_text", _london_cluster_embed)
+    tool = ForgetMemoryTool()
+    tool.run({}, _utterance_ctx(graph_db, "forget that I live in London"))   # propose
+    # Router echoes the pending fact as the argument on a short assent.
+    tool.run({"memory": "you live in London"}, _utterance_ctx(graph_db, "go ahead"))
+    data = _all_data(graph_db)
+    assert "lives in London" not in data     # confirmed + deleted
+    assert "likes hiking" in data
+
+
+def test_new_distinct_subject_while_pending_does_not_delete_pending(graph_db, monkeypatch):
+    """A new "forget Y" (Y is a DIFFERENT stored fact) while X is pending must
+    re-propose Y, never confirm/delete X."""
+    fm._reset_pending()
+    monkeypatch.setattr(fm, "_embed_text", _london_cluster_embed)
+    tool = ForgetMemoryTool()
+    tool.run({}, _utterance_ctx(graph_db, "forget that I live in London"))   # propose London
+    tool.run({"subject": "likes hiking"}, _utterance_ctx(graph_db, "actually forget that I like hiking"))
+    # London (the original pending) must NOT have been deleted.
+    assert "lives in London" in _all_data(graph_db)
+
+
 def test_bare_call_while_pending_never_deletes(graph_db, monkeypatch):
     """SAFETY: a forgetMemory call WITHOUT confirm=true must never delete, even
     while a proposal is pending — so a refusal / misfire that reaches the tool

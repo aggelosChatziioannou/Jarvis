@@ -266,6 +266,15 @@ class FusedIntentEngine:
             "look at the screen (seeScreen), not casual chat. To click/press/tap something, use clickScreen "
             "(NOT locateOnScreen); use locateOnScreen ONLY when the user just wants to know where something "
             "is without pressing it.\n\n"
+            "- PENDING CONFIRMATION: if the Context shows a non-empty "
+            "`pending_confirmation` naming a tool, JARVIS has just asked the "
+            "user to confirm that pending action. Judge the user's reply IN ITS "
+            "OWN LANGUAGE. If they AGREE (yes / go ahead / do it / ναι / κάν' το / "
+            "any affirmative), emit exactly that one tool and no other. If they "
+            "REFUSE (no / keep it / cancel / leave it / όχι / άσ' το / any "
+            "negative), emit NO tools at all. If they instead ask to act on "
+            "something DIFFERENT, ignore the pending confirmation and route the "
+            "new request normally.\n\n"
             f"Available tools (builtins + MCPs):\n{tool_list}\n"
         )
 
@@ -275,14 +284,17 @@ class FusedIntentEngine:
         in_hot_window: bool,
         language: str,
         last_tts_text: Optional[str],
+        pending_confirmation: Optional[str] = None,
     ) -> str:
         last = last_tts_text if last_tts_text else "None"
+        pending = pending_confirmation if pending_confirmation else "None"
         return (
             f'Transcript: "{transcript}"\n'
             f"Context:\n"
             f"- in_hot_window: {str(in_hot_window).lower()}\n"
             f"- language: {language}\n"
             f"- last_tts_text: {last}\n"
+            f"- pending_confirmation: {pending}\n"
         )
 
     @staticmethod
@@ -404,6 +416,7 @@ class FusedIntentEngine:
         in_hot_window: bool = False,
         language: str = "en",
         last_tts_text: Optional[str] = None,
+        pending_confirmation: Optional[str] = None,
     ) -> FusedJudgment:
         """Single-call replacement for judge -> router -> planner pipeline.
 
@@ -422,7 +435,7 @@ class FusedIntentEngine:
         # model sees matches the reply engine's real allow-list.
         self._maybe_refresh_catalogue()
         user_prompt = self._build_user_prompt(
-            transcript, in_hot_window, language, last_tts_text
+            transcript, in_hot_window, language, last_tts_text, pending_confirmation
         )
 
         last_raw = ""
