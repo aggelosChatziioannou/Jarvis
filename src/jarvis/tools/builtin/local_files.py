@@ -16,7 +16,9 @@ class LocalFilesTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Safely read, write, list, append, or delete files within your home directory."
+        return ("Safely read, write, list, append, or delete files within the user's workspace "
+                "(home directory, or a configured folder). Hidden dotfiles/dot-directories "
+                "(e.g. .ssh, .config) and the assistant's own config and database are off-limits.")
 
     @property
     def inputSchema(self) -> Dict[str, Any]:
@@ -35,8 +37,29 @@ class LocalFilesTool(Tool):
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         """Execute the local files tool."""
         try:
-            # Safety: restrict to user's home directory by default
-            home_root = Path(os.path.expanduser("~")).resolve()
+            # Confinement root: an opt-in workspace (cfg.local_files_root) if set,
+            # else the user's home directory.
+            _root_cfg = str(getattr(context.cfg, "local_files_root", "") or "").strip()
+            root = (
+                Path(os.path.expanduser(_root_cfg)).resolve()
+                if _root_cfg else Path(os.path.expanduser("~")).resolve()
+            )
+
+            # Files that must never be read/written/deleted: the jarvis config
+            # (holds API keys) and the database (the user's whole memory).
+            protected: set = set()
+            try:
+                _db = str(getattr(context.cfg, "db_path", "") or "")
+                if _db:
+                    protected.add(Path(_db).expanduser().resolve())
+            except Exception:
+                pass
+            try:
+                from ...config import default_config_path
+                _cfg_path = os.environ.get("JARVIS_CONFIG_PATH") or str(default_config_path())
+                protected.add(Path(_cfg_path).expanduser().resolve())
+            except Exception:
+                pass
 
             def _expand_user_path(p: str) -> str:
                 if not isinstance(p, str):
@@ -49,13 +72,22 @@ class LocalFilesTool(Tool):
 
             def _resolve_safe(p: str) -> Path:
                 resolved = Path(_expand_user_path(p)).resolve()
+                # Must be the root or a descendant.
+                if not (resolved == root or str(resolved).startswith(str(root) + os.sep)):
+                    raise PermissionError(f"Path not allowed: {resolved}")
+                # Deny dotfiles / dot-directories anywhere below the root
+                # (.ssh, .config, .aws, .env, ...): reading them leaks secrets
+                # and they're rarely the intent of a voice file op.
                 try:
-                    # Allow exactly the home root or its descendants
-                    if resolved == home_root or str(resolved).startswith(str(home_root) + os.sep):
-                        return resolved
-                except Exception:
-                    pass
-                raise PermissionError(f"Path not allowed: {resolved}")
+                    rel = resolved.relative_to(root)
+                except ValueError:
+                    rel = None
+                if rel is not None and any(part.startswith(".") for part in rel.parts):
+                    raise PermissionError(f"Path not allowed (hidden): {resolved}")
+                # Deny the jarvis config + database explicitly.
+                if resolved in protected:
+                    raise PermissionError(f"Path not allowed (protected): {resolved}")
+                return resolved
 
             if not (args and isinstance(args, dict)):
                 return ToolExecutionResult(success=False, reply_text="localFiles requires a JSON object with at least 'operation' and 'path'.")
