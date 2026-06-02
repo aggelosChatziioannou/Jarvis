@@ -59,7 +59,7 @@ screenshotable). `useConnection()` exposes `{ state, connected, version }`;
 | Page | Phase | Data source |
 |---|---|---|
 | Dashboard | 4 | DONE (mirror + metrics) - operator mood from `/ws/state` (SceneStateBridge), SystemStatusPanel real CPU/RAM/VRAM/uptime/model + weather (`/api/system/metrics`), service glows from `/api/services/status`, StatusBar temperature; per-object click info-panel + action button deferred |
-| Memory | 3 | DONE (read + reminders CRUD) - real graph (`/api/graph/nodes` -> 3-branch view), timeline (reminders `/api/reminders` + diary `/api/memory`); EventStream add/complete/snooze wired; node CRUD-from-graph + detail-panel reminder delete/reschedule deferred. Provider `MemoryDataContext` fail-open to mock |
+| Memory | 3 | DONE (full CRUD) - real graph (`/api/graph/nodes` -> 3-branch view) + node content edit/delete (detail panel -> `/api/graph/node`), timeline (reminders `/api/reminders` + diary `/api/memory`), reminder add/complete/snooze/reschedule/cancel/delete. Provider `MemoryDataContext` fail-open to mock |
 | Audio I/O | 2 | DONE - real state (`/ws/state`), devices (`/api/audio/devices`), sensitivity + device select (`/api/config`), mute/tone; waveform/spectrum/orb-pulse kept as browser mic preview |
 | Live Logs | 1 | DONE - live `/ws/logs` (backfills ~100 on connect) via `console/lib/logMap.ts`; fail-open to demo generator |
 | Settings | 5 | DONE - NEW 5th tab; curated config editor (`settingsSchema`) over `/api/config` (masked round-trip, diff-only save), model selects from `/api/llm/models`, MCP toggles via `/api/mcps`. Restart-may-be-required notice |

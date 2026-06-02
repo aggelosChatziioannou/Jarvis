@@ -19,6 +19,12 @@ export interface MemoryData {
   completeReminder: (id: string) => Promise<void>
   snoozeReminder: (id: string) => Promise<void>
   deleteReminder: (id: string) => Promise<void>
+  rescheduleReminder: (id: string, date: string, time: string) => Promise<void>
+  setReminderStatus: (id: string, status: 'completed' | 'cancelled') => Promise<void>
+  /** Fetch the full node (incl. its data/facts) for the detail editor. */
+  fetchNodeData: (id: string) => Promise<string>
+  saveNodeData: (id: string, data: string) => Promise<void>
+  deleteNode: (id: string) => Promise<void>
 }
 
 function isoFrom(date: string, time: string): string {
@@ -98,6 +104,40 @@ function useMemoryData(): MemoryData {
     },
     [reloadReminders],
   )
+  const rescheduleReminder = useCallback(
+    async (id: string, date: string, time: string) => {
+      await memoryApi.updateReminder(id, { status: 'pending', trigger_at: isoFrom(date, time) })
+      await reloadReminders()
+    },
+    [reloadReminders],
+  )
+  const setReminderStatus = useCallback(
+    async (id: string, status: 'completed' | 'cancelled') => {
+      await memoryApi.updateReminder(id, { status })
+      await reloadReminders()
+    },
+    [reloadReminders],
+  )
+
+  const fetchNodeData = useCallback(async (id: string) => {
+    const res = await memoryApi.node(id)
+    const data = (res.node as { data?: unknown }).data
+    return typeof data === 'string' ? data : ''
+  }, [])
+  const saveNodeData = useCallback(
+    async (id: string, data: string) => {
+      await memoryApi.updateNode(id, { data })
+      await load()
+    },
+    [load],
+  )
+  const deleteNode = useCallback(
+    async (id: string) => {
+      await memoryApi.deleteNode(id)
+      await load()
+    },
+    [load],
+  )
 
   return {
     live,
@@ -110,6 +150,11 @@ function useMemoryData(): MemoryData {
     completeReminder,
     snoozeReminder,
     deleteReminder,
+    rescheduleReminder,
+    setReminderStatus,
+    fetchNodeData,
+    saveNodeData,
+    deleteNode,
   }
 }
 

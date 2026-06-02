@@ -72,6 +72,7 @@ function MemoryPageInner() {
           collapsed={zone3Collapsed}
           onToggleCollapse={() => setZone3Collapsed(!zone3Collapsed)}
           onNodeSelect={setSelectedNode}
+          onReminderSelect={handleReminderSelect}
         />
       </div>
     </div>
