@@ -742,6 +742,150 @@ def reminders_delete(rid: str) -> Dict[str, Any]:
     return {"ok": True, "id": rid}
 
 
+# ---------- System metrics + service status (Dashboard) ----------
+# All best-effort and local-first: each metric is independently guarded so a
+# missing GPU / offline Ollama / failed weather never breaks the panel.
+
+_weather_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_WEATHER_TTL_SEC = 900  # 15 min — the dashboard polls; don't hammer Open-Meteo.
+
+
+def _read_weather() -> Optional[Dict[str, Any]]:
+    now = time.time()
+    cached = _weather_cache.get("data")
+    if cached is not None and now - float(_weather_cache.get("at", 0)) < _WEATHER_TTL_SEC:
+        return cached
+    try:
+        import requests
+        from .utils.location import get_location_info
+        from .tools.builtin.weather import WMO_CODES
+
+        settings = _load_settings_safe()
+        loc = get_location_info(
+            config_ip=getattr(settings, "location_ip_address", None),
+            auto_detect=getattr(settings, "location_auto_detect", True),
+        )
+        lat = loc.get("latitude")
+        lon = loc.get("longitude")
+        if lat is None or lon is None:
+            return None
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": lat, "longitude": lon, "current_weather": "true"},
+            timeout=5,
+        )
+        cw = resp.json().get("current_weather", {}) or {}
+        data = {
+            "temp_c": cw.get("temperature"),
+            "description": WMO_CODES.get(int(cw.get("weathercode", -1)), "Unknown"),
+            "place": loc.get("city") or loc.get("region") or "",
+        }
+        _weather_cache["data"] = data
+        _weather_cache["at"] = now
+        return data
+    except Exception as e:
+        debug_log(f"weather read failed: {type(e).__name__}", "tools")
+        return None
+
+
+@app.get("/api/system/metrics")
+def system_metrics() -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "uptime_sec": time.time() - _started_at,
+        "cpu_percent": None,
+        "ram": None,
+        "gpu": None,
+        "models": [],
+        "weather": None,
+    }
+    try:
+        import psutil
+
+        out["cpu_percent"] = psutil.cpu_percent(interval=None)
+        vm = psutil.virtual_memory()
+        out["ram"] = {"used": int(vm.used), "total": int(vm.total), "percent": float(vm.percent)}
+    except Exception:
+        pass
+    try:
+        import subprocess
+
+        res = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used,memory.total,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=4,
+        )
+        first = res.stdout.strip().splitlines()[0]
+        used, total, util = [p.strip() for p in first.split(",")]
+        out["gpu"] = {
+            "mem_used_mb": int(used),
+            "mem_total_mb": int(total),
+            "util_percent": int(util),
+        }
+    except Exception:
+        pass
+    try:
+        import requests
+
+        settings = _load_settings_safe()
+        base = getattr(settings, "ollama_base_url", "http://localhost:11434")
+        resp = requests.get(base.rstrip("/") + "/api/ps", timeout=4)
+        out["models"] = [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
+    except Exception:
+        pass
+    out["weather"] = _read_weather()
+    return out
+
+
+@app.get("/api/services/status")
+def services_status() -> List[Dict[str, Any]]:
+    """Per-service enable + a cheap detail string for the Dashboard glows."""
+    try:
+        cfg = _load_json(default_config_path()) or {}
+    except Exception:
+        cfg = {}
+    enabled_ids = {
+        s.get("id") for s in cfg.get("mcp_servers", []) if isinstance(s, dict)
+    }
+    out: List[Dict[str, Any]] = []
+
+    # Reminders: real local pending/snoozed count.
+    pending = 0
+    try:
+        from .reminders.models import ReminderStatus
+
+        store = _resolve_reminder_store()
+        pending = sum(
+            1 for _ in store.list([ReminderStatus.PENDING, ReminderStatus.SNOOZED])
+        )
+    except Exception:
+        pending = 0
+    out.append({
+        "id": "reminders", "name": "Reminders", "enabled": True, "connected": True,
+        "detail": f"{pending} pending", "count": pending,
+    })
+
+    # Weather: builtin (no auth); detail is the cached current conditions.
+    w = _read_weather()
+    out.append({
+        "id": "weather", "name": "Weather", "enabled": True, "connected": w is not None,
+        "detail": (f"{round(w['temp_c'])}°C {w['description']}" if w and w.get("temp_c") is not None else "unavailable"),
+    })
+
+    # MCP-backed services: enabled flag (auth wiring lands in Phase 6).
+    for sid, name in (("spotify", "Spotify"), ("gmail", "Gmail"), ("calendar", "Calendar")):
+        en = sid in enabled_ids
+        out.append({
+            "id": sid, "name": name, "enabled": en, "connected": en,
+            "detail": "enabled" if en else "disabled",
+        })
+    return out
+
+
 # ---------- Fast paths ----------
 
 @app.get("/api/fastpaths")
