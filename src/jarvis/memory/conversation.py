@@ -1719,14 +1719,25 @@ def consolidate_previous_month(
             picker_model=picker_model,
         )
         if result and getattr(result, "stored", None):
-            folded = "\n".join(result.stored)
+            # ``stored`` is list[tuple[fact, node_name]] — project the fact
+            # text. (Defensive: tolerate a bare string entry too.) The previous
+            # "\n".join(result.stored) raised TypeError on the tuples, was
+            # swallowed, and the raw diary got truncated + deleted = data loss.
+            def _fact_text(entry):
+                if isinstance(entry, (tuple, list)):
+                    return str(entry[0]) if entry else ""
+                return str(entry)
+            folded = "\n".join(_fact_text(e) for e in result.stored if e)
     except Exception as exc:
         debug_log(
             f"monthly consolidation fold failed (non-fatal): {type(exc).__name__}", "memory"
         )
 
     if not folded:
-        folded = joined[:2000]  # fallback: archive a truncated narrative
+        # Fallback: archive the FULL month narrative (not a truncated slice) so
+        # that even a fold failure never loses detail before the raw rows are
+        # deleted below.
+        folded = joined
 
     db.archive_month(month_year, consolidated_summary=folded, original_count=len(rows))
     if delete_raw:

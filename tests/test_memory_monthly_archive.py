@@ -28,6 +28,59 @@ def _fake_fold(**kwargs):
     return SimpleNamespace(stored=["the user likes X"], skipped=0)
 
 
+def _fake_fold_tuples(**kwargs):
+    # The REAL update_graph_from_dialogue returns list[tuple[fact, node_name]].
+    return SimpleNamespace(
+        stored=[
+            ("the user lives in Thessaloniki", "User"),
+            ("the user likes hiking", "User/interests"),
+        ],
+        skipped=0,
+    )
+
+
+def _fake_fold_empty(**kwargs):
+    return SimpleNamespace(stored=[], skipped=0)
+
+
+@pytest.mark.unit
+def test_consolidate_archives_folded_fact_text_not_truncated_raw(store, db, monkeypatch):
+    """The archive must hold the FOLDED FACT TEXT, not a truncated raw diary.
+
+    Regression: folding returns list[tuple], but the code did "\\n".join(stored)
+    over tuples → TypeError → caught → folded="" → the raw diary was truncated
+    to 2000 chars and archived while the source was deleted = permanent loss.
+    """
+    monkeypatch.setattr(graph_ops, "update_graph_from_dialogue", _fake_fold_tuples)
+    big = "x" * 2500  # > 2000 so the old truncation fallback would be visible
+    db.upsert_conversation_summary("2026-04-03", big)
+
+    month = consolidate_previous_month(db, store, "http://x", "m", now=MAY_15)
+    assert month == "2026-04"
+    arch = db.conn.execute(
+        "SELECT * FROM episodic_archive WHERE month_year='2026-04'"
+    ).fetchone()
+    summary = arch["consolidated_summary"]
+    assert "the user lives in Thessaloniki" in summary
+    assert "the user likes hiking" in summary
+    assert "xxxx" not in summary  # not the raw diary blob
+
+
+@pytest.mark.unit
+def test_consolidate_fallback_preserves_full_narrative(store, db, monkeypatch):
+    """If folding yields nothing, archive the FULL narrative (no 2000-char cut)
+    before deleting the raw rows, so no detail is ever silently lost."""
+    monkeypatch.setattr(graph_ops, "update_graph_from_dialogue", _fake_fold_empty)
+    big = "A" * 3000
+    db.upsert_conversation_summary("2026-04-03", big)
+
+    consolidate_previous_month(db, store, "http://x", "m", now=MAY_15)
+    arch = db.conn.execute(
+        "SELECT * FROM episodic_archive WHERE month_year='2026-04'"
+    ).fetchone()
+    assert len(arch["consolidated_summary"]) >= 3000
+
+
 @pytest.mark.unit
 def test_consolidate_archives_prev_month_and_removes_raw(store, db, monkeypatch):
     monkeypatch.setattr(graph_ops, "update_graph_from_dialogue", _fake_fold)
