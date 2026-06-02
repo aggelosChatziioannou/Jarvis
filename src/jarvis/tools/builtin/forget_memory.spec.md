@@ -22,17 +22,30 @@ resolution).
 
 ## Two-turn safety: propose → confirm (unbypassable)
 
-1. **Propose.** The first call finds the stored fact lines matching the
-   subject, stashes them in a process-wide single-slot pending buffer
-   (TTL `_PENDING_TTL_SEC` = 120 s) and **deletes nothing**. It returns a
-   `requires_confirmation:` raw result listing what would be removed.
-2. **Confirm.** Deletion happens only against a *fresh* pending proposal. A
-   premature `confirm: true` on the very first call (no fresh pending) falls
-   through to a propose, so a single misheard "forget …" can never wipe
-   memory on its own.
+1. **Propose.** A call WITHOUT `confirm: true` finds the stored fact lines
+   matching the subject, stashes them in a process-wide single-slot pending
+   buffer (TTL `_PENDING_TTL_SEC` = 120 s) and **deletes nothing**. It returns
+   a `requires_confirmation:` raw result listing what would be removed.
+2. **Confirm.** Deletion happens **only** when the tool is called with an
+   explicit `confirm: true` AND a *fresh* pending proposal exists. A premature
+   `confirm: true` with no fresh pending falls through to a propose.
 
-The pending buffer is the only path to deletion; widening recall (below) only
-widens what is *proposed*, never what is deleted without consent.
+**The unbypassable guard:** a bare `forgetMemory` call (no `confirm: true`) can
+NEVER delete, however it was routed or force-executed — it only ever proposes.
+Deletion requires a deliberate confirm signal, so a single misheard "forget …",
+a refusal that happens to reach the tool, or a stray/stale call cannot wipe
+memory. Widening recall (below) only widens what is *proposed*, never what is
+deleted.
+
+The deliberate `confirm: true` signal is emitted by the **chat model** on its
+own assent judgement — seeing the prior turn's `requires_confirmation:` result
+via dialogue carryover plus the user's reply, it calls
+`forgetMemory(confirm: true)` on agreement and does not on a refusal. This is
+exactly the vision engine's `confirmScreenAction` pattern. The engine never
+fabricates the confirm signal, because it cannot reliably distinguish assent
+("yes, delete it") from a refusal or a *different* new "forget Y" without
+understanding the utterance — guessing would risk deleting the wrong thing or
+deleting without consent.
 
 ## Subject resolution (router-argument-tolerant)
 
@@ -69,19 +82,23 @@ the fused router sometimes routes the confirmation turn to a different tool
 (a diet-related "yes, remove that" can route to `deleteMeal`). Two engine-side
 mechanisms make the flow reliable without any prompt change:
 
-- **Force-execution.** `forgetMemory` is force-executed via the plan
-  direct-exec path on *any* model size (like the vision perception tools, see
-  `planner.spec.md`). The bare `forgetMemory` plan step fast-parses to
-  `(forgetMemory, {})` and the tool derives the subject from the utterance, so
-  unreliable router arguments do not matter.
-- **Pending-aware allow-list + consent.** While a fresh proposal is pending
+- **Force-execution of the PROPOSE only.** A `forgetMemory` plan step is
+  force-executed via the plan direct-exec path on *any* model size (like the
+  vision perception tools, see `planner.spec.md`) **only when no proposal is
+  pending** (`has_fresh_pending()` is False) — i.e. the propose turn. The bare
+  `forgetMemory` step fast-parses to `(forgetMemory, {})` and the tool derives
+  the subject from the utterance, so unreliable router arguments do not matter.
+  The CONFIRM turn is intentionally left to the chat model (see above): forcing
+  it would mean guessing consent.
+- **Pending-aware allow-list.** While a fresh proposal is pending
   (`has_fresh_pending()`), the engine keeps `forgetMemory` in the turn's
-  allow-list so the user's assent is honoured even if the router classified the
-  confirmation turn as another tool. Reaching the tool again while a proposal
-  is pending is treated as **consent** — safe because the upstream router does
-  not route refusals ("no, keep it") to a deletion tool (verified EN + EL). If
-  the user instead names a *different* stored fact, the tool re-proposes that
-  one rather than confirming the first.
+  allow-list so the chat model can emit `forgetMemory(confirm: true)` even if
+  the router classified the confirmation turn as another tool. This is safe
+  because deletion still requires the explicit `confirm: true` signal (see the
+  unbypassable guard above): merely keeping the tool available cannot delete,
+  since a refusal turn carries no `confirm: true` and does not trigger
+  force-exec. Naming a *different* stored fact (a non-confirm call) simply
+  re-proposes that fact.
 
 ## Raw-result contract (anti-confabulation)
 

@@ -231,16 +231,33 @@ def test_subject_falls_back_to_utterance_when_args_wrong(graph_db, monkeypatch):
     assert "lives in London" in _all_data(graph_db)   # proposed, nothing deleted
 
 
-def test_routed_call_while_pending_confirms_and_deletes(graph_db, monkeypatch):
+def test_explicit_confirm_deletes_pending(graph_db, monkeypatch):
     fm._reset_pending()
     monkeypatch.setattr(fm, "_embed_text", _london_cluster_embed)
     tool = ForgetMemoryTool()
-    tool.run({}, _utterance_ctx(graph_db, "forget that I live in London"))     # propose
-    # A routed assent with no 'confirm' flag and no new subject -> consent.
-    tool.run({}, _utterance_ctx(graph_db, "yes, delete it please"))            # confirm
+    tool.run({}, _utterance_ctx(graph_db, "forget that I live in London"))      # propose
+    # The deliberate confirm signal (set by the engine on a router-gated assent
+    # turn, or emitted by the model) deletes.
+    tool.run({"confirm": True}, _utterance_ctx(graph_db, "yes, delete it"))     # confirm
     data = _all_data(graph_db)
     assert "lives in London" not in data
     assert "likes hiking" in data
+
+
+def test_bare_call_while_pending_never_deletes(graph_db, monkeypatch):
+    """SAFETY: a forgetMemory call WITHOUT confirm=true must never delete, even
+    while a proposal is pending — so a refusal / misfire that reaches the tool
+    cannot wipe memory. Deletion requires a deliberate confirm signal."""
+    fm._reset_pending()
+    monkeypatch.setattr(fm, "_embed_text", _london_cluster_embed)
+    tool = ForgetMemoryTool()
+    tool.run({}, _utterance_ctx(graph_db, "forget that I live in London"))      # propose
+    # A refusal-style turn reaching the tool with no confirm flag.
+    tool.run({}, _utterance_ctx(graph_db, "no, actually keep it, never mind"))  # must NOT delete
+    assert "lives in London" in _all_data(graph_db)
+    # An unrelated bare call must not delete the stale pending either.
+    tool.run({}, _utterance_ctx(graph_db, "what is the time"))
+    assert "lives in London" in _all_data(graph_db)
 
 
 def test_has_fresh_pending_tracks_proposal_lifecycle(graph_db):

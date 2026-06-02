@@ -549,6 +549,199 @@ def graph_scrub_facts(apply: bool = False, body: Optional[GraphScrubApply] = Non
     )
 
 
+# ---------- Knowledge graph (read + CRUD) ----------
+# Thin HTTP bridge over GraphMemoryStore for the console Memory page. Reads
+# fail open (empty result) so the page stays alive; writes raise HTTPException.
+# The real 3-branch taxonomy (user/directives/world) and root are structural
+# and non-deletable (enforced by the store).
+
+
+@app.get("/api/graph/nodes")
+def graph_nodes(root: str = "root", depth: int = 4) -> Dict[str, Any]:
+    """Nodes + edges for the graph canvas (defaults to the whole tree)."""
+    try:
+        store = _resolve_graph_store()
+        return store.get_graph_data(root_id=root, max_depth=depth)
+    except Exception as e:
+        debug_log(f"graph nodes failed: {type(e).__name__}", "memory")
+        return {"nodes": [], "edges": []}
+
+
+@app.get("/api/graph/stats")
+def graph_stats() -> Dict[str, Any]:
+    try:
+        store = _resolve_graph_store()
+        return {"nodes": store.get_node_count(), "tokens": store.get_total_tokens()}
+    except Exception as e:
+        debug_log(f"graph stats failed: {type(e).__name__}", "memory")
+        return {"nodes": 0, "tokens": 0}
+
+
+@app.get("/api/graph/search")
+def graph_search(q: str, limit: int = 20) -> List[Dict[str, Any]]:
+    try:
+        store = _resolve_graph_store()
+        return [n.to_dict() for n in store.search_nodes(q, limit=limit)]
+    except Exception as e:
+        debug_log(f"graph search failed: {type(e).__name__}", "memory")
+        return []
+
+
+@app.get("/api/graph/node/{node_id}")
+def graph_get_node(node_id: str) -> Dict[str, Any]:
+    """A single node plus its children and breadcrumb ancestors."""
+    store = _resolve_graph_store()
+    node = store.get_node(node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="node not found")
+    return {
+        "node": node.to_dict(),
+        "children": [c.to_dict() for c in store.get_children(node_id)],
+        "ancestors": [a.to_dict() for a in store.get_ancestors(node_id)],
+    }
+
+
+class GraphNodeCreate(BaseModel):
+    name: str
+    description: str = ""
+    data: str = ""
+    parent_id: Optional[str] = None
+
+
+@app.post("/api/graph/node")
+def graph_create_node(body: GraphNodeCreate) -> Dict[str, Any]:
+    store = _resolve_graph_store()
+    try:
+        node = store.create_node(body.name, body.description, body.data, body.parent_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return node.to_dict()
+
+
+class GraphNodeUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    data: Optional[str] = None
+
+
+@app.put("/api/graph/node/{node_id}")
+def graph_update_node(node_id: str, body: GraphNodeUpdate) -> Dict[str, Any]:
+    store = _resolve_graph_store()
+    node = store.update_node(
+        node_id, name=body.name, description=body.description, data=body.data
+    )
+    if node is None:
+        raise HTTPException(status_code=404, detail="node not found")
+    return node.to_dict()
+
+
+@app.delete("/api/graph/node/{node_id}")
+def graph_delete_node(node_id: str) -> Dict[str, Any]:
+    store = _resolve_graph_store()
+    if not store.delete_node(node_id):
+        # Missing, or a protected structural node (root / fixed branch).
+        raise HTTPException(status_code=400, detail="node not deletable (missing or structural)")
+    return {"ok": True, "id": node_id}
+
+
+# ---------- Reminders (read + CRUD) ----------
+# Bridge over ReminderStore. Delete is a soft-cancel (status -> cancelled),
+# matching the store's lifecycle (there is no hard delete).
+
+
+def _resolve_reminder_store():
+    from .reminders.store import ReminderStore
+
+    settings = _load_settings_safe()
+    return ReminderStore(settings.db_path)
+
+
+def _reminder_to_dict(r) -> Dict[str, Any]:
+    return {
+        "id": r.id,
+        "text": r.text,
+        "trigger_at": r.trigger_at.isoformat() if r.trigger_at else None,
+        "recurring_rule": r.recurring_rule,
+        "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+        "snooze_until": r.snooze_until.isoformat() if r.snooze_until else None,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "source": r.source,
+    }
+
+
+@app.get("/api/reminders")
+def reminders_list() -> List[Dict[str, Any]]:
+    try:
+        store = _resolve_reminder_store()
+        return [_reminder_to_dict(r) for r in store.list()]
+    except Exception as e:
+        debug_log(f"reminders list failed: {type(e).__name__}", "reminders")
+        return []
+
+
+class ReminderCreate(BaseModel):
+    text: str
+    trigger_at: str  # ISO 8601 datetime
+    recurring_rule: Optional[str] = None
+
+
+@app.post("/api/reminders")
+def reminders_create(body: ReminderCreate) -> Dict[str, Any]:
+    from datetime import datetime
+
+    try:
+        when = datetime.fromisoformat(body.trigger_at)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="trigger_at must be ISO 8601")
+    store = _resolve_reminder_store()
+    rid = store.create(body.text, when, body.recurring_rule, source="console")
+    r = store.get(rid)
+    return _reminder_to_dict(r) if r else {"id": rid}
+
+
+class ReminderUpdate(BaseModel):
+    status: Optional[str] = None  # completed | cancelled | snoozed | pending
+    snooze_until: Optional[str] = None  # ISO, required when status=snoozed
+    trigger_at: Optional[str] = None  # ISO, required when status=pending (reschedule)
+
+
+@app.put("/api/reminders/{rid}")
+def reminders_update(rid: str, body: ReminderUpdate) -> Dict[str, Any]:
+    from datetime import datetime
+
+    store = _resolve_reminder_store()
+    if store.get(rid) is None:
+        raise HTTPException(status_code=404, detail="reminder not found")
+    status = (body.status or "").lower()
+    try:
+        if status == "completed":
+            store.mark_completed(rid)
+        elif status == "cancelled":
+            store.cancel(rid)
+        elif status == "snoozed":
+            if not body.snooze_until:
+                raise HTTPException(status_code=400, detail="snooze_until required for snooze")
+            store.snooze(rid, datetime.fromisoformat(body.snooze_until))
+        elif status == "pending":
+            if not body.trigger_at:
+                raise HTTPException(status_code=400, detail="trigger_at required to reschedule")
+            store.reschedule(rid, datetime.fromisoformat(body.trigger_at))
+        else:
+            raise HTTPException(status_code=400, detail="unsupported status")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="datetime must be ISO 8601")
+    r = store.get(rid)
+    return _reminder_to_dict(r) if r else {"ok": True, "id": rid}
+
+
+@app.delete("/api/reminders/{rid}")
+def reminders_delete(rid: str) -> Dict[str, Any]:
+    store = _resolve_reminder_store()
+    if not store.cancel(rid):
+        raise HTTPException(status_code=404, detail="reminder not found")
+    return {"ok": True, "id": rid}
+
+
 # ---------- Fast paths ----------
 
 @app.get("/api/fastpaths")

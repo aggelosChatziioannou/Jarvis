@@ -166,16 +166,19 @@ The engine consumes the plan in two phases.
   (`clickScreen`/`typeOnScreen`/`scrollScreen`) are excluded — they have
   side effects and their own safety gating, so they stay on the normal
   model-driven path.
-- **forgetMemory exception (any model size).** Direct-exec also fires when
-  the next plan tool step names `forgetMemory`, on any model size. The chat
-  model is unreliable here — it narrates a confabulated "deleted that for
-  you" without ever emitting the call — yet the operation must run for
-  "forget X" to propose and for an assent to delete. This is safe despite the
-  side effect because the tool's own propose → confirm + pending state mean a
-  first call only PROPOSES (deletes nothing), and the upstream router never
-  routes refusals to a deletion tool. The bare `forgetMemory` step
-  fast-parses to `(forgetMemory, {})` and the tool derives its subject from
-  the user's utterance. See `tools/builtin/forget_memory.spec.md`.
+- **forgetMemory exception (any model size, PROPOSE turn only).** Direct-exec
+  also fires when the next plan tool step names `forgetMemory` AND no proposal
+  is pending (`has_fresh_pending()` is False), on any model size. The chat
+  model is unreliable here — it narrates a confabulated "deleted that for you"
+  without emitting the call — so forcing the PROPOSE guarantees the user sees
+  what would be removed. The bare `forgetMemory` step fast-parses to
+  `(forgetMemory, {})` and the tool derives its subject from the user's
+  utterance. The CONFIRM turn is deliberately NOT force-executed — it is left
+  to the chat model (which sees the propose result via dialogue carryover and
+  emits `forgetMemory(confirm=true)` on judged assent), because force-executing
+  it would have to guess consent. Deletion requires that explicit
+  `confirm=true`, so a forced propose can never delete.
+  See `tools/builtin/forget_memory.spec.md`.
 - The chat model still runs the final synthesis turn so the reply is
   phrased in the daemon's voice using its own profile and persona.
 

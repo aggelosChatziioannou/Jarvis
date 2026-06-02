@@ -251,41 +251,33 @@ class ForgetMemoryTool(Tool):
         confirm = bool(args.get("confirm"))
         subject = self._resolve_subject(args, context)
 
-        from ...memory.graph import GraphMemoryStore, normalise_fact
+        from ...memory.graph import GraphMemoryStore
         store = GraphMemoryStore(context.cfg.db_path)
         try:
-            pending_subject, pending_matches = self._fresh_pending()
+            # ---- DELETION requires an EXPLICIT confirm=true against a fresh
+            # proposal. This is the unbypassable guard: a bare forgetMemory
+            # call (however it was routed or force-executed) can NEVER delete —
+            # only a deliberate confirm signal does. The confirm signal comes
+            # from (a) the engine, which sets confirm=true when it force-executes
+            # forgetMemory while a proposal is already pending (and force-exec is
+            # router-gated, so it fires only on an assent-classified turn —
+            # refusals route elsewhere), or (b) the chat model emitting
+            # forgetMemory(confirm=true) on its own assent judgement (mirrors the
+            # vision engine's confirmScreenAction). A refusal therefore cannot
+            # delete: it carries no confirm=true and does not trigger force-exec.
+            if confirm:
+                _pending_subject, pending_matches = self._fresh_pending()
+                if pending_matches:
+                    return self._confirm(store, pending_matches, context)
+                # confirm=true with no fresh pending (e.g. a premature confirm
+                # on the very first call) — fail safe by proposing instead.
+                debug_log("forgetMemory: confirm with no fresh pending — proposing instead", "memory")
+                return self._propose(store, subject, context)
 
-            # ---- A fresh proposal is awaiting the user's decision ----
-            # The engine force-executes forgetMemory, so reaching it again while
-            # a proposal is pending means the upstream router classified this
-            # turn as forget-related. Refusals ("no, keep it") are NOT routed
-            # here, so this is genuine assent — UNLESS the user named a
-            # *different* stored fact, in which case we propose that instead.
-            if pending_matches:
-                if not confirm and subject:
-                    base_url = str(getattr(context.cfg, "ollama_base_url", "") or "")
-                    embed_model = str(getattr(context.cfg, "ollama_embed_model", "") or "")
-                    try:
-                        threshold = float(getattr(context.cfg, "memory_forget_semantic_threshold", 0.82) or 0.82)
-                    except (TypeError, ValueError):
-                        threshold = 0.82
-                    new_matches = _match_lines(
-                        store, subject,
-                        base_url=base_url, embed_model=embed_model, threshold=threshold,
-                    )
-                    pending_norm = {normalise_fact(l) for _id, l in pending_matches}
-                    new_norm = {normalise_fact(l) for _id, l in new_matches}
-                    if new_matches and not new_norm.issubset(pending_norm):
-                        # User pivoted to a different stored fact — propose it.
-                        debug_log("forgetMemory: pending superseded by a new distinct subject", "memory")
-                        return self._propose(store, subject, context)
-                # Assent (or explicit confirm) — delete the pending proposal.
-                return self._confirm(store, pending_matches, context)
-
-            # ---- No pending proposal: PROPOSE (deletes nothing) ----
-            # A premature confirm=true on the very first call has no fresh
-            # pending to act on, so it safely falls through to a proposal.
+            # No explicit confirm -> PROPOSE (deletes nothing). A second
+            # non-confirm call simply re-proposes (replacing any stale pending),
+            # so naming a different fact while one is pending switches targets
+            # rather than confirming the first.
             return self._propose(store, subject, context)
         finally:
             store.close()

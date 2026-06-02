@@ -2414,23 +2414,32 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _vtool = vision_tool_in_step(_next_step_text)
             if _vtool is not None:
                 _next_step_text = _vtool
-            # forgetMemory is force-executed on ANY model size too. The chat
-            # model (especially the 9B on the fused path) unreliably emits this
-            # call — it narrates a confabulated "deleted that for you" without
-            # ever invoking the tool — yet the operation must actually run for
-            # "forget X" to propose and for an assent to actually delete. Safe
-            # despite side effects: the tool's propose->confirm + pending state
-            # mean a first call only PROPOSES (deletes nothing), and the upstream
-            # router never routes refusals here, so a routed forget while a
-            # proposal is pending is genuine assent. The bare "forgetMemory" step
-            # fast-parses to (forgetMemory, {}) and the tool derives its subject
-            # from the user's own utterance (the fused argument names are
-            # unreliable). See forget_memory.spec.md.
-            _forget_step = bool(re.match(r"^\s*forgetMemory\b", _next_step_text or ""))
+            # forgetMemory is force-executed on ANY model size, but ONLY on the
+            # PROPOSE turn (no proposal pending yet). The chat model unreliably
+            # emits the call — it narrates a confabulated "deleted that for you"
+            # without invoking the tool — so forcing the PROPOSE guarantees the
+            # user actually sees what would be removed. The bare "forgetMemory"
+            # step fast-parses to (forgetMemory, {}) and the tool derives its
+            # subject from the user's utterance (the fused argument names are
+            # unreliable). The CONFIRM turn is deliberately NOT force-executed:
+            # it is left to the chat model, which — seeing the prior turn's
+            # requires_confirmation result via dialogue carryover — emits
+            # forgetMemory(confirm=true) on its own assent judgement (mirrors the
+            # vision confirmScreenAction flow). Force-executing the confirm would
+            # have to GUESS consent, which is unsafe (a refusal, or a different
+            # new "forget Y", could be mistaken for assent to the pending Y).
+            # See forget_memory.spec.md.
+            _forget_propose_step = False
+            if re.match(r"^\s*forgetMemory\b", _next_step_text or ""):
+                try:
+                    from ..tools.builtin.forget_memory import has_fresh_pending as _fm_pending
+                    _forget_propose_step = not _fm_pending()
+                except Exception:
+                    _forget_propose_step = True
             _direct_exec_active = (
                 (use_text_tools and not _plan_under_specified)
                 or _vtool is not None
-                or _forget_step
+                or _forget_propose_step
             )
             if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False
