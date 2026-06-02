@@ -199,9 +199,98 @@ def cmd_trigger() -> CommandResponse:
 
 # ---------- Config (read/write the JSON file directly) ----------
 
+# Sentinel shown by GET /api/config in place of a stored secret. The UI renders
+# it as "a value is set" without ever seeing the secret. PATCH treats an
+# incoming value equal to this sentinel as "leave unchanged", so a round-trip
+# of the masked config never wipes stored credentials.
+_SECRET_MASK = "••••••"  # ••••••
+
+# Name heuristic (not a hardcoded field list, so new secret keys are covered
+# automatically): any top-level key whose name contains one of these is masked,
+# plus every value inside an MCP server ``env`` block.
+_SECRET_KEY_HINTS = ("api_key", "apikey", "secret", "password", "passwd", "token", "credential")
+
+
+def _is_secret_key(key: str) -> bool:
+    k = str(key).lower()
+    return any(hint in k for hint in _SECRET_KEY_HINTS)
+
+
+def _mask_env(env: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: (_SECRET_MASK if v else "") for k, v in env.items()}
+
+
+def _mask_secrets(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a deep copy of ``cfg`` with secret values replaced by the mask.
+
+    Masks top-level secret-named keys and every value inside ``mcps[*].env`` /
+    ``mcp_servers[*].env`` (where MCP credentials live). Non-secret values pass
+    through unchanged.
+    """
+    import copy
+    if not isinstance(cfg, dict):
+        return cfg
+    masked = copy.deepcopy(cfg)
+    for key, value in list(masked.items()):
+        if key == "mcps" and isinstance(value, dict):
+            for srv in value.values():
+                if isinstance(srv, dict) and isinstance(srv.get("env"), dict):
+                    srv["env"] = _mask_env(srv["env"])
+        elif key == "mcp_servers" and isinstance(value, list):
+            for srv in value:
+                if isinstance(srv, dict) and isinstance(srv.get("env"), dict):
+                    srv["env"] = _mask_env(srv["env"])
+        elif _is_secret_key(key) and isinstance(value, str):
+            masked[key] = _SECRET_MASK if value else ""
+    return masked
+
+
+def _restore_masked(updates: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve mask sentinels in ``updates`` against the stored ``current`` config.
+
+    A masked value coming back from the UI means "unchanged" — we substitute
+    the real stored value (or drop the key) so writing the config never wipes a
+    secret the UI never actually saw. Applies to top-level secret keys and to
+    ``env`` values inside ``mcps`` / ``mcp_servers``.
+    """
+    import copy
+    if not isinstance(updates, dict):
+        return updates
+    cleaned = copy.deepcopy(updates)
+    cur = current if isinstance(current, dict) else {}
+    for key, value in list(cleaned.items()):
+        if isinstance(value, str) and value == _SECRET_MASK:
+            if key in cur:
+                cleaned[key] = cur[key]
+            else:
+                del cleaned[key]
+        elif key == "mcps" and isinstance(value, dict):
+            cur_mcps = cur.get("mcps", {}) if isinstance(cur.get("mcps"), dict) else {}
+            for sid, srv in value.items():
+                if isinstance(srv, dict) and isinstance(srv.get("env"), dict):
+                    cur_env = (cur_mcps.get(sid, {}) or {}).get("env", {}) if isinstance(cur_mcps.get(sid), dict) else {}
+                    srv["env"] = {
+                        ek: (cur_env.get(ek, "") if ev == _SECRET_MASK else ev)
+                        for ek, ev in srv["env"].items()
+                    }
+        elif key == "mcp_servers" and isinstance(value, list):
+            cur_servers = cur.get("mcp_servers", []) if isinstance(cur.get("mcp_servers"), list) else []
+            cur_by_id = {s.get("id"): s for s in cur_servers if isinstance(s, dict)}
+            for srv in value:
+                if isinstance(srv, dict) and isinstance(srv.get("env"), dict):
+                    cur_env = (cur_by_id.get(srv.get("id"), {}) or {}).get("env", {})
+                    srv["env"] = {
+                        ek: (cur_env.get(ek, "") if ev == _SECRET_MASK else ev)
+                        for ek, ev in srv["env"].items()
+                    }
+    return cleaned
+
+
 @app.get("/api/config")
 def get_config() -> Dict[str, Any]:
-    return load_config()
+    # Mask secrets: this endpoint is unauthenticated loopback, so it must never
+    # return stored credentials in clear text. Privacy first.
+    return _mask_secrets(load_config())
 
 
 class ConfigPatch(BaseModel):
@@ -214,7 +303,10 @@ def patch_config(patch: ConfigPatch) -> Dict[str, Any]:
     current = _load_json(cfg_path)
     if not isinstance(current, dict):
         current = {}
-    current.update(patch.updates)
+    # Resolve any masked secret sentinels back to the stored values so a UI
+    # round-trip of the masked config can never wipe a credential.
+    updates = _restore_masked(patch.updates, current)
+    current.update(updates)
     # Use the safety-net writer: takes a snapshot first, then atomic-write.
     # If the file is corrupted mid-write (crash/reboot), the previous version
     # is preserved.
