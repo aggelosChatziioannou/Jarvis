@@ -35,6 +35,16 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 - **Output**: strict JSON `IntentJudgment{directed, query, stop, confidence, reasoning}` ([intent_judge.py:94](src/jarvis/listening/intent_judge.py:94)). Consumed by the listening state machine which dispatches to the reply engine.
 - **Limits**: `intent_judge_timeout_sec` (15s). `num_ctx: 8192` (explicit — system prompt is ~2k tokens after PR #362, and the rolling transcript buffer at default `transcript_buffer_duration_sec=120` can reach ~1.5k tokens in chatty multi-speaker scenes; 4096 left ~10% headroom and risked silent ollama truncation of the system prompt's tail, where the few-shot examples and TRANSCRIPT NOISE block live).
 
+## 2b. Fused Intent Engine (LIVE DEFAULT — supersedes #2/#7/#12 on the voice path)
+
+- **File**: [src/jarvis/listening/fused_intent.py](src/jarvis/listening/fused_intent.py) — `FusedIntentEngine.classify_route_plan()`.
+- **Trigger**: voice path, Tier 2 of the listener cascade (after the heuristic Tier-1 classifier escalates). With `use_fused_intent` (default True) this is the **live default**: it collapses intent judge (#2) + tool router (#7) + planner (#12) into **one** structured call (~5-7s vs ~15-21s).
+- **Model / gating**: `cfg.intent_judge_model` (same model as the judge). `use_fused_intent` gates the engine; `use_fused_tools_in_engine` (default True) gates whether the reply engine consumes the fused `tools`/`plan` and thus **skips its internal #7 router and #12 planner** ([engine.py:1054](src/jarvis/reply/engine.py:1054)). Falls back to the legacy 3-call pipeline when fused is disabled, the fused JSON fails to parse, or the entry isn't the voice path.
+- **Inputs**: transcript, `in_hot_window`, `language`, `last_tts_text`.
+- **System prompt**: `_build_system_prompt()` advertises a tool catalogue built **dynamically from the live registry** — real `BUILTIN_TOOLS` names + cached MCP tools via `build_tool_catalogue()` — and is rebuilt when the tool/MCP set changes. (Earlier versions used a hardcoded catalogue of fake dotted names that resolved to no real tool; fixed so the model's returned names match the engine allow-list.)
+- **Output**: schema-forced JSON `FusedJudgment{intent, confidence, tools[], plan[], fast_path_match, explanation}` (Ollama `format=<schema>`). `tools` → router allow-list shape; `plan` → planner shape; both fed to the reply engine's fast path.
+- **Limits**: timeout `min(intent_judge_timeout_sec, 8.0)`; `num_ctx 4096`, `num_predict 300`; 2 attempts (temp 0.1 then greedy 0.0); on total failure a safe default `intent=query` keeps the pipeline alive.
+
 ## 3. Memory Enrichment Extractor
 
 - **File**: [src/jarvis/reply/enrichment.py](src/jarvis/reply/enrichment.py) — `extract_search_params_for_memory()` (~line 71).
@@ -258,7 +268,11 @@ Driven by `detect_model_size(model_name) → SMALL (≤7B) | LARGE (8B+)`:
 
 ```
 user input
-  └─▶ [2] Intent Judge            (voice only, SMALL)
+  └─▶ [2b] Fused Intent Engine    (LIVE DEFAULT, voice only, SMALL — one call)
+  │     └─▶ replaces [2]+[7]+[12]; reply engine consumes fused tools/plan
+  │           └─▶ AGENTIC LOOP (skips the legacy router+planner below)
+  └─▶ (fused disabled / parse fail / non-voice) legacy 3-call path:
+      [2] Intent Judge            (voice only, SMALL)
         └─▶ [7] Tool router (narrows catalogue for the planner)
               └─▶ [12] Planner (gates memory; advisory for the router allow-list)
                     ├─ plan requests searchMemory  → [3] Enrichment extract → [4] Memory digest (optional)
