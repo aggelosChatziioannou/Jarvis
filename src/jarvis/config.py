@@ -410,6 +410,7 @@ class Settings:
     memory_weekly_prune_enabled: bool = False  # OFF until importance tagging exists (the prune DELETE is a no-op + footgun otherwise)
     memory_weekly_prune_min_age_days: int = 30
     memory_monthly_consolidation_enabled: bool = True
+    nutrition_followups_enabled: bool = False   # logMeal coaching follow-ups (a 2nd chat call); OFF by default to keep meal logging fast
     memory_archive_delete_raw: bool = True
 
 
@@ -983,6 +984,7 @@ def get_default_config() -> Dict[str, Any]:
         "memory_weekly_prune_enabled": False,
         "memory_weekly_prune_min_age_days": 30,
         "memory_monthly_consolidation_enabled": True,
+        "nutrition_followups_enabled": False,
         "memory_archive_delete_raw": True,
 
         # Memory & Dialogue
@@ -1427,6 +1429,7 @@ def load_settings() -> Settings:
     memory_weekly_prune_enabled = bool(merged.get("memory_weekly_prune_enabled", False))
     memory_weekly_prune_min_age_days = max(1, int(merged.get("memory_weekly_prune_min_age_days", 30)))
     memory_monthly_consolidation_enabled = bool(merged.get("memory_monthly_consolidation_enabled", True))
+    nutrition_followups_enabled = bool(merged.get("nutrition_followups_enabled", False))
     memory_archive_delete_raw = bool(merged.get("memory_archive_delete_raw", True))
 
     # Dialogue memory window and forced diary update share this duration
@@ -1695,6 +1698,7 @@ def load_settings() -> Settings:
         memory_weekly_prune_enabled=memory_weekly_prune_enabled,
         memory_weekly_prune_min_age_days=memory_weekly_prune_min_age_days,
         memory_monthly_consolidation_enabled=memory_monthly_consolidation_enabled,
+        nutrition_followups_enabled=nutrition_followups_enabled,
         memory_archive_delete_raw=memory_archive_delete_raw,
 
         # Memory & Dialogue

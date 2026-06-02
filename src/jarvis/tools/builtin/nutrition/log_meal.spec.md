@@ -81,10 +81,15 @@ Two passes against the chat model (`cfg.ollama_chat_model`):
    `None` and the tool retries up to `context.max_retries`.
 2. **Follow-ups** (`generate_followups_for_meal`): a short coach prompt
    asking for 2-3 healthy, realistic follow-ups (hydration, protein,
-   veggies, sodium/potassium balance, light activity).
+   veggies, sodium/potassium balance, light activity). **Opt-in** via
+   `nutrition_followups_enabled` (default **off**): it is a SECOND chat-model
+   call and pure formatting, so by default meal logging stays a single fast
+   call and the unified reply prompt adds any coaching itself.
 
-Both passes share `cfg.llm_chat_timeout_sec` and the `llm_thinking_enabled`
-flag.
+The extraction pass uses its own short timeout `nutrition_extract_timeout_sec`
+(default 30s) — a tiny structured task should not hold the reply loop for the
+full `llm_chat_timeout_sec`. The follow-up pass (when enabled) uses
+`cfg.llm_chat_timeout_sec`. Both honour `llm_thinking_enabled`.
 
 ### Database
 
@@ -99,7 +104,7 @@ On success the tool returns:
 
 ```
 Logged meal #<id>: <description> — <macro summary>[ (confidence X%)].
-Follow-ups: <coach text>
+[Follow-ups: <coach text>]   ← only when nutrition_followups_enabled is on
 ```
 
 The macro summary is a comma-joined list of present-only fields (kcal,

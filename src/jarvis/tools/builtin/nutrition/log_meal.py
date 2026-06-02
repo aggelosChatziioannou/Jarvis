@@ -65,7 +65,14 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
         + "\n<<<END UNTRUSTED USER TEXT>>>\n\n"
         "Return ONLY JSON or the exact string NONE."
     )
-    raw = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=cfg.llm_chat_timeout_sec, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
+    # Extraction is a tiny structured task — give it its own short timeout
+    # instead of the full chat timeout (180s), so a stalled meal log can't hog
+    # the reply loop for minutes.
+    try:
+        _extract_timeout = float(getattr(cfg, "nutrition_extract_timeout_sec", 30.0))
+    except (TypeError, ValueError):
+        _extract_timeout = 30.0
+    raw = call_llm_direct(cfg.ollama_base_url, cfg.ollama_chat_model, NUTRITION_SYS, user_prompt, timeout_sec=_extract_timeout, thinking=getattr(cfg, 'llm_thinking_enabled', False)) or ""
     text = (raw or "").strip()
     if text.upper() == "NONE":
         debug_log(f"logMeal extractor returned NONE for text={original_text[:120]!r}", "nutrition")
@@ -113,9 +120,15 @@ def extract_and_log_meal(db: Database, cfg: Any, original_text: str, source_app:
     approx = ", ".join(summary_bits) if summary_bits else "approximate macros logged"
     conf_str = f" (confidence {float(conf):.0%})" if isinstance(conf, (int, float)) else ""
 
-    # Ask for healthy follow-ups for the rest of the day given this meal
-    follow_text = generate_followups_for_meal(cfg, str(data.get('description') or 'meal'), approx)
-    return f"Logged meal #{meal_id}: {data.get('description')} — {approx}{conf_str}.\nFollow-ups: {follow_text}"
+    confirmation = f"Logged meal #{meal_id}: {data.get('description')} — {approx}{conf_str}."
+    # Follow-up coaching is a SECOND chat-model call (formatting, not raw data)
+    # and is opt-in: default off so a simple "I ate X" doesn't pay a second
+    # full chat round trip. When off, the unified reply prompt can still add any
+    # coaching itself from the logged confirmation.
+    if getattr(cfg, "nutrition_followups_enabled", False):
+        follow_text = generate_followups_for_meal(cfg, str(data.get('description') or 'meal'), approx)
+        return f"{confirmation}\nFollow-ups: {follow_text}"
+    return confirmation
 
 
 def generate_followups_for_meal(cfg: Any, description: str, approx: str) -> str:

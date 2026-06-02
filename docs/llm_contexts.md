@@ -192,7 +192,7 @@ Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it i
 ## 14. Tool-specific LLM calls
 
 - **Weather** ([src/jarvis/tools/builtin/weather.py](src/jarvis/tools/builtin/weather.py), ~line 60) — `ollama_chat_model`, parses location/time/unit from the query.
-- **Nutrition log_meal** ([src/jarvis/tools/builtin/nutrition/log_meal.py](src/jarvis/tools/builtin/nutrition/log_meal.py), lines 48 & 136) — `ollama_chat_model`, extracts nutrients, confirms logging.
+- **Nutrition log_meal** ([src/jarvis/tools/builtin/nutrition/log_meal.py](src/jarvis/tools/builtin/nutrition/log_meal.py)) — `ollama_chat_model`. **Extraction** uses its own short `nutrition_extract_timeout_sec` (default 30s), not the 180s chat timeout. **Follow-up coaching** is a SECOND chat call gated by `nutrition_followups_enabled` (default **off**), so a meal log is normally a single fast call.
 
 ## 15. Vision Model (describe + grounding fallback)
 
