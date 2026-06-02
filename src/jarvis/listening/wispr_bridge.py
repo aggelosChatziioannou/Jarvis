@@ -257,6 +257,10 @@ class WisprBridge:
             cfg, "wispr_hot_window_sec", DEFAULT_HOT_WINDOW_SEC))
         self.suppress_autotype = bool(getattr(
             cfg, "wispr_suppress_autotype", DEFAULT_SUPPRESS_AUTOTYPE))
+        # Privacy: restore the user's pre-wake clipboard after dispatching the
+        # transcript so the spoken text doesn't linger on the clipboard / in
+        # Windows Win+V history. Default on; opt out for users who paste it.
+        self.restore_clipboard = bool(getattr(cfg, "wispr_restore_clipboard", True))
 
         # ---- Closed-loop synchronisation + cheap guards -------------------
         # The bridge drives Wispr with a single TOGGLE hotkey and cannot, on its
@@ -1545,6 +1549,11 @@ class WisprBridge:
         if self.suppress_autotype:
             self._erase_autotyped_text(text)
 
+        # Privacy: restore the pre-wake clipboard so the spoken transcript does
+        # not linger on the clipboard / in Win+V history. ``text`` is already
+        # captured, so nothing is lost.
+        self._restore_clipboard_baseline()
+
         # Phase F: route stop-keywords through on_stop while speaking.
         # Snapshot the speaking flag under the lock — it's written from the
         # TTS thread while this runs on the post-dictation worker thread.
@@ -1571,6 +1580,19 @@ class WisprBridge:
         except Exception as e:
             print(f"[ERROR] on_transcription callback raised: {e}",
                   file=sys.stderr, flush=True)
+
+    def _restore_clipboard_baseline(self) -> None:
+        """Put the wake-time clipboard contents back after a transcript dispatch.
+
+        Closes the retention channel where the spoken transcript would otherwise
+        sit on the system clipboard (and in Win+V history). No-op when disabled,
+        when clipboard access is unavailable, or on any error (fail-open)."""
+        if not (self.restore_clipboard and self.watch_clipboard and pyperclip is not None):
+            return
+        try:
+            pyperclip.copy(self._clipboard_baseline or "")
+        except Exception as e:
+            debug_log(f"clipboard restore failed (non-fatal): {e}", "voice")
 
     def _erase_autotyped_text(self, text: str) -> None:
         """

@@ -211,6 +211,7 @@ class Settings:
     wispr_clipboard_wait_sec: float # Max wait for Wispr Flow transcript to appear in clipboard (default 6.0)
     wispr_hot_window_sec: float    # Seconds after reply a follow-up needs no wake word (default 0.0 = OFF; follow-ups require the wake word or the lightning trigger)
     wispr_suppress_autotype: bool  # Send backspaces to erase Wispr Flow's auto-typed text (default True)
+    wispr_restore_clipboard: bool  # Restore the pre-wake clipboard after dispatch so the transcript doesn't linger (default True)
     wispr_mic_device: int | str | None  # Mic device for the bridge; None = system default
     # Closed-loop start/stop synchronisation (reconcile against Wispr's real mic-recording state)
     wispr_closed_loop_enabled: bool        # Read Wispr's real recording state and reconcile before/after taps (default True)
@@ -820,6 +821,7 @@ def get_default_config() -> Dict[str, Any]:
         "wispr_clipboard_wait_sec": 6.0,
         "wispr_hot_window_sec": 0.0,
         "wispr_suppress_autotype": True,
+        "wispr_restore_clipboard": True,
         "wispr_closed_loop_enabled": True,
         "wispr_hands_free_combo": ["ctrl", "cmd", "space"],
         "wispr_min_tap_gap_sec": 0.5,
@@ -1228,6 +1230,7 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         wispr_hot_window_sec = 0.0
     wispr_suppress_autotype = bool(merged.get("wispr_suppress_autotype", True))
+    wispr_restore_clipboard = bool(merged.get("wispr_restore_clipboard", True))
     wispr_mic_device_val = merged.get("wispr_mic_device", None)
     if wispr_mic_device_val in (None, "", "null"):
         wispr_mic_device = None
@@ -1614,6 +1617,7 @@ def load_settings() -> Settings:
         wispr_clipboard_wait_sec=wispr_clipboard_wait_sec,
         wispr_hot_window_sec=wispr_hot_window_sec,
         wispr_suppress_autotype=wispr_suppress_autotype,
+        wispr_restore_clipboard=wispr_restore_clipboard,
         wispr_mic_device=wispr_mic_device,
         wispr_closed_loop_enabled=wispr_closed_loop_enabled,
         wispr_hands_free_combo=wispr_hands_free_combo,
