@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, openStateStream, fetchVersion } from './seam'
 import type { VoiceStatePayload } from './seam'
+import { dashboardApi } from './dashboardApi'
 
 export interface ConnectionInfo {
   /** Latest voice-state snapshot from the daemon, or null until first arrival. */
@@ -9,6 +10,8 @@ export interface ConnectionInfo {
   connected: boolean
   /** App version string (without leading "v"); empty until fetched. */
   version: string
+  /** Current outdoor temperature in °C from the weather service, or null. */
+  tempC: number | null
 }
 
 /**
@@ -22,6 +25,7 @@ export function useConnection(): ConnectionInfo {
   const [state, setState] = useState<VoiceStatePayload | null>(null)
   const [connected, setConnected] = useState(false)
   const [version, setVersion] = useState('')
+  const [tempC, setTempC] = useState<number | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -36,6 +40,16 @@ export function useConnection(): ConnectionInfo {
       })
       .catch(() => {})
 
+    const loadWeather = () =>
+      dashboardApi
+        .metrics()
+        .then((m) => {
+          if (alive) setTempC(m.weather?.temp_c ?? null)
+        })
+        .catch(() => {})
+    void loadWeather()
+    const weatherTimer = window.setInterval(loadWeather, 15 * 60 * 1000)
+
     const stop = openStateStream((s) => {
       if (!alive) return
       setState(s)
@@ -44,9 +58,10 @@ export function useConnection(): ConnectionInfo {
 
     return () => {
       alive = false
+      window.clearInterval(weatherTimer)
       stop()
     }
   }, [])
 
-  return { state, connected, version }
+  return { state, connected, version, tempC }
 }

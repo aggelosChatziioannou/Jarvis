@@ -8,7 +8,7 @@ function todayISO(): string {
 }
 
 export default function StatusBar() {
-  const { state, connected, version } = useConnection()
+  const { state, connected, version, tempC } = useConnection()
   const status = statusDisplay(state, connected)
 
   return (
@@ -27,8 +27,7 @@ export default function StatusBar() {
         <span className="text-[#475569] font-mono-data">{version ? `v${version}` : '…'}</span>
       </div>
       <div className="flex items-center gap-3 text-[#475569] font-mono-data">
-        {/* Temperature wired in Phase 4 (weather + system metrics) */}
-        <span>—</span>
+        <span>{tempC != null ? `${Math.round(tempC)}°C` : '—'}</span>
         <span>{todayISO()}</span>
       </div>
     </div>

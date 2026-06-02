@@ -1,5 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { SceneProvider } from '@/console/3d/SceneContext'
+import { DashboardDataProvider } from '@/console/services/DashboardDataContext'
+import SceneStateBridge from '@/console/dashboard/SceneStateBridge'
 import ZoomControls from '@/console/dashboard/ZoomControls'
 import StatePanel from '@/console/dashboard/StatePanel'
 import SystemStatusPanel from '@/console/dashboard/SystemStatusPanel'
@@ -9,14 +11,17 @@ const DollhouseScene = lazy(() => import('@/console/3d/DollhouseScene'))
 export default function DashboardPage() {
   return (
     <SceneProvider>
-      <div className="relative w-full h-full bg-[#0a0e17] overflow-hidden">
-        <Suspense fallback={<SceneFallback />}>
-          <DollhouseScene />
-        </Suspense>
-        <ZoomControls />
-        <StatePanel />
-        <SystemStatusPanel />
-      </div>
+      <DashboardDataProvider>
+        <SceneStateBridge />
+        <div className="relative w-full h-full bg-[#0a0e17] overflow-hidden">
+          <Suspense fallback={<SceneFallback />}>
+            <DollhouseScene />
+          </Suspense>
+          <ZoomControls />
+          <StatePanel />
+          <SystemStatusPanel />
+        </div>
+      </DashboardDataProvider>
     </SceneProvider>
   )
 }
