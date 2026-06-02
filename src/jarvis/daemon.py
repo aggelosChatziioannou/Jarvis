@@ -698,7 +698,24 @@ def main() -> None:
             if reminder_store is not None and (now - last_reminder_check) >= reminder_check_interval:
                 try:
                     from .reminders.firing import fire_due_reminders
-                    fire_due_reminders(reminder_store, cfg, get_tts_engine(), _datetime.now().astimezone())
+                    from .reminders.delivery import speak_and_toast as _speak_and_toast
+
+                    def _reminder_deliver(_reminder, _cfg, _tts) -> None:
+                        # Pause wake detection while the reminder is announced so
+                        # Jarvis's own voice through the mic can't self-trigger the
+                        # wake word (Wispr backend). Mirrors the reply TTS path.
+                        _vt = voice_thread
+                        _hook = getattr(_vt, "_set_bridge_speaking", None) if _vt is not None else None
+                        _speak_and_toast(
+                            _reminder.text, _reminder.id, _cfg, _tts,
+                            on_speak_start=(lambda: _hook(True)) if callable(_hook) else None,
+                            on_speak_end=(lambda: _hook(False)) if callable(_hook) else None,
+                        )
+
+                    fire_due_reminders(
+                        reminder_store, cfg, get_tts_engine(),
+                        _datetime.now().astimezone(), deliver=_reminder_deliver,
+                    )
                 except Exception as _rerr:
                     debug_log(f"reminder tick failed (non-fatal): {_rerr!r}", "reminders")
                 last_reminder_check = now

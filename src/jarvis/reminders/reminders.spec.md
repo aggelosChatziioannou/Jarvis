@@ -78,6 +78,8 @@ reminder:
 
 Each channel is best-effort; a failure in one never blocks the others.
 
+`speak_and_toast` accepts optional `on_speak_start` / `on_speak_end` hooks that bracket the spoken delivery. The daemon wires them to the voice listener's `_set_bridge_speaking`, so wake detection is **paused while a reminder is announced** — otherwise Jarvis's own reminder voice through the mic can self-trigger the wake word (Wispr backend) and start capturing ambient audio. `on_speak_end` is guaranteed to fire (`finally`) even if TTS raises, so the pause can never get stuck on. When speech is disabled or no listener is present, the hooks are simply absent.
+
 ## Tools
 
 `createReminder`, `listReminders`, `cancelReminder`, `snoozeReminder` — each exposes a
