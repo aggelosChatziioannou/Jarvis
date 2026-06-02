@@ -189,7 +189,7 @@ class Settings:
     wispr_wake_rms_floor: float    # Ungained int16 RMS below which a wake frame is gated as silence on the TRIGGER only; 0.0 = off (default 0.0)
     wispr_wake_consec_frames: int  # Consecutive 80ms frames >= threshold required to fire the wake (debounce; 1 = legacy single-frame; default 2)
     wispr_silence_ms: int          # Silero VAD silence ms for PTT release (default 800)
-    wispr_min_dictation_sec: float # Suppress early VAD release for this many seconds (default 2.0)
+    wispr_min_dictation_sec: float # Suppress early VAD release for this many seconds (default 1.0)
     wispr_max_dictation_sec: int   # Hard timeout for dictation (default 30)
     wispr_clipboard_wait_sec: float # Max wait for Wispr Flow transcript to appear in clipboard (default 6.0)
     wispr_hot_window_sec: float    # Seconds after reply a follow-up needs no wake word (default 0.0 = OFF; follow-ups require the wake word or the lightning trigger)
@@ -797,7 +797,7 @@ def get_default_config() -> Dict[str, Any]:
         # it drops distant wakes. Opt back into a guard via config if ever needed.
         "wispr_wake_rms_floor": 0.0,
         "wispr_silence_ms": 800,
-        "wispr_min_dictation_sec": 2.0,
+        "wispr_min_dictation_sec": 1.0,
         "wispr_max_dictation_sec": 30,
         "wispr_clipboard_wait_sec": 6.0,
         "wispr_hot_window_sec": 0.0,
@@ -1193,9 +1193,9 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         wispr_silence_ms = 800
     try:
-        wispr_min_dictation_sec = float(merged.get("wispr_min_dictation_sec", 2.0))
+        wispr_min_dictation_sec = float(merged.get("wispr_min_dictation_sec", 1.0))
     except (TypeError, ValueError):
-        wispr_min_dictation_sec = 2.0
+        wispr_min_dictation_sec = 1.0
     try:
         wispr_max_dictation_sec = int(merged.get("wispr_max_dictation_sec", 30))
     except (TypeError, ValueError):
