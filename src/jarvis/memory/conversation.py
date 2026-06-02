@@ -1763,6 +1763,7 @@ def update_diary_from_dialogue_memory(
     on_token: Optional[Callable[[str], None]] = None,
     thinking: bool = False,
     graph_picker_model: Optional[str] = None,
+    semantic_dedup_threshold: float = 0.0,
 ) -> Optional[int]:
     """
     Update the diary with pending interactions from dialogue memory.
@@ -1861,6 +1862,8 @@ def update_diary_from_dialogue_memory(
                         thinking=thinking,
                         date_utc=today,
                         picker_model=graph_picker_model,
+                        ollama_embed_model=ollama_embed_model,
+                        semantic_dedup_threshold=semantic_dedup_threshold,
                     )
                     stored = result.stored
                     skipped = result.skipped

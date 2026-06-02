@@ -1296,6 +1296,8 @@ def update_graph_from_dialogue(
     thinking: bool = False,
     date_utc: Optional[str] = None,
     picker_model: Optional[str] = None,
+    ollama_embed_model: Optional[str] = None,
+    semantic_dedup_threshold: float = 0.0,
 ) -> GraphUpdateResult:
     """End-to-end: extract memories from a summary, place each in the best
     node, and trigger auto-split if needed.
@@ -1384,6 +1386,30 @@ def update_graph_from_dialogue(
             continue
         if key:
             node_keys.add(key)
+
+        # Optional embedding-based near-duplicate skip: catches paraphrases the
+        # string-fold misses ('lives in London' vs 'resides in London, UK').
+        # Opt-in (threshold>0 + embed model) and fail-open — a wrongly dropped
+        # fact would harm memory integrity, so this only fires on a high-
+        # similarity match against the destination node's existing lines.
+        if semantic_dedup_threshold > 0.0 and ollama_embed_model:
+            try:
+                from .embeddings import get_embedding, is_semantic_duplicate
+                _node = store.get_node(node_id)
+                _existing = [
+                    ln.strip() for ln in ((_node.data.split("\n")) if (_node and _node.data) else [])
+                    if ln.strip()
+                ]
+                if _existing and is_semantic_duplicate(
+                    fact, _existing,
+                    lambda t: get_embedding(t, ollama_base_url, ollama_embed_model, timeout_sec=10.0),
+                    semantic_dedup_threshold,
+                ):
+                    skipped += 1
+                    debug_log(f"graph update: semantic near-duplicate skipped '{fact[:50]}...'", "memory")
+                    continue
+            except Exception:
+                pass
 
         pending.append((branch_id, fact, node_id))
 

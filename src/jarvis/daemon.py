@@ -287,6 +287,10 @@ def _check_and_update_diary(
                 on_token=on_token,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
                 graph_picker_model=graph_picker_model,
+                semantic_dedup_threshold=(
+                    float(getattr(cfg, "memory_semantic_dedup_threshold", 0.93))
+                    if getattr(cfg, "memory_semantic_dedup_enabled", False) else 0.0
+                ),
             )
 
             # Flush any remaining tokens in IPC mode

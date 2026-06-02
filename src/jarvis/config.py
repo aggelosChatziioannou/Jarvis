@@ -412,6 +412,8 @@ class Settings:
     memory_monthly_consolidation_enabled: bool = True
     nutrition_followups_enabled: bool = False   # logMeal coaching follow-ups (a 2nd chat call); OFF by default to keep meal logging fast
     local_files_root: str = ""                  # if set, confine the localFiles tool to this directory instead of the whole home dir
+    memory_semantic_dedup_enabled: bool = False  # embedding-based near-duplicate skip on graph writes (opt-in; high threshold to protect memory integrity)
+    memory_semantic_dedup_threshold: float = 0.93
     memory_archive_delete_raw: bool = True
 
 
@@ -987,6 +989,8 @@ def get_default_config() -> Dict[str, Any]:
         "memory_monthly_consolidation_enabled": True,
         "nutrition_followups_enabled": False,
         "local_files_root": "",
+        "memory_semantic_dedup_enabled": False,
+        "memory_semantic_dedup_threshold": 0.93,
         "memory_archive_delete_raw": True,
 
         # Memory & Dialogue
@@ -1433,6 +1437,11 @@ def load_settings() -> Settings:
     memory_monthly_consolidation_enabled = bool(merged.get("memory_monthly_consolidation_enabled", True))
     nutrition_followups_enabled = bool(merged.get("nutrition_followups_enabled", False))
     local_files_root = str(merged.get("local_files_root", "") or "")
+    memory_semantic_dedup_enabled = bool(merged.get("memory_semantic_dedup_enabled", False))
+    try:
+        memory_semantic_dedup_threshold = float(merged.get("memory_semantic_dedup_threshold", 0.93))
+    except (TypeError, ValueError):
+        memory_semantic_dedup_threshold = 0.93
     memory_archive_delete_raw = bool(merged.get("memory_archive_delete_raw", True))
 
     # Dialogue memory window and forced diary update share this duration
@@ -1703,6 +1712,8 @@ def load_settings() -> Settings:
         memory_monthly_consolidation_enabled=memory_monthly_consolidation_enabled,
         nutrition_followups_enabled=nutrition_followups_enabled,
         local_files_root=local_files_root,
+        memory_semantic_dedup_enabled=memory_semantic_dedup_enabled,
+        memory_semantic_dedup_threshold=memory_semantic_dedup_threshold,
         memory_archive_delete_raw=memory_archive_delete_raw,
 
         # Memory & Dialogue
