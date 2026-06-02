@@ -1832,6 +1832,7 @@ def update_diary_from_dialogue_memory(
             # Non-blocking — if this fails, the diary update still succeeded.
             # Uses a dedicated timeout (30s) rather than the diary chat timeout,
             # so graph updates don't inflate the diary flush wall time.
+            graph_store = None
             try:
                 from .graph import GraphMemoryStore
                 from .graph_ops import update_graph_from_dialogue
@@ -1904,6 +1905,12 @@ def update_diary_from_dialogue_memory(
                     )
             except Exception as e:
                 debug_log(f"graph memory update failed (non-fatal): {e}", "memory")
+            finally:
+                if graph_store is not None:
+                    try:
+                        graph_store.close()
+                    except Exception:
+                        pass
 
         return summary_id
 

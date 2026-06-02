@@ -407,7 +407,7 @@ class Settings:
     # Memory lifecycle (TTL / pruning / monthly consolidation; run on the poll loop)
     memory_ttl_enabled: bool = False
     memory_ttl_default_days: int = 0
-    memory_weekly_prune_enabled: bool = True
+    memory_weekly_prune_enabled: bool = False  # OFF until importance tagging exists (the prune DELETE is a no-op + footgun otherwise)
     memory_weekly_prune_min_age_days: int = 30
     memory_monthly_consolidation_enabled: bool = True
     memory_archive_delete_raw: bool = True
@@ -980,7 +980,7 @@ def get_default_config() -> Dict[str, Any]:
         # Memory lifecycle (TTL / pruning / monthly consolidation)
         "memory_ttl_enabled": False,
         "memory_ttl_default_days": 0,
-        "memory_weekly_prune_enabled": True,
+        "memory_weekly_prune_enabled": False,
         "memory_weekly_prune_min_age_days": 30,
         "memory_monthly_consolidation_enabled": True,
         "memory_archive_delete_raw": True,
@@ -1424,7 +1424,7 @@ def load_settings() -> Settings:
     # Memory lifecycle
     memory_ttl_enabled = bool(merged.get("memory_ttl_enabled", False))
     memory_ttl_default_days = max(0, int(merged.get("memory_ttl_default_days", 0)))
-    memory_weekly_prune_enabled = bool(merged.get("memory_weekly_prune_enabled", True))
+    memory_weekly_prune_enabled = bool(merged.get("memory_weekly_prune_enabled", False))
     memory_weekly_prune_min_age_days = max(1, int(merged.get("memory_weekly_prune_min_age_days", 30)))
     memory_monthly_consolidation_enabled = bool(merged.get("memory_monthly_consolidation_enabled", True))
     memory_archive_delete_raw = bool(merged.get("memory_archive_delete_raw", True))

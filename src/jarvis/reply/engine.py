@@ -794,6 +794,17 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
     return "\n\n".join(parts) if parts else None
 
 
+def _strip_facts_already_in_warm(data_preview: str, warm_keys: set) -> str:
+    """Drop fact lines from an enrichment snippet already present in the warm
+    profile, so the same fact is not injected twice under near-identical
+    headings (wasted context + over-weighting risk for small models)."""
+    if not data_preview or not warm_keys:
+        return data_preview
+    from ..memory.graph import normalise_fact
+    kept = [ln for ln in data_preview.split("\n") if normalise_fact(ln) not in warm_keys]
+    return "\n".join(kept)
+
+
 def _translate_fused_to_router_shape(fused_tools: list) -> list[str]:
     """Translate fused-intent ``tools`` list to the engine's router shape.
 
@@ -1300,6 +1311,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         warm_profile_block = _wp_cached
         debug_log("warm profile served from conversation cache", "memory")
     else:
+        _graph_store_warm = None
         try:
             from ..memory.graph import GraphMemoryStore
             from ..memory.graph_ops import build_warm_profile, format_warm_profile_block
@@ -1322,6 +1334,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 dialogue_memory.hot_cache_put(_wp_cache_key, warm_profile_block)
         except Exception as e:
             debug_log(f"warm profile load failed (non-fatal): {e}", "memory")
+        finally:
+            if _graph_store_warm is not None:
+                try:
+                    _graph_store_warm.close()
+                except Exception:
+                    pass
 
     # Step 4: Memory enrichment — controlled by cfg.memory_enrichment_source
     # "all" = diary + graph, "diary" = diary only, "graph" = graph only
@@ -1510,9 +1528,18 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     "memory",
                 )
             else:
+                graph_store = None
                 try:
-                    from ..memory.graph import GraphMemoryStore
+                    from ..memory.graph import GraphMemoryStore, normalise_fact
                     graph_store = GraphMemoryStore(cfg.db_path)
+
+                    # Facts already injected by the always-on warm profile —
+                    # skip them in enrichment so the same line isn't duplicated.
+                    _warm_keys = {
+                        normalise_fact(ln)
+                        for ln in (warm_profile_block or "").split("\n")
+                        if ln.strip()
+                    }
 
                     graph_parts: list[str] = []
                     # Track node name + matched question for user-facing logs
@@ -1545,7 +1572,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                             ancestors = graph_store.get_ancestors(node.id)
                             path = " > ".join(a.name for a in ancestors)
                             data_preview = node.data[:300] if node.data else ""
-                            if data_preview:
+                            data_preview = _strip_facts_already_in_warm(data_preview, _warm_keys)
+                            if data_preview.strip():
                                 graph_parts.append(f"[{path}] {data_preview}")
                                 matched_q = _match_question(data_preview, _local_questions)
                                 node_annotations.append(
@@ -1579,6 +1607,12 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                                 print(f"     {tag}· {name}", flush=True)
                 except Exception as e:
                     debug_log(f"graph enrichment failed: {e}", "memory")
+                finally:
+                    if graph_store is not None:
+                        try:
+                            graph_store.close()
+                        except Exception:
+                            pass
 
         # Step 4c: Memory digest for small models.
         #
