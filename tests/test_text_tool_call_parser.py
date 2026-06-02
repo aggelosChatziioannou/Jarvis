@@ -150,6 +150,21 @@ class TestMalformedModelOutputGuard:
     def test_allows_normal_prose(self, content):
         assert not _is_malformed(content), f"Should not flag prose: {content!r}"
 
+    @pytest.mark.parametrize(
+        "content,label",
+        [
+            ('The JSON field "high": 15 means the daily maximum temperature.', "en prose quoting a json key"),
+            ('Η πρόβλεψη δείχνει "high": 20 και "low": 12 βαθμούς.', "greek prose quoting json keys"),
+            ('Το πεδίο "location": Αθήνα είναι σωστό στο αρχείο.', "greek prose quoting location key"),
+            ("In the response the \"section\": header was wrong.", "prose quoting section key"),
+        ],
+    )
+    def test_allows_prose_that_merely_quotes_json_keys(self, content, label):
+        # The JSON-hallucination substring indicators must only fire when the
+        # whole reply is JSON-shaped; prose (any language) that merely mentions
+        # a key like "high"/"location" must not be replaced by the canned error.
+        assert not _is_malformed(content), f"Should not flag: {label!r} -> {content!r}"
+
 
 class TestTextToolCallGuidancePrompt:
     """The text-based tool-call guidance injected for gemma-class models must

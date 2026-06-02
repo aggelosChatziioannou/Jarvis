@@ -282,22 +282,26 @@ def _is_malformed_model_output(content: str) -> bool:
         debug_log("  ⚠️ Detected leaked Gemma <unusedNN> sentinel", "planning")
         return True
 
-    # Hallucinated API specs / data-dump payloads — the model replied with
-    # raw JSON that has no conversational fields.
-    json_hallucination_indicators = [
-        '"specVersion":', '"openapi":', '"swagger":',
-        '"apis":', '"endpoints":', '"paths":',
-        '"api.github.com"', '"host":', '"basePath":',
-        '"site":', '"location":', '"forecast":',
-        '"current_date":', '"high":', '"low":',
-        '"lang": "json"', '"section":',
-    ]
-    for indicator in json_hallucination_indicators:
-        if indicator in trimmed:
-            debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
-            return True
-
+    # Hallucinated API specs / data-dump payloads — the model replied with raw
+    # JSON that has no conversational fields. These checks ONLY apply when the
+    # whole reply is JSON-shaped (starts with ``{``). Gating on JSON-ness keeps
+    # the brittle substring list from misfiring on ordinary prose — in ANY
+    # language — that merely quotes a key like ``"high":`` or ``"location":``
+    # (the project supports non-English replies; the substring list is not).
     if trimmed.startswith("{"):
+        json_hallucination_indicators = [
+            '"specVersion":', '"openapi":', '"swagger":',
+            '"apis":', '"endpoints":', '"paths":',
+            '"api.github.com"', '"host":', '"basePath":',
+            '"site":', '"location":', '"forecast":',
+            '"current_date":', '"high":', '"low":',
+            '"lang": "json"', '"section":',
+        ]
+        for indicator in json_hallucination_indicators:
+            if indicator in trimmed:
+                debug_log(f"  ⚠️ Detected JSON hallucination pattern: {indicator}", "planning")
+                return True
+
         conversational_fields = ["response", "message", "text", "content", "answer", "reply", "error"]
         has_conversational_field = any(f'"{f}"' in lowered for f in conversational_fields)
         if not has_conversational_field:
