@@ -71,6 +71,23 @@ def uses_local_whisper(cfg) -> bool:
     return str(getattr(cfg, "stt_backend", "whisper")) == "whisper"
 
 
+def stt_cloud_disclosure(cfg) -> Optional[str]:
+    """One-line runtime privacy disclosure when STT sends audio off the machine.
+
+    Returns a notice when the active backend transcribes via a third-party cloud
+    (Wispr Flow sends raw microphone audio to Wispr), or ``None`` for the
+    local-only ``whisper`` backend. Privacy-first: the most significant data
+    flow (raw audio to a third party) must be disclosed honestly at the point of
+    use, not hidden behind a README that claims "100% local".
+    """
+    if uses_local_whisper(cfg):
+        return None
+    return (
+        "☁️  STT backend: Wispr Flow (CLOUD) — your spoken audio is sent to "
+        "Wispr for transcription; local Whisper is not loaded"
+    )
+
+
 def _default_dictation_hotkey() -> str:
     """Return the platform-appropriate default dictation hotkey.
 

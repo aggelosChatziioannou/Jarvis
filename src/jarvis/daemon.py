@@ -362,7 +362,10 @@ def main() -> None:
     if uses_local_whisper(cfg):
         print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
     else:
-        print("🎤 STT: Wispr Flow (cloud) — local Whisper not loaded", flush=True)
+        from .config import stt_cloud_disclosure
+        _disc = stt_cloud_disclosure(cfg)
+        if _disc:
+            print(_disc, flush=True)
 
     # ─── Deadlock guard: pre-import heavy C-extension stack on MAIN thread ───
     # openWakeWord imports sklearn → scipy.special (large C-extension .pyd's).

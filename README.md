@@ -560,6 +560,8 @@ Running from source enables Chatterbox TTS (AI voice with emotion/cloning). Pipe
 
 Verify: `sudo lsof -i -n -P | grep jarvis` (should only show 127.0.0.1 to Ollama)
 
+> ⚠️ **Speech-to-text backend & the cloud.** The default STT is **local** faster-whisper, so your speech never leaves the machine. There is an **optional** `stt_backend: "wispr"` mode that uses **Wispr Flow's cloud** for transcription — in that mode your raw microphone audio **is sent to Wispr**. The app prints a clear cloud-disclosure line at startup whenever the Wispr backend is active. Keep `stt_backend: "whisper"` (the default) to stay 100% offline.
+
 </details>
 
 <details>
