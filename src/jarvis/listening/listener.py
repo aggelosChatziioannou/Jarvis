@@ -1234,6 +1234,25 @@ class VoiceListener(threading.Thread):
         except Exception as e:
             debug_log(f"failed to set face state to LISTENING: {e}", "voice")
 
+    def _set_face_state_idle(self) -> None:
+        """Reset the desktop face widget to IDLE after a rejected/ignored utterance.
+
+        On the Wispr path ``_on_wispr_wake`` shows LISTENING but starts no
+        thinking tune, so ``_stop_thinking_tune``'s IDLE reset (guarded by
+        ``tune_player is not None``) is skipped and the orb stays stuck on
+        LISTENING. Resetting here unsticks it. Skips while Jarvis is speaking so
+        it never clobbers the SPEAKING state mid-reply.
+        """
+        try:
+            if self.tts is not None and self.tts.is_speaking():
+                return
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            get_jarvis_state().set_state(JarvisState.IDLE)
+        except ImportError:
+            pass
+        except Exception as e:
+            debug_log(f"failed to set face state to IDLE: {e}", "voice")
+
     def track_tts_start(self, tts_text: str) -> None:
         """Called when TTS starts speaking."""
         if self.tts and self.tts.enabled:
@@ -2027,6 +2046,7 @@ class VoiceListener(threading.Thread):
                         # Outside hot window — trust rejection
                         debug_log(f"🚫 Intent judge rejected (not directed, high confidence): \"{text_lower}\"", "voice")
                         self._stop_thinking_tune()
+                        self._set_face_state_idle()  # unstick a Wispr-wake LISTENING orb
                         return
                 else:
                     # For inconclusive results, fall through to wake word detection
@@ -2074,6 +2094,7 @@ class VoiceListener(threading.Thread):
 
         # Stop any early-started beep since we're not processing this input
         self._stop_thinking_tune()
+        self._set_face_state_idle()  # unstick a Wispr-wake LISTENING orb (skips while speaking)
 
         if received_during_tts:
             # User spoke during TTS but it wasn't a stop command - this is likely a response
