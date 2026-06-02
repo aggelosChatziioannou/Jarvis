@@ -1972,15 +1972,6 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
 
-        # Both current TTS engines (Piper, Chatterbox) only support English.
-        # Responding in another language would produce garbled audio.
-        # Remove this constraint when a multilingual TTS engine is added.
-        tts_engine = getattr(cfg, 'tts_engine', 'piper')
-        if tts_engine in ('piper', 'chatterbox'):
-            guidance.append(
-                "Always respond in English regardless of the language the user speaks in."
-            )
-
         if warm_profile_block:
             # Pre-query, query-agnostic user context. Lives OUTSIDE the
             # conversation-history section because it isn't a history
@@ -2059,6 +2050,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append(_text_tool_call_guidance(list(known_tool_names)))
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
+
+        # Reply-language clamp — appended LAST so recency makes it win over any
+        # earlier instruction that pulls toward the user's language (the
+        # persona's "user's language" fact-answer clause, or plan steps written
+        # in the user's language). Both current TTS engines (Piper, Chatterbox)
+        # speak only English, so a non-English reply would be read aloud as
+        # garbled audio. This made the reply language inconsistent (mostly
+        # English but occasionally Greek); placing one unambiguous, final rule
+        # here makes it consistent. Remove when a multilingual TTS is added.
+        tts_engine = getattr(cfg, 'tts_engine', 'piper')
+        if tts_engine in ('piper', 'chatterbox'):
+            guidance.append(
+                "\nREPLY LANGUAGE (overrides everything above): always write "
+                "your entire reply in English, even if the user writes in "
+                "another language. This is non-negotiable — the voice engine "
+                "only speaks English, so a non-English reply would be unusable."
+            )
 
         return "\n".join(guidance)
 
