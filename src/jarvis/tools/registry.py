@@ -13,6 +13,7 @@ from .builtin.screenshot import ScreenshotTool
 from .builtin.web_search import WebSearchTool
 from .builtin.local_files import LocalFilesTool
 from .builtin.fetch_web_page import FetchWebPageTool
+from .builtin.forget_memory import ForgetMemoryTool
 from .builtin.nutrition.log_meal import LogMealTool
 from .builtin.nutrition.fetch_meals import FetchMealsTool
 from .builtin.nutrition.delete_meal import DeleteMealTool
@@ -50,6 +51,7 @@ BUILTIN_TOOLS = {
     "deleteMeal": DeleteMealTool(),
     "refreshMCPTools": RefreshMCPToolsTool(),
     "getWeather": WeatherTool(),
+    "forgetMemory": ForgetMemoryTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
     # Vision & Screen Interaction Engine (see src/jarvis/vision/vision.spec.md).

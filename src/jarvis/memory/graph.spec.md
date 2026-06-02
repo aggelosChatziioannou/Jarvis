@@ -166,7 +166,7 @@ Periodic process that:
 
 ## LLM Integration
 
-The graph memory system is fully automatic — no tool calls required. It integrates at two points in the existing pipeline.
+Graph writes and reads are automatic — no tool calls required for normal operation. (The one user-initiated exception is the `forgetMemory` tool described below, for voice-driven deletion/correction.) It integrates at two points in the existing pipeline.
 
 ### Automatic Writes (via `graph_ops.py`)
 
@@ -215,6 +215,15 @@ The write-time gate stops new garbage; facts stored **before** the gate existed 
 **Apply — `apply_graph_scrub(store, approved_facts: list[dict]) -> dict`.** Takes the user-confirmed subset of proposals (`{branch, fact}` dicts) and removes exactly those lines from each branch node's `data` via `update_node`, preserving all other lines verbatim. Groups by branch so each node is rewritten at most once, and leaves a node byte-identical (no `updated_at` re-stamp) when nothing matched. Returns **counts only** (`{"removed": n}`) — never raw fact text. **No LLM call.** Matching uses the same Unicode folding, so casing/whitespace drift between the proposal and the stored line still removes the right line; an approved fact whose branch node is missing or whose text no longer matches is skipped, not fatal.
 
 **Privacy contract.** Raw fact text appears **only** in the propose response — the surface the local user reads to decide what to delete. The apply path streams counts/booleans only. Nothing is ever deleted automatically: the user reviews proposed deletions and confirms.
+
+### Voice-Driven Forget (`forgetMemory` tool)
+
+For targeted, real-time correction the chat model can call the **`forgetMemory`** builtin tool (`tools/builtin/forget_memory.py`) when the user asks to forget or correct a stored fact by voice ("forget that I live in London", "I never said that"). Unlike the automatic write path, this is an explicit tool call, and it mirrors the vision engine's **propose → confirm** safety so a single misheard "forget …" can never wipe memory:
+
+- **Propose** — `forgetMemory(subject)` matches the subject against every node's `data` lines using strict, language-agnostic matching (normalised-substring **or** full subject-token subset, Unicode `\w{3,}`; no fuzzy partials, to avoid over-deletion), stashes the matches in a process-wide pending buffer (single local user, `_PENDING_TTL_SEC = 120s`), and returns the candidate lines tagged `requires_confirmation`. **It deletes nothing.**
+- **Confirm** — `forgetMemory(confirm=true)` removes exactly the pending proposal's lines via `update_node` (preserving all other lines) and clears the buffer. `confirm=true` with **no fresh pending proposal** fails safe by proposing instead of deleting, so the confirm-first flow can't be skipped.
+
+This bounds the blast radius of one mishearing: deletion always requires a prior propose plus an explicit confirm the user agreed to.
 
 ### Automatic Reads (via enrichment in `engine.py`)
 

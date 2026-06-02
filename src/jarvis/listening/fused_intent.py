@@ -103,6 +103,7 @@ _FALLBACK_CATALOGUE: list[tuple[str, str]] = [
     ("listReminders", "list the user's reminders"),
     ("cancelReminder", "cancel a reminder"),
     ("snoozeReminder", "snooze a reminder"),
+    ("forgetMemory", "forget or correct something remembered about the user"),
     ("localFiles", "read or write files in the user's workspace"),
     ("screenshot", "capture a screenshot of the screen"),
     # Vision & Screen Interaction (JARVIS can see/act on the user's screen).
