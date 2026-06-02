@@ -71,6 +71,7 @@ Each server entry in `config.mcps` is a dict consumed by
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `idle_timeout_sec` | float \| null | null | If set, the worker self-terminates after that many seconds with an empty queue. Stateful servers (browser automation) must leave this unset. |
+| `tool_timeout_sec` | float \| null | global `mcp_tool_timeout_sec` (30s) | Per-call `call_tool` timeout. The global default keeps a slow server from blocking a voice reply turn; raise it per-server only for explicitly long-running tools. |
 
 ## Test contract
 

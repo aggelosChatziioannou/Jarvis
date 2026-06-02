@@ -201,6 +201,7 @@ class Settings:
     wispr_min_tap_gap_sec: float           # Minimum gap between consecutive toggle taps to dodge Wispr's rapid-toggle freeze (default 0.5)
     wispr_confirm_timeout_sec: float       # How long to poll Wispr's mic state to confirm a tap took effect (default 1.2)
     wispr_clipboard_grace_sec: float       # Extra grace after the clipboard wait before declaring no-capture (default 2.0)
+    mcp_tool_timeout_sec: float            # Per-MCP-tool-call timeout on the reply path (default 30.0; a server cfg may override via tool_timeout_sec)
     wispr_erase_max_chars: int             # Cap on auto-type erase backspaces; longer transcripts skip erase (default 300)
     wispr_post_abort_suppress_sec: float   # After a STOP, drop Wispr transcripts arriving within this many seconds so one press cancels everything; a fresh wake clears it (default 1.5)
     wispr_barge_in_interrupt: bool         # Tear down TTS on speech onset during a hot window (default True)
@@ -807,6 +808,7 @@ def get_default_config() -> Dict[str, Any]:
         "wispr_min_tap_gap_sec": 0.5,
         "wispr_confirm_timeout_sec": 1.2,
         "wispr_clipboard_grace_sec": 2.0,
+        "mcp_tool_timeout_sec": 30.0,
         "wispr_erase_max_chars": 300,
         "wispr_barge_in_interrupt": True,
         # After a STOP (HUD button / reset_everything), drop any Wispr transcript
@@ -1241,6 +1243,10 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         wispr_clipboard_grace_sec = 2.0
     try:
+        mcp_tool_timeout_sec = float(merged.get("mcp_tool_timeout_sec", 30.0))
+    except (TypeError, ValueError):
+        mcp_tool_timeout_sec = 30.0
+    try:
         wispr_erase_max_chars = int(merged.get("wispr_erase_max_chars", 300))
     except (TypeError, ValueError):
         wispr_erase_max_chars = 300
@@ -1597,6 +1603,7 @@ def load_settings() -> Settings:
         wispr_min_tap_gap_sec=wispr_min_tap_gap_sec,
         wispr_confirm_timeout_sec=wispr_confirm_timeout_sec,
         wispr_clipboard_grace_sec=wispr_clipboard_grace_sec,
+        mcp_tool_timeout_sec=mcp_tool_timeout_sec,
         wispr_erase_max_chars=wispr_erase_max_chars,
         wispr_post_abort_suppress_sec=wispr_post_abort_suppress_sec,
         wispr_barge_in_interrupt=wispr_barge_in_interrupt,

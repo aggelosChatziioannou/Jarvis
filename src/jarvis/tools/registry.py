@@ -361,6 +361,14 @@ def run_tool_with_retries(
                     return ToolExecutionResult(success=False, reply_text=None, error_message="MCP client not available. Install 'mcp' package.")
 
                 client = MCPClient(mcps_config)
+                # Apply the configured per-call timeout to the real client
+                # without breaking lightweight test doubles that don't model it.
+                _mcp_to = getattr(cfg, "mcp_tool_timeout_sec", None)
+                if _mcp_to is not None and hasattr(client, "_tool_timeout_sec"):
+                    try:
+                        client._tool_timeout_sec = float(_mcp_to)
+                    except (TypeError, ValueError):
+                        pass
                 result = client.invoke_tool(server_name=server_name, tool_name=mcp_tool_name, arguments=tool_args or {})
                 is_error = bool(result.get("isError", False))
                 text = result.get("text") or None

@@ -140,8 +140,18 @@ class _StdioConnection:
 class MCPClient:
     """Lightweight manager to connect to external MCP servers and call tools."""
 
-    def __init__(self, mcps_config: Dict[str, Any]) -> None:
+    # Default per-tool-call timeout. Short by default so a hung/slow MCP server
+    # can't block a voice reply-loop turn for the runtime's 120s ceiling. A
+    # server config may set ``tool_timeout_sec`` to raise it for explicitly
+    # long-running/stateful servers (mirrors the ``idle_timeout_sec`` pattern).
+    DEFAULT_TOOL_TIMEOUT_SEC = 30.0
+
+    def __init__(self, mcps_config: Dict[str, Any], tool_timeout_sec: float = DEFAULT_TOOL_TIMEOUT_SEC) -> None:
         self.server_configs: Dict[str, Dict[str, Any]] = mcps_config or {}
+        try:
+            self._tool_timeout_sec = float(tool_timeout_sec)
+        except (TypeError, ValueError):
+            self._tool_timeout_sec = self.DEFAULT_TOOL_TIMEOUT_SEC
 
     def _connect_stdio(self, server_cfg: Dict[str, Any]):
         """Build an async context manager for the stdio transport.
@@ -278,9 +288,16 @@ class MCPClient:
         cfg = self._require_stdio_cfg(server_name)
         from .mcp_runtime import get_runtime, _WorkerDeadError
 
+        # Per-server override wins over the client default; both bound a single
+        # call_tool round trip so a stalled server can't hog the reply loop.
+        try:
+            timeout = float(cfg.get("tool_timeout_sec", self._tool_timeout_sec))
+        except (TypeError, ValueError):
+            timeout = self._tool_timeout_sec
+
         runtime = get_runtime()
         try:
-            res = runtime.invoke(server_name, cfg, tool_name, arguments)
+            res = runtime.invoke(server_name, cfg, tool_name, arguments, timeout=timeout)
         except _WorkerDeadError as e:
             raise MCPServerSessionError(str(e)) from e
         return _result_to_dict(res)
