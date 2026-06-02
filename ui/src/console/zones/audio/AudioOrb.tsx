@@ -1,9 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { Mic } from 'lucide-react'
 import { useAudioEngineCtx } from '@/console/context/AudioEngineContext'
+import { useAssistantAudioCtx } from '@/console/services/AssistantAudioContext'
+import { statusDisplay } from '@/console/lib/statusMap'
 
 export default function AudioOrb() {
   const { levelRef, vadRef, permission, running, enable } = useAudioEngineCtx()
+  const { state: assistantState, connected } = useAssistantAudioCtx()
+  const status = statusDisplay(assistantState, connected)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -70,7 +74,7 @@ export default function AudioOrb() {
           className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-[#22d3ee] animate-glow-pulse' : 'bg-[#475569]'}`}
         />
         <span className="text-[10px] text-[#94a3b8] tracking-widest uppercase">
-          {running ? 'Active' : 'Standby'}
+          {running ? 'Mic preview' : 'Preview off'}
         </span>
       </div>
       {needsPermission && (
@@ -86,11 +90,14 @@ export default function AudioOrb() {
           <Mic size={14} /> Enable microphone
         </button>
       )}
-      <div
-        className="absolute bottom-3 z-10 text-[11px] tracking-widest uppercase font-semibold"
-        style={{ color: running ? '#22d3ee' : '#475569' }}
-      >
-        {running ? 'Listening' : 'Idle'}
+      <div className="absolute bottom-3 z-10 flex flex-col items-center gap-0.5">
+        <span
+          className="text-[11px] tracking-widest uppercase font-semibold"
+          style={{ color: status.color }}
+        >
+          {status.label}
+        </span>
+        <span className="text-[8px] text-[#475569] tracking-widest uppercase">assistant</span>
       </div>
     </div>
   )

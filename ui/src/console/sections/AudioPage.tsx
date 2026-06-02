@@ -1,5 +1,6 @@
 import Card from '@/console/components/Card'
 import { AudioEngineProvider } from '@/console/context/AudioEngineContext'
+import { AssistantAudioProvider } from '@/console/services/AssistantAudioContext'
 import WaveformBand from '@/console/zones/audio/WaveformBand'
 import SpectrumRibbon from '@/console/zones/audio/SpectrumRibbon'
 import AudioOrb from '@/console/zones/audio/AudioOrb'
@@ -10,6 +11,7 @@ import AudioEventsFeed from '@/console/zones/audio/AudioEventsFeed'
 
 export default function AudioPage() {
   return (
+    <AssistantAudioProvider>
     <AudioEngineProvider>
       <div className="flex gap-4 h-full">
         {/* Left hero (60%) */}
@@ -44,5 +46,6 @@ export default function AudioPage() {
         </div>
       </div>
     </AudioEngineProvider>
+    </AssistantAudioProvider>
   )
 }

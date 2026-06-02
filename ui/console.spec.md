@@ -60,7 +60,7 @@ screenshotable). `useConnection()` exposes `{ state, connected, version }`;
 |---|---|---|
 | Dashboard | 4 | mock today; later `/ws/state` + `/api/system/metrics` + `/api/services/status` |
 | Memory | 3 | mock today; later graph + reminders endpoints |
-| Audio I/O | 2 | mock today; later `/ws/state` + `/api/audio/devices` + `/api/config` |
+| Audio I/O | 2 | DONE - real state (`/ws/state`), devices (`/api/audio/devices`), sensitivity + device select (`/api/config`), mute/tone; waveform/spectrum/orb-pulse kept as browser mic preview |
 | Live Logs | 1 | DONE - live `/ws/logs` (backfills ~100 on connect) via `console/lib/logMap.ts`; fail-open to demo generator |
 | Settings | 5 | not built yet |
 
