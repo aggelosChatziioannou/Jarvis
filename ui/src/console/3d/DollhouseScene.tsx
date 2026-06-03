@@ -19,6 +19,7 @@ import StudioFurniture from './furniture/StudioFurniture'
 import ControlFurniture from './furniture/ControlFurniture'
 import { DustMotes, FloorReflection, FloatingRoomLabels } from './Atmosphere'
 import { NotificationOrbs } from './Interactive'
+import { useFurnitureActions } from '@/console/services/useFurnitureActions'
 
 const LIGHT_CONFIG: Record<SceneMode, { ambient: number; hemi: number; key: number; room: number }> = {
   morning: { ambient: 0.5, hemi: 0.6, key: 1.3, room: 0.95 },
@@ -155,7 +156,7 @@ function FocusCamera({
 export default function DollhouseScene() {
   const {
     sceneMode, mood, services,
-    activeTarget, setActiveTarget,
+    activeTarget, setActiveTarget, activate,
     setHovered, hovered,
     notifications, pushNotification, removeNotification,
     focusMode,
@@ -163,15 +164,17 @@ export default function DollhouseScene() {
   const controlsRef = useRef<any>(null)
   const operatorPos = useRef(new THREE.Vector3(0, 1.4, 0))
 
+  const arrive = useFurnitureActions()
+
   const ix: Interaction = useMemo(
     () => ({
-      activate: setActiveTarget,
+      activate,
       hover: setHovered,
       notify: pushNotification,
       activeId: activeTarget?.id ?? null,
-      arrive: () => {}, // placeholder — wired to the dispatcher in a later work-unit
+      arrive,
     }),
-    [setActiveTarget, setHovered, pushNotification, activeTarget],
+    [activate, setHovered, pushNotification, activeTarget, arrive],
   )
 
   const fp = { services, mood, ix }
@@ -198,7 +201,7 @@ export default function DollhouseScene() {
           <WellnessFurniture {...fp} />
           <StudioFurniture {...fp} />
           <ControlFurniture {...fp} />
-          <OperatorCharacter activeTarget={activeTarget} mood={mood} hovered={hovered} operatorPos={operatorPos} />
+          <OperatorCharacter activeTarget={activeTarget} mood={mood} hovered={hovered} operatorPos={operatorPos} onArrive={arrive} />
           <NotificationOrbs notifications={notifications} operatorPos={operatorPos} onDone={removeNotification} />
 
           <FloorReflection />

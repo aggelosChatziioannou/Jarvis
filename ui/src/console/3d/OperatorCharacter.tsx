@@ -11,6 +11,7 @@ import * as THREE from 'three'
 import { PALETTE, AVATAR_HEIGHT, MOOD_COLOR, ATRIUM_HOME, OPERATOR_SPEED, roomKeyAt, findRoomPath } from './sceneConstants'
 import type { OperatorPose } from './sceneConstants'
 import type { ActiveTarget, HoveredObject, SystemMood } from './dollhouseTypes'
+import { shouldFireArrival } from './furnitureActions'
 
 const SCALE = AVATAR_HEIGHT / 1.5
 const LEG_H = 0.30 * SCALE
@@ -77,9 +78,10 @@ export interface OperatorProps {
   mood: SystemMood
   hovered: HoveredObject | null
   operatorPos: React.RefObject<THREE.Vector3 | null>
+  onArrive?: (id: string) => void
 }
 
-export default function OperatorCharacter({ activeTarget, mood, hovered, operatorPos }: OperatorProps) {
+export default function OperatorCharacter({ activeTarget, mood, hovered, operatorPos, onArrive }: OperatorProps) {
   const glow = MOOD_COLOR[mood] ?? PALETTE.cyan
 
   const root = useRef<THREE.Group>(null)
@@ -99,6 +101,9 @@ export default function OperatorCharacter({ activeTarget, mood, hovered, operato
   const path = useRef<THREE.Vector3[]>([])
   const pathIdx = useRef(0)
   const lastDest = useRef<string | null>(null)
+  const firedNonce = useRef<number | null>(null)
+  const onArriveRef = useRef(onArrive)
+  onArriveRef.current = onArrive
 
   const pose: OperatorPose = activeTarget ? activeTarget.pose : 'idle'
   const ps = useMemo(() => poseFor(pose), [pose])
@@ -132,6 +137,13 @@ export default function OperatorCharacter({ activeTarget, mood, hovered, operato
       _dir.set(wp.x - g.position.x, 0, wp.z - g.position.z)
       const dist = _dir.length()
       const arrivedFinal = pathIdx.current >= lastIdx && dist < 0.2
+      if (arrivedFinal && activeTarget) {
+        const nonce = activeTarget.nonce ?? 0
+        if (shouldFireArrival(firedNonce.current, true, nonce)) {
+          firedNonce.current = nonce
+          onArriveRef.current?.(activeTarget.id)
+        }
+      }
       if (!arrivedFinal) {
         isWalking = pathIdx.current < lastIdx || dist > 0.25
         const step = OPERATOR_SPEED * d

@@ -5,6 +5,8 @@ import SceneStateBridge from '@/console/dashboard/SceneStateBridge'
 import ZoomControls from '@/console/dashboard/ZoomControls'
 import StatePanel from '@/console/dashboard/StatePanel'
 import SystemStatusPanel from '@/console/dashboard/SystemStatusPanel'
+import NowPlayingPanel from '@/console/dashboard/NowPlayingPanel'
+import FocusOverlay from '@/console/dashboard/FocusOverlay'
 
 const DollhouseScene = lazy(() => import('@/console/3d/DollhouseScene'))
 
@@ -20,6 +22,8 @@ export default function DashboardPage() {
           <ZoomControls />
           <StatePanel />
           <SystemStatusPanel />
+          <NowPlayingPanel />
+          <FocusOverlay />
         </div>
       </DashboardDataProvider>
     </SceneProvider>
