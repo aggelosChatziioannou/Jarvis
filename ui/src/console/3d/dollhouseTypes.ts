@@ -36,6 +36,7 @@ export interface ActiveTarget {
   position: [number, number, number]
   rotationY: number
   pose: OperatorPose
+  nonce?: number // bumped on every activate() so re-clicking the same object re-fires on arrival
 }
 
 // The object currently hovered (for tooltip + avatar head-tracking).
@@ -58,6 +59,7 @@ export interface Interaction {
   hover: (obj: HoveredObject | null) => void
   notify: (from: [number, number, number], color?: string) => void
   activeId: string | null // which object is currently active (persistent state)
+  arrive: (id: string) => void // fired once when the Operator reaches the active object
 }
 
 // Props passed to every room furniture module.

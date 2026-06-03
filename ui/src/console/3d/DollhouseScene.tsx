@@ -169,6 +169,7 @@ export default function DollhouseScene() {
       hover: setHovered,
       notify: pushNotification,
       activeId: activeTarget?.id ?? null,
+      arrive: () => {}, // placeholder — wired to the dispatcher in a later work-unit
     }),
     [setActiveTarget, setHovered, pushNotification, activeTarget],
   )
