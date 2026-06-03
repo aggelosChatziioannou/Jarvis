@@ -38,6 +38,13 @@ interface SceneContextType {
 
   focusMode: boolean
   toggleFocusMode: () => void
+
+  // Embodied furniture actions
+  activate: (target: import('./dollhouseTypes').ActiveTarget) => void
+  dndActive: boolean
+  toggleDnd: () => void
+  openPanel: 'nowplaying' | null
+  setOpenPanel: (p: 'nowplaying' | null) => void
 }
 
 const noop = () => {}
@@ -51,6 +58,9 @@ const SceneContext = createContext<SceneContextType>({
   operatorState: 'idle',
   notifications: [], pushNotification: noop, removeNotification: noop,
   focusMode: false, toggleFocusMode: noop,
+  activate: noop,
+  dndActive: false, toggleDnd: noop,
+  openPanel: null, setOpenPanel: noop,
 })
 
 export function useSceneContext() {
@@ -69,6 +79,24 @@ export function SceneProvider({ children }: { children: ReactNode }) {
   const [focusMode, setFocusMode] = useState(false)
   const toggleFocusMode = useCallback(() => setFocusMode((p) => !p), [])
 
+  const [dndActive, setDndActive] = useState(false)
+  const [openPanel, setOpenPanel] = useState<'nowplaying' | null>(null)
+  const nonceRef = useRef(0)
+  const dndRef = useRef(false)
+
+  const activate = useCallback((t: ActiveTarget) => {
+    nonceRef.current += 1
+    setActiveTarget({ ...t, nonce: nonceRef.current })
+  }, [])
+
+  const toggleDnd = useCallback(() => {
+    setDndActive((prev) => {
+      const next = !prev
+      dndRef.current = next
+      return next
+    })
+  }, [])
+
   const toggleNightMode = useCallback(() => {
     setNightMode((prev) => {
       const next = !prev
@@ -86,6 +114,7 @@ export function SceneProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const pushNotification = useCallback((from: [number, number, number], color = '#22d3ee') => {
+    if (dndRef.current) return // Focus/DND: stay quiet
     const id = notifId.current++
     setNotifications((prev) => [...prev.slice(-6), { id, from, color }])
   }, [])
@@ -103,10 +132,12 @@ export function SceneProvider({ children }: { children: ReactNode }) {
       activeTarget, setActiveTarget, hovered, setHovered, operatorState,
       notifications, pushNotification, removeNotification,
       focusMode, toggleFocusMode,
+      activate, dndActive, toggleDnd, openPanel, setOpenPanel,
     }),
     [sceneMode, nightMode, toggleNightMode, mood, services, toggleService,
       activeTarget, hovered, operatorState, notifications, pushNotification, removeNotification,
-      focusMode, toggleFocusMode],
+      focusMode, toggleFocusMode,
+      activate, dndActive, toggleDnd, openPanel],
   )
 
   return <SceneContext.Provider value={value}>{children}</SceneContext.Provider>
