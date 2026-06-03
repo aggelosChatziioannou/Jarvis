@@ -317,6 +317,9 @@ def patch_config(patch: ConfigPatch) -> Dict[str, Any]:
     current = _load_json(cfg_path)
     if not isinstance(current, dict):
         current = {}
+    # Snapshot the pre-update STT backend so we can detect a real change
+    # below (and ignore no-op writes of the same value).
+    old_backend = current.get("stt_backend")
     # Resolve any masked secret sentinels back to the stored values so a UI
     # round-trip of the masked config can never wipe a credential.
     updates = _restore_masked(patch.updates, current)
@@ -327,6 +330,34 @@ def patch_config(patch: ConfigPatch) -> Dict[str, Any]:
     if not config_safety.safe_write_config(cfg_path, current):
         raise HTTPException(500, "Failed to write config")
     publish_log("info", f"Config updated: {list(patch.updates.keys())}")
+
+    # If the speech-to-text backend changed, hot-switch the running voice
+    # listener in-process — no full daemon restart. Fire on a background
+    # thread so this PATCH returns immediately; the switch result (and any
+    # fallback) streams to the Live Logs feed. Imported lazily to avoid a
+    # circular import (daemon imports api_server at startup).
+    new_backend = updates.get("stt_backend")
+    if (
+        "stt_backend" in updates
+        and new_backend != old_backend
+        and new_backend in ("whisper", "wispr")
+    ):
+        publish_log("info", f"🔀 STT backend change requested → {new_backend}")
+
+        def _do_switch() -> None:
+            try:
+                from . import daemon
+                if not daemon.request_stt_switch(new_backend):
+                    publish_log(
+                        "warning",
+                        "STT switch requested but no active listener yet "
+                        "(it will apply on next start).",
+                    )
+            except Exception as e:
+                publish_log("error", f"STT switch failed: {e}")
+
+        threading.Thread(target=_do_switch, name="STTSwitch", daemon=True).start()
+
     return current
 
 
@@ -748,6 +779,52 @@ def reminders_delete(rid: str) -> Dict[str, Any]:
 
 _weather_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 _WEATHER_TTL_SEC = 900  # 15 min — the dashboard polls; don't hammer Open-Meteo.
+# Geocoding cache keyed by the configured location string -> {lat, lon, place}.
+_geocode_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
+
+def _resolve_weather_location(query: str) -> Optional[Dict[str, Any]]:
+    """Turn a configured location string into {lat, lon, place}.
+
+    Accepts either explicit coordinates ("39.66,20.85") or a place name
+    ("Ioannina"), the latter geocoded once via Open-Meteo's free geocoding
+    API and cached. Returns None on failure.
+    """
+    query = (query or "").strip()
+    if not query:
+        return None
+    if query in _geocode_cache:
+        return _geocode_cache[query]
+
+    result: Optional[Dict[str, Any]] = None
+    # Explicit "lat,lon" form.
+    parts = query.split(",")
+    if len(parts) == 2:
+        try:
+            result = {"lat": float(parts[0]), "lon": float(parts[1]), "place": ""}
+        except ValueError:
+            result = None
+    if result is None:
+        try:
+            import requests
+            resp = requests.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": query, "count": 1, "language": "en", "format": "json"},
+                timeout=5,
+            )
+            hit = (resp.json().get("results") or [None])[0]
+            if hit and hit.get("latitude") is not None and hit.get("longitude") is not None:
+                result = {
+                    "lat": float(hit["latitude"]),
+                    "lon": float(hit["longitude"]),
+                    "place": hit.get("name") or query,
+                }
+        except Exception as e:
+            debug_log(f"geocode failed for {query!r}: {type(e).__name__}", "tools")
+            result = None
+
+    _geocode_cache[query] = result
+    return result
 
 
 def _read_weather() -> Optional[Dict[str, Any]]:
@@ -757,16 +834,30 @@ def _read_weather() -> Optional[Dict[str, Any]]:
         return cached
     try:
         import requests
-        from .utils.location import get_location_info
         from .tools.builtin.weather import WMO_CODES
 
         settings = _load_settings_safe()
-        loc = get_location_info(
-            config_ip=getattr(settings, "location_ip_address", None),
-            auto_detect=getattr(settings, "location_auto_detect", True),
-        )
-        lat = loc.get("latitude")
-        lon = loc.get("longitude")
+        place = ""
+        lat = lon = None
+
+        # Preferred path: a manually configured location (city or lat,lon).
+        # Bypasses GeoIP entirely so weather works without the GeoLite2 DB.
+        manual = getattr(settings, "weather_location", None)
+        if manual:
+            resolved = _resolve_weather_location(manual)
+            if resolved:
+                lat, lon, place = resolved["lat"], resolved["lon"], resolved["place"]
+
+        # Fallback: IP-based geolocation (needs the GeoLite2 DB present).
+        if lat is None or lon is None:
+            from .utils.location import get_location_info
+            loc = get_location_info(
+                config_ip=getattr(settings, "location_ip_address", None),
+                auto_detect=getattr(settings, "location_auto_detect", True),
+            )
+            lat = loc.get("latitude")
+            lon = loc.get("longitude")
+            place = loc.get("city") or loc.get("region") or ""
         if lat is None or lon is None:
             return None
         resp = requests.get(
@@ -778,7 +869,7 @@ def _read_weather() -> Optional[Dict[str, Any]]:
         data = {
             "temp_c": cw.get("temperature"),
             "description": WMO_CODES.get(int(cw.get("weathercode", -1)), "Unknown"),
-            "place": loc.get("city") or loc.get("region") or "",
+            "place": place,
         }
         _weather_cache["data"] = data
         _weather_cache["at"] = now
@@ -846,7 +937,12 @@ def _spotify_status() -> Dict[str, Any]:
                     t = cur["item"]
                     artist = (t.get("artists") or [{}])[0].get("name", "")
                     playing = bool(cur.get("is_playing"))
+                    imgs = (t.get("album") or {}).get("images") or []
                     data["active"] = playing
+                    data["title"] = t.get("name", "")
+                    data["artist"] = artist
+                    data["image_url"] = imgs[0].get("url") if imgs else None
+                    data["is_playing"] = playing
                     data["detail"] = f"{'▶' if playing else '⏸'} {t.get('name', '')} — {artist}".strip(" —")
                 else:
                     data["detail"] = "idle"
@@ -856,6 +952,80 @@ def _spotify_status() -> Dict[str, Any]:
     _spotify_cache["data"] = data
     _spotify_cache["at"] = now
     return data
+
+
+class SpotifyControlBody(BaseModel):
+    op: str  # 'playpause' | 'next' | 'prev'
+
+
+@app.post("/api/spotify/control")
+def spotify_control(body: SpotifyControlBody) -> Dict[str, Any]:
+    """Control Spotify playback (Premium). Never raises to the client — every
+    failure maps to {ok: False, reason}. Mirrors mcps/spotify_mcp.py logic but
+    reuses the cached OAuth token like _spotify_status."""
+    op = (body.op or "").strip().lower()
+    if op not in ("playpause", "next", "prev"):
+        return {"ok": False, "reason": "unknown op"}
+    try:
+        env = _mcp_env()
+        cache_path = _MCPS_ENV_PATH.parent / ".spotify_cache"
+        if not (env.get("SPOTIFY_CLIENT_ID") and cache_path.exists()):
+            return {"ok": False, "reason": "not authorised"}
+
+        import spotipy
+        from spotipy.oauth2 import SpotifyOAuth
+
+        auth = SpotifyOAuth(
+            client_id=env["SPOTIFY_CLIENT_ID"],
+            client_secret=env.get("SPOTIFY_CLIENT_SECRET", ""),
+            redirect_uri=env.get("SPOTIFY_REDIRECT_URI", ""),
+            scope="user-read-playback-state user-modify-playback-state user-read-currently-playing",
+            cache_path=str(cache_path),
+            open_browser=False,
+        )
+        try:
+            token = auth.cache_handler.get_cached_token()
+        except Exception:
+            token = None
+        if not token:
+            return {"ok": False, "reason": "re-authorise Spotify"}
+
+        sp = spotipy.Spotify(auth_manager=auth)
+
+        device_id = None
+        try:
+            devices = (sp.devices() or {}).get("devices", [])
+            active = next((d for d in devices if d.get("is_active")), None)
+            device_id = ((active or (devices[0] if devices else None)) or {}).get("id")
+        except Exception:
+            device_id = None
+
+        try:
+            cur = sp.current_playback()
+        except Exception:
+            cur = None
+
+        if op == "playpause":
+            if cur and cur.get("is_playing"):
+                sp.pause_playback()
+                is_playing = False
+            else:
+                sp.start_playback(device_id=device_id)
+                is_playing = True
+        elif op == "next":
+            sp.next_track(device_id=device_id)
+            is_playing = True
+        else:  # prev
+            sp.previous_track(device_id=device_id)
+            is_playing = True
+
+        _spotify_cache["data"] = None
+        _spotify_cache["at"] = 0.0
+        return {"ok": True, "is_playing": is_playing}
+    except Exception as e:
+        debug_log(f"spotify control failed: {type(e).__name__}", "tools")
+        reason = "no active device" if "NO_ACTIVE_DEVICE" in str(e).upper() else "spotify error"
+        return {"ok": False, "reason": reason}
 
 
 def _gmail_status() -> Dict[str, Any]:
@@ -925,6 +1095,9 @@ def system_metrics() -> Dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=4,
+            # Windows: prevent a console window from flashing on every poll.
+            # No-op on other platforms (flag is absent → 0).
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         first = res.stdout.strip().splitlines()[0]
         used, total, util = [p.strip() for p in first.split(",")]
