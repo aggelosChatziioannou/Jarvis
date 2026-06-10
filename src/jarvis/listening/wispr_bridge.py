@@ -316,6 +316,10 @@ class WisprBridge:
         self._wake_buf: list[int] = []     # int16 samples for wake
         self._vad_buf: list[float] = []    # float32 samples for VAD
 
+        # Live console telemetry: last-known VAD voiced flag (set by Silero
+        # start/end events) for the /ws/audio stream.
+        self._voiced = False
+
         # Wake-word cooldown (frames since last trigger)
         self._wake_cooldown = 0
 
@@ -1714,6 +1718,9 @@ class WisprBridge:
                       file=sys.stderr, flush=True)
                 return
 
+            # Live console telemetry (~12 Hz; zero cost with no client).
+            self._publish_telemetry(frame, predictions)
+
             # Trigger gate. Only consider a wake when truly idle and not in
             # cooldown. HOT_WINDOW intentionally skips the wake check — the user
             # is in a VAD-driven follow-up turn — but the model stayed fed above
@@ -1749,6 +1756,32 @@ class WisprBridge:
             else:
                 self._wake_consec = 0
 
+    def _publish_telemetry(self, frame: np.ndarray, predictions: dict) -> None:
+        """Stream one telemetry frame to the console's /ws/audio (best-effort).
+
+        Telemetry must never break the audio path: every failure is swallowed,
+        and nothing is computed unless a console client is subscribed.
+        """
+        try:
+            from .. import api_server
+            if not api_server.has_audio_subscribers():
+                return
+            from .audio_telemetry import band_spectrum, normalise_rms, telemetry_frame
+
+            rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+            best = max(predictions.values()) if predictions else 0.0
+            with self._state_lock:
+                state = self._state.name.lower()
+            api_server.publish_audio_telemetry(telemetry_frame(
+                rms_norm=normalise_rms(rms, gain=self.wake_gain),
+                state=state,
+                wake_score=best,
+                voiced=self._voiced,
+                spec=band_spectrum(frame),
+            ))
+        except Exception:
+            pass
+
     def _process_vad(self, audio_f32: np.ndarray) -> None:
         """
         Feed Silero VAD. In DICTATING state we look for an "end" event
@@ -1772,6 +1805,12 @@ class WisprBridge:
 
             if event is None:
                 continue
+
+            # Track voiced state for the console telemetry stream.
+            if "start" in event:
+                self._voiced = True
+            elif "end" in event:
+                self._voiced = False
 
             # Snapshot current state for branching
             with self._state_lock:

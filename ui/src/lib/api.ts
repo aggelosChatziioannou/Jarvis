@@ -263,3 +263,59 @@ export function openStateStream(onState: (s: VoiceStatePayload) => void): () => 
     }
   };
 }
+
+// Live audio telemetry from the daemon's listener: what Jarvis actually
+// hears (input level, wake score, VAD, coarse spectrum) at ~12 Hz.
+export interface AudioTelemetryPayload {
+  rms: number;
+  state: string;
+  wake: number | null;
+  vad: number | null;
+  voiced: boolean;
+  spec: number[];
+}
+
+export function openAudioStream(onFrame: (f: AudioTelemetryPayload) => void): () => void {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let reconnectTimer: number | null = null;
+
+  const connect = () => {
+    if (closed) return;
+    try {
+      ws = new WebSocket(`${WS_BASE}/ws/audio`);
+      ws.onmessage = (e) => {
+        try {
+          onFrame(JSON.parse(e.data));
+        } catch {
+          /* ignore */
+        }
+      };
+      ws.onclose = () => {
+        if (!closed) {
+          reconnectTimer = window.setTimeout(connect, 1500);
+        }
+      };
+      ws.onerror = () => {
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+      };
+    } catch {
+      reconnectTimer = window.setTimeout(connect, 1500);
+    }
+  };
+
+  connect();
+  return () => {
+    closed = true;
+    if (reconnectTimer) window.clearTimeout(reconnectTimer);
+    try {
+      ws?.close();
+    } catch {
+      /* ignore */
+    }
+  };
+}

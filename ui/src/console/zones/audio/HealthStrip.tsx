@@ -1,13 +1,43 @@
-import { Shield, VolumeX, Ear, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Activity, Ear, Sparkles, Radio } from 'lucide-react'
 import { useAudioEngineCtx } from '@/console/context/AudioEngineContext'
 
+// Real telemetry cards. Everything shown here is measured: input level from
+// the active signal source, VAD + wake score + state from the daemon's
+// listener via /ws/audio. No derived/fake percentages.
 export default function HealthStrip() {
-  const { health } = useAudioEngineCtx()
+  const { daemon, levelRef } = useAudioEngineCtx()
+  const [db, setDb] = useState(-60)
+
+  useEffect(() => {
+    const iv = window.setInterval(() => {
+      setDb(Math.round(levelRef.current.db))
+    }, 200)
+    return () => window.clearInterval(iv)
+  }, [levelRef])
+
+  const dbPct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100))
+  const wakePct = daemon.wake != null ? Math.round(daemon.wake * 100) : null
+  const vadPct = daemon.vad != null ? Math.round(daemon.vad * 100) : null
+
   const items = [
-    { icon: <Shield size={13} />, label: 'Quality', value: `${health.quality}%`, color: '#34d399', pct: health.quality },
-    { icon: <VolumeX size={13} />, label: 'Noise', value: `${health.noise}%`, color: '#22d3ee', pct: health.noise },
-    { icon: <Ear size={13} />, label: 'Clarity', value: `${health.clarity}%`, color: '#a78bfa', pct: health.clarity },
-    { icon: <Zap size={13} />, label: 'Response', value: `${health.responseMs}ms`, color: '#fbbf24', pct: Math.min(100, Math.max(8, 100 - health.responseMs)) },
+    {
+      icon: <Activity size={13} />, label: 'Input level', color: '#34d399',
+      value: db <= -60 ? 'silent' : `${db} dB`, pct: dbPct,
+    },
+    {
+      icon: <Ear size={13} />, label: 'Voice (VAD)', color: '#22d3ee',
+      value: daemon.connected ? (daemon.voiced ? 'speaking' : vadPct != null ? `${vadPct}%` : 'quiet') : '—',
+      pct: daemon.voiced ? 100 : vadPct ?? 0,
+    },
+    {
+      icon: <Sparkles size={13} />, label: 'Wake score', color: '#a78bfa',
+      value: wakePct != null ? `${wakePct}%` : '—', pct: wakePct ?? 0,
+    },
+    {
+      icon: <Radio size={13} />, label: 'Listener', color: daemon.connected ? '#fbbf24' : '#475569',
+      value: daemon.connected ? daemon.state : 'offline', pct: daemon.connected ? 100 : 0,
+    },
   ]
   return (
     <div className="flex gap-2">

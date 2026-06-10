@@ -2,11 +2,11 @@
 // Wraps the shared ui/src/lib/api client so console pages depend on one
 // surface and can fall back to demo data when the daemon is unreachable.
 
-import { api, openStateStream, openLogStream } from '@/lib/api'
-import type { VoiceStatePayload, LogPayload } from '@/lib/api'
+import { api, openStateStream, openLogStream, openAudioStream } from '@/lib/api'
+import type { VoiceStatePayload, LogPayload, AudioTelemetryPayload } from '@/lib/api'
 
-export { api, openStateStream, openLogStream }
-export type { VoiceStatePayload, LogPayload }
+export { api, openStateStream, openLogStream, openAudioStream }
+export type { VoiceStatePayload, LogPayload, AudioTelemetryPayload }
 
 // Same-origin when served by the daemon (port 38130); otherwise the dev
 // server (Vite on 3000) points at the loopback daemon.

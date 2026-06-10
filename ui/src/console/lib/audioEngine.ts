@@ -69,3 +69,33 @@ export function deriveHealth(level: LevelSnapshot, noiseFloorPct: number, respon
   const quality = Math.round(clamp(100 - (level.peak > 0.98 ? 40 : 0) - noise * 0.4, 0, 100))
   return { quality, noise, clarity, responseMs: Math.round(responseMs) }
 }
+
+// ---- Daemon telemetry rendering (real signal from /ws/audio) ----
+
+// Paint a scrolling waveform from the daemon's RMS history: each x-column's
+// amplitude is a real measured level; the sine carrier only gives it an
+// oscilloscope look. `pos` is the monotonically increasing write position.
+export function renderRmsWave(out: Uint8Array, hist: Float32Array, pos: number, gain = 4): void {
+  const n = out.length
+  const h = hist.length
+  for (let i = 0; i < n; i++) {
+    const histIdx = pos - h + Math.floor((i / n) * h)
+    const amp = histIdx >= 0 ? clamp(hist[((histIdx % h) + h) % h] * gain, 0, 1) : 0
+    const wave = Math.sin(i * 0.55) * amp
+    out[i] = clamp(Math.round(128 + wave * 120), 0, 255)
+  }
+}
+
+// Spread the daemon's coarse band spectrum across the analyser-sized bins.
+export function renderBandSpectrum(out: Uint8Array, spec: number[], gain = 3): void {
+  const n = out.length
+  const bands = spec.length
+  if (!bands) {
+    out.fill(0)
+    return
+  }
+  for (let i = 0; i < n; i++) {
+    const b = Math.min(bands - 1, Math.floor((i / n) * bands))
+    out[i] = clamp(Math.round(clamp(spec[b] * gain, 0, 1) * 255), 0, 255)
+  }
+}

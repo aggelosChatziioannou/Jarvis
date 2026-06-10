@@ -62,6 +62,13 @@ _voice_state: Dict[str, Any] = {
 _state_subscribers: List[asyncio.Queue] = []
 _state_subscribers_lock = threading.Lock()
 
+# Live audio telemetry (RMS / VAD / wake score / spectrum) for the console
+# Audio I/O page. No buffer — it is a live signal; clients see frames from
+# the moment they connect. Publishers must check has_audio_subscribers()
+# first so the audio path pays zero cost when no console is watching.
+_audio_subscribers: List[asyncio.Queue] = []
+_audio_subscribers_lock = threading.Lock()
+
 _started_at = time.time()
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -85,6 +92,21 @@ def publish_state(**fields: Any) -> None:
     """Update voice state and broadcast. Pass any subset of state fields."""
     _voice_state.update(fields)
     _broadcast_to_subscribers(_state_subscribers, _state_subscribers_lock, dict(_voice_state))
+
+
+def has_audio_subscribers() -> bool:
+    """True when at least one console client is on /ws/audio."""
+    return bool(_audio_subscribers)
+
+
+def publish_audio_telemetry(payload: Dict[str, Any]) -> None:
+    """Broadcast one live audio telemetry frame. Safe from any thread.
+
+    No-op (and allocation-free) when nobody is subscribed.
+    """
+    if not _audio_subscribers:
+        return
+    _broadcast_to_subscribers(_audio_subscribers, _audio_subscribers_lock, payload)
 
 
 _devices_changed_seq = 0
@@ -1413,6 +1435,35 @@ async def ws_state(ws: WebSocket) -> None:
         with _state_subscribers_lock:
             try:
                 _state_subscribers.remove(q)
+            except ValueError:
+                pass
+
+
+# ---------- WebSocket: live audio telemetry ----------
+
+@app.websocket("/ws/audio")
+async def ws_audio(ws: WebSocket) -> None:
+    """Streams what Jarvis actually hears: RMS, VAD, wake score, spectrum.
+
+    No backfill — this is a live signal. The listener backends only publish
+    while at least one client is connected.
+    """
+    await ws.accept()
+    q: asyncio.Queue = asyncio.Queue(maxsize=64)
+    with _audio_subscribers_lock:
+        _audio_subscribers.append(q)
+    try:
+        while True:
+            payload = await q.get()
+            await ws.send_json(payload)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        with _audio_subscribers_lock:
+            try:
+                _audio_subscribers.remove(q)
             except ValueError:
                 pass
 

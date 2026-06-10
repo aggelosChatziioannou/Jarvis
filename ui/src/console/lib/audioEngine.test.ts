@@ -80,3 +80,38 @@ describe('deriveHealth', () => {
     }
   })
 })
+
+describe('renderRmsWave', () => {
+  it('renders silence as a flat centre line', async () => {
+    const { renderRmsWave } = await import('./audioEngine')
+    const out = new Uint8Array(64)
+    renderRmsWave(out, new Float32Array(16), 16)
+    expect(out.every((v) => v === 128)).toBe(true)
+  })
+  it('renders loud history as deviation from centre', async () => {
+    const { renderRmsWave } = await import('./audioEngine')
+    const out = new Uint8Array(64)
+    const hist = new Float32Array(16).fill(0.25)
+    renderRmsWave(out, hist, 16)
+    expect(Math.max(...out)).toBeGreaterThan(160)
+    expect(Math.min(...out)).toBeLessThan(96)
+  })
+})
+
+describe('renderBandSpectrum', () => {
+  it('maps band energy onto the right region of bins', async () => {
+    const { renderBandSpectrum } = await import('./audioEngine')
+    const out = new Uint8Array(32)
+    const spec = new Array(16).fill(0)
+    spec[0] = 0.3 // low band only
+    renderBandSpectrum(out, spec)
+    expect(out[0]).toBeGreaterThan(100)
+    expect(out[31]).toBe(0)
+  })
+  it('empty spectrum clears the bins', async () => {
+    const { renderBandSpectrum } = await import('./audioEngine')
+    const out = new Uint8Array(8).fill(200)
+    renderBandSpectrum(out, [])
+    expect(Math.max(...out)).toBe(0)
+  })
+})

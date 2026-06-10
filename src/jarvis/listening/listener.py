@@ -2896,9 +2896,38 @@ class VoiceListener(threading.Thread):
                         f"{'speech' if is_speech else 'silence'}",
                         "vad",
                     )
+            self._publish_audio_telemetry(frame, rms, is_speech)
             return is_speech
         except Exception:
             return False
+
+    def _publish_audio_telemetry(self, frame, rms: float, voiced: bool) -> None:
+        """Stream live telemetry to the console /ws/audio (whisper backend).
+
+        Throttled to ~12 Hz; computes nothing when no console client is
+        subscribed; never raises into the audio path.
+        """
+        try:
+            now = time.time()
+            if now - getattr(self, "_telemetry_last", 0.0) < 0.08:
+                return
+            from .. import api_server
+            if not api_server.has_audio_subscribers():
+                return
+            self._telemetry_last = now
+            from .audio_telemetry import band_spectrum, normalise_rms, telemetry_frame
+
+            prob = getattr(self._vad, "last_probability", None) if self._vad is not None else None
+            api_server.publish_audio_telemetry(telemetry_frame(
+                # Whisper-path frames are float32 in [-1, 1].
+                rms_norm=normalise_rms(rms, full_scale=1.0),
+                state="listening" if self.is_speech_active else "idle",
+                vad_prob=prob,
+                voiced=voiced,
+                spec=band_spectrum(np.asarray(frame, dtype=np.float32).flatten() * 32768.0),
+            ))
+        except Exception:
+            pass
 
     # Whisper-hallucination blocklist now lives in the shared
     # ``listening/hallucinations`` module so the memory write-path can drop

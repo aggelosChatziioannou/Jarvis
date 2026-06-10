@@ -3,8 +3,10 @@ import type {
   AudioDevice, AudioEvent, AudioEventType, AudioMode, EngineParams, HealthSnapshot, LevelSnapshot, PermissionState,
 } from '@/console/types/audio'
 import {
-  capEvents, deriveHealth, demoFrequency, demoTimeDomain, gainFromVolume, isVoice, makeAudioEvent, rms, smoothingToTC, toDb,
+  capEvents, deriveHealth, gainFromVolume, isVoice, makeAudioEvent, renderBandSpectrum, renderRmsWave, rms, smoothingToTC, toDb,
 } from '@/console/lib/audioEngine'
+import { openAudioStream } from '@/console/services/seam'
+import type { AudioTelemetryPayload } from '@/console/services/seam'
 
 const FFT = 2048
 const FREQ_BINS = FFT / 2
@@ -13,7 +15,17 @@ const DEFAULT_PARAMS: EngineParams = { detection: 75, outputVolume: 85, noiseFlo
 
 type MediaWithSink = HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }
 
+/** What the daemon's listener reports it is hearing right now. */
+export interface DaemonAudio {
+  connected: boolean
+  state: string
+  wake: number | null
+  vad: number | null
+  voiced: boolean
+}
+
 export interface AudioEngine {
+  daemon: DaemonAudio
   timeRef: React.MutableRefObject<Uint8Array<ArrayBuffer>>
   freqRef: React.MutableRefObject<Uint8Array<ArrayBuffer>>
   levelRef: React.MutableRefObject<LevelSnapshot>
@@ -57,6 +69,14 @@ export function useAudioEngine(): AudioEngine {
   const [params, setParams] = useState<EngineParams>(DEFAULT_PARAMS)
   const [events, setEvents] = useState<AudioEvent[]>([])
   const [health, setHealth] = useState<HealthSnapshot>({ quality: 0, noise: 20, clarity: 0, responseMs: 0 })
+
+  // Daemon telemetry: the listener's real signal, used whenever the browser
+  // mic preview is off. RMS history feeds the scrolling waveform.
+  const daemonFrameRef = useRef<AudioTelemetryPayload | null>(null)
+  const daemonLastRef = useRef(0)
+  const daemonHistRef = useRef<Float32Array>(new Float32Array(192))
+  const daemonPosRef = useRef(0)
+  const [daemon, setDaemon] = useState<DaemonAudio>({ connected: false, state: 'idle', wake: null, vad: null, voiced: false })
 
   const ctxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -191,6 +211,30 @@ export function useAudioEngine(): AudioEngine {
     void refreshDevices()
   }, [refreshDevices])
 
+  // Subscribe to the daemon's live audio telemetry (/ws/audio).
+  useEffect(() => {
+    const stop = openAudioStream((f) => {
+      daemonFrameRef.current = f
+      daemonLastRef.current = performance.now() / 1000
+      const h = daemonHistRef.current
+      h[daemonPosRef.current % h.length] = f.rms
+      daemonPosRef.current += 1
+    })
+    const iv = window.setInterval(() => {
+      const f = daemonFrameRef.current
+      const fresh = f !== null && performance.now() / 1000 - daemonLastRef.current < 2
+      setDaemon((prev) => {
+        const next: DaemonAudio = fresh && f
+          ? { connected: true, state: f.state, wake: f.wake, vad: f.vad, voiced: f.voiced }
+          : { connected: false, state: 'idle', wake: null, vad: null, voiced: false }
+        return prev.connected === next.connected && prev.state === next.state &&
+          prev.wake === next.wake && prev.vad === next.vad && prev.voiced === next.voiced
+          ? prev : next
+      })
+    }, 250)
+    return () => { stop(); window.clearInterval(iv) }
+  }, [])
+
   useEffect(() => {
     let alive = true
     const tick = () => {
@@ -200,18 +244,26 @@ export function useAudioEngine(): AudioEngine {
       const time = timeRef.current
       const freq = freqRef.current
       const analyser = analyserRef.current
+      const daemonFresh = daemonFrameRef.current !== null && t - daemonLastRef.current < 2
       if (modeRef.current === 'live' && analyser) {
         analyser.getByteTimeDomainData(time)
         analyser.getByteFrequencyData(freq)
+      } else if (daemonFresh) {
+        // Real signal from the daemon's listener — no browser mic needed.
+        renderRmsWave(time, daemonHistRef.current, daemonPosRef.current)
+        renderBandSpectrum(freq, daemonFrameRef.current!.spec)
       } else {
-        demoTimeDomain(time, t)
-        demoFrequency(freq, t)
+        // No source at all: honest flatline, not a fake demo wave.
+        time.fill(128)
+        freq.fill(0)
       }
       const r = rms(time)
       let peak = 0
       for (let i = 0; i < time.length; i++) { const v = Math.abs((time[i] - 128) / 128); if (v > peak) peak = v }
       levelRef.current = { rms: r, db: toDb(r), peak }
-      const voice = isVoice(r, paramsRef.current.detection, paramsRef.current.noiseFloor)
+      const voice = modeRef.current !== 'live' && daemonFresh
+        ? daemonFrameRef.current!.voiced
+        : isVoice(r, paramsRef.current.detection, paramsRef.current.noiseFloor)
       vadRef.current = voice
       if (voice && !prevVadRef.current) pushEvent('voice-start', 'Voice detected')
       if (!voice && prevVadRef.current) pushEvent('voice-end', 'Voice ended')
@@ -235,9 +287,10 @@ export function useAudioEngine(): AudioEngine {
   }, [])
 
   return useMemo<AudioEngine>(() => ({
+    daemon,
     timeRef, freqRef, levelRef, vadRef, frameRef,
     mode, permission, running, inputDevices, outputDevices, selectedInput, selectedOutput, params, events, health,
     enable, disable, setMode, selectInput, selectOutput, setParam, playTestTone, testMic, clearEvents,
-  }), [mode, permission, running, inputDevices, outputDevices, selectedInput, selectedOutput, params, events, health,
+  }), [daemon, mode, permission, running, inputDevices, outputDevices, selectedInput, selectedOutput, params, events, health,
     enable, disable, setMode, selectInput, selectOutput, setParam, playTestTone, testMic, clearEvents])
 }
