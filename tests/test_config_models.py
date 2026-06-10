@@ -415,11 +415,15 @@ class TestModelConsistency:
             vram = info["vram"]
             assert "GB" in vram, f"{model_id} VRAM should specify GB"
 
-    def test_non_default_models_require_more_vram_than_default(self):
-        """Non-default models need more VRAM because the intent judge (gemma4:e2b) runs alongside them.
+    def test_non_default_models_require_at_least_default_vram(self):
+        """Every supported model must declare a parseable VRAM figure no lower
+        than the default model's.
 
-        The default model (gemma4:e2b) shares the intent judge, so its VRAM is the baseline.
-        Other models must load both themselves AND the intent judge, so their VRAM must be higher.
+        Historic note: this used to require strictly MORE VRAM because the
+        intent judge (gemma4:e2b) always loaded alongside a non-default chat
+        model. The judge now rides the chat model by default (one-model
+        topology), so equal VRAM is legitimate — a model the same size as the
+        default has the same footprint.
         """
         import re
 
@@ -434,10 +438,9 @@ class TestModelConsistency:
             if model_id == DEFAULT_CHAT_MODEL:
                 continue
             model_vram = _extract_vram_gb(info["vram"])
-            assert model_vram > default_vram, (
-                f"{model_id} VRAM ({info['vram']}) should be higher than default model VRAM "
-                f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['vram']}) because the intent judge "
-                f"(gemma4:e2b) always runs alongside the chat model"
+            assert model_vram >= default_vram, (
+                f"{model_id} VRAM ({info['vram']}) should be at least the default model's "
+                f"({SUPPORTED_CHAT_MODELS[DEFAULT_CHAT_MODEL]['vram']})"
             )
 
 
