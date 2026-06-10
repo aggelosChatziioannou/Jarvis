@@ -19,10 +19,13 @@ import sys
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QUrl, QTimer, QObject
-from PyQt6.QtGui import QGuiApplication, QIcon, QPainter, QColor, QPen, QFont, QRadialGradient
+from PyQt6.QtGui import (
+    QGuiApplication, QIcon, QPainter, QColor, QPen, QFont, QRadialGradient,
+    QKeySequence, QShortcut,
+)
 from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QWidget
+from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 
 
 CONSOLE_URL = "http://127.0.0.1:38130/panel"
@@ -30,6 +33,7 @@ API_HOST = "127.0.0.1"
 API_PORT = 38130
 DEFAULT_WIDTH = 1280
 DEFAULT_HEIGHT = 820
+RESIZE_BORDER = 8  # px-wide grab strip around the frameless console for resizing
 
 
 class _ConsolePage(QWebEnginePage):
@@ -109,6 +113,90 @@ class _ConsoleBootPlaceholder(QWidget):
         painter.end()
 
 
+class _ResizeFrame(QWidget):
+    """Central container that adds a thin user-resizable border to the
+    frameless console.
+
+    A pure ``FramelessWindowHint`` window has no resize grips, so the user
+    can only maximize or go fullscreen. We reserve a ``RESIZE_BORDER``-wide
+    strip around the hosted web view (which is a *native* child window and
+    therefore swallows mouse events over its own area). Because that strip
+    belongs to this parent widget — not the child — we reliably receive the
+    edge mouse events here and hand the resize off to the window manager via
+    ``QWindow.startSystemResize`` (multi-monitor / DPI / Aero-Snap correct).
+    """
+
+    def __init__(self, parent: "JarvisConsoleWindow") -> None:
+        super().__init__(parent)
+        self._win = parent
+        # Dark bezel so the border strip reads as intentional chrome.
+        self.setStyleSheet("background:#0a0e17;")
+        self.setMouseTracking(True)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(
+            RESIZE_BORDER, RESIZE_BORDER, RESIZE_BORDER, RESIZE_BORDER
+        )
+        self._layout.setSpacing(0)
+
+    def setContent(self, widget: QWidget) -> None:
+        self._layout.addWidget(widget)
+
+    def _edges_at(self, x: int, y: int):
+        """Return the Qt.Edge flags for a point, or None if not on a border."""
+        if self._win.isMaximized() or self._win.isFullScreen():
+            return None
+        w, h, b = self.width(), self.height(), RESIZE_BORDER
+        edges = Qt.Edge(0)
+        if x <= b:
+            edges |= Qt.Edge.LeftEdge
+        elif x >= w - b:
+            edges |= Qt.Edge.RightEdge
+        if y <= b:
+            edges |= Qt.Edge.TopEdge
+        elif y >= h - b:
+            edges |= Qt.Edge.BottomEdge
+        return edges if edges.value else None
+
+    @staticmethod
+    def _cursor_for(edges) -> Qt.CursorShape:
+        left = bool((edges & Qt.Edge.LeftEdge).value)
+        right = bool((edges & Qt.Edge.RightEdge).value)
+        top = bool((edges & Qt.Edge.TopEdge).value)
+        bottom = bool((edges & Qt.Edge.BottomEdge).value)
+        if (top and left) or (bottom and right):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (top and right) or (bottom and left):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        return Qt.CursorShape.SizeVerCursor
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        pos = event.position().toPoint()
+        edges = self._edges_at(pos.x(), pos.y())
+        if edges is not None:
+            self.setCursor(self._cursor_for(edges))
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            edges = self._edges_at(pos.x(), pos.y())
+            if edges is not None:
+                handle = self._win.windowHandle()
+                if handle is not None:
+                    handle.startSystemResize(edges)
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self.unsetCursor()
+        super().leaveEvent(event)
+
+
 class JarvisConsoleWindow(QMainWindow):
     """Native window hosting the React /panel UI."""
 
@@ -142,11 +230,25 @@ class JarvisConsoleWindow(QMainWindow):
         )
         self._stack.addWidget(self._view)
 
-        self.setCentralWidget(self._stack)
+        # Host the stack inside a resize frame so the frameless window gets a
+        # user-draggable resize border (see _ResizeFrame).
+        self._frame = _ResizeFrame(self)
+        self._frame.setContent(self._stack)
+        self.setCentralWidget(self._frame)
         self._stack.setCurrentIndex(0)  # start on placeholder
 
+        self.setMinimumSize(720, 480)
         self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         self._center_on_screen()
+
+        # F11 toggles true fullscreen. We register a Qt application-shortcut as a
+        # backup; the primary path is an in-page keydown handler injected by
+        # _inject_console_bridge, because Chromium (QWebEngineView) can swallow
+        # the key before Qt's shortcut map sees it.
+        self._was_maximized = False
+        self._fs_shortcut = QShortcut(QKeySequence("F11"), self)
+        self._fs_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._fs_shortcut.activated.connect(self._toggle_fullscreen)
 
         # Begin polling for the daemon to come up before loading the URL.
         self._poll_attempts = 0
@@ -165,6 +267,17 @@ class JarvisConsoleWindow(QMainWindow):
             self.move(x, y)
         except Exception:
             pass
+
+    def _toggle_fullscreen(self) -> None:
+        """Toggle true fullscreen, restoring the prior windowed/maximized state."""
+        if self.isFullScreen():
+            if self._was_maximized:
+                self.showMaximized()
+            else:
+                self.showNormal()
+        else:
+            self._was_maximized = self.isMaximized()
+            self.showFullScreen()
 
     def _poll_daemon(self) -> None:
         """Wait until 127.0.0.1:38130 accepts connections, then load the URL."""
@@ -217,6 +330,36 @@ class JarvisConsoleWindow(QMainWindow):
             window.consoleStartSystemMove = function() {
                 window.location.href = 'console://startsystemmove';
             };
+            window.consoleFullscreen = function() {
+                window.location.href = 'console://fullscreen';
+            };
+
+            // F11 fullscreen handled in-page so Chromium can't swallow it before
+            // Qt's shortcut map sees it. Capture phase + preventDefault wins.
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'F11') { e.preventDefault(); window.consoleFullscreen(); }
+            }, true);
+
+            // Guaranteed clickable fullscreen toggle (top-right), in case the
+            // app's title bar has no maximize/fullscreen control. Subtle until hovered.
+            if (!document.getElementById('__jarvisFsBtn')) {
+                var b = document.createElement('button');
+                b.id = '__jarvisFsBtn';
+                b.title = 'Toggle fullscreen (F11)';
+                b.innerHTML = '⛶';
+                b.style.cssText = [
+                    'position:fixed', 'top:7px', 'right:10px', 'z-index:2147483647',
+                    'width:26px', 'height:26px', 'padding:0', 'line-height:24px',
+                    'font-size:14px', 'text-align:center', 'cursor:pointer',
+                    'color:#22d3ee', 'background:rgba(7,10,16,0.55)',
+                    'border:1px solid rgba(34,211,238,0.25)', 'border-radius:7px',
+                    'opacity:0.35', 'transition:opacity .15s'
+                ].join(';');
+                b.onmouseenter = function() { b.style.opacity = '1'; };
+                b.onmouseleave = function() { b.style.opacity = '0.35'; };
+                b.onclick = function(ev) { ev.preventDefault(); ev.stopPropagation(); window.consoleFullscreen(); };
+                document.body.appendChild(b);
+            }
         })();
         """
         self._page.runJavaScript(script)
@@ -232,6 +375,8 @@ class JarvisConsoleWindow(QMainWindow):
                 self.showMaximized()
         elif action == "close":
             self.hide()
+        elif action == "fullscreen":
+            self._toggle_fullscreen()
         elif action == "startsystemmove":
             self._start_system_move()
 

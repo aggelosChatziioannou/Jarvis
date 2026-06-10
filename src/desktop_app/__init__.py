@@ -15,6 +15,22 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 
+# Keep QtWebEngine windows from blanking / reloading on move.
+#
+# The translucent, always-on-top floating HUD is a layered window. While it
+# is dragged, Chromium's native window-occlusion calculator on Windows can
+# briefly flag it as occluded, discard its compositor surface, and reload the
+# page from scratch when it reappears (the HUD's boot sequence restarts).
+# Disabling CalculateNativeWinOcclusion stops that discard. It does NOT turn
+# off GPU acceleration, so the dashboard's WebGL dollhouse is unaffected.
+# Must be set before QtWebEngine initialises (i.e. before importing app).
+_occlusion_flag = '--disable-features=CalculateNativeWinOcclusion'
+_existing_flags = os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS', '')
+if 'CalculateNativeWinOcclusion' not in _existing_flags:
+    os.environ['QTWEBENGINE_CHROMIUM_FLAGS'] = (
+        f'{_existing_flags} {_occlusion_flag}'.strip()
+    )
+
 # Re-export main for entry point
 from desktop_app.app import main
 
