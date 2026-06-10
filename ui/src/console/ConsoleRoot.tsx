@@ -2,6 +2,7 @@ import { useState, useCallback, lazy, Suspense } from 'react'
 import TitleBar from '@/console/components/shell/TitleBar'
 import Sidebar from '@/console/components/shell/Sidebar'
 import StatusBar from '@/console/components/shell/StatusBar'
+import { NavigationContext } from '@/console/services/NavigationContext'
 
 const DashboardPage = lazy(() => import('@/console/sections/DashboardPage'))
 const MemoryPage = lazy(() => import('@/console/sections/MemoryPage'))
@@ -22,6 +23,7 @@ export default function ConsoleRoot() {
   const handleNavigate = useCallback((page: string) => setActivePage(page), [])
 
   return (
+    <NavigationContext.Provider value={handleNavigate}>
     <div className="h-screen w-screen bg-[#0a0e17] flex flex-col overflow-hidden">
       <TitleBar pageTitle={PAGE_TITLES[activePage] ?? 'Console'} />
       <div className="flex flex-1 min-h-0">
@@ -42,6 +44,7 @@ export default function ConsoleRoot() {
       </div>
       <StatusBar />
     </div>
+    </NavigationContext.Provider>
   )
 }
 

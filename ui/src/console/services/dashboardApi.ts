@@ -53,6 +53,46 @@ export interface SpotifyControlResult {
   reason?: string
 }
 
+/** Create a reminder firing `afterMinutes` from now. Resolves false on any failure. */
+export async function createQuickReminder(text: string, afterMinutes: number): Promise<boolean> {
+  try {
+    const when = new Date(Date.now() + afterMinutes * 60_000)
+    const r = await fetch(`${BASE}/api/reminders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, trigger_at: when.toISOString() }),
+    })
+    return r.ok
+  } catch {
+    return false
+  }
+}
+
+/** Play the daemon's test tone on the configured output device. */
+export async function playTestTone(): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/audio/test-tone`, { method: 'POST' })
+    return r.ok
+  } catch {
+    return false
+  }
+}
+
+export interface ReminderItem {
+  id: string
+  text: string
+  trigger_at: string | null
+  status: string
+}
+
+export async function fetchReminders(): Promise<ReminderItem[]> {
+  try {
+    return await j<ReminderItem[]>('/api/reminders')
+  } catch {
+    return []
+  }
+}
+
 export async function spotifyControl(op: 'playpause' | 'next' | 'prev'): Promise<SpotifyControlResult> {
   try {
     const r = await fetch(`${BASE}/api/spotify/control`, {

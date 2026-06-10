@@ -20,6 +20,7 @@ import ControlFurniture from './furniture/ControlFurniture'
 import { DustMotes, FloorReflection, FloatingRoomLabels } from './Atmosphere'
 import { NotificationOrbs } from './Interactive'
 import { useFurnitureActions } from '@/console/services/useFurnitureActions'
+import ResponsiveFraming from './ResponsiveFraming'
 
 const LIGHT_CONFIG: Record<SceneMode, { ambient: number; hemi: number; key: number; room: number }> = {
   morning: { ambient: 0.5, hemi: 0.6, key: 1.3, room: 0.95 },
@@ -233,6 +234,7 @@ export default function DollhouseScene() {
           zoomSpeed={0.6}
         />
         <ZoomListener controlsRef={controlsRef} />
+        <ResponsiveFraming />
         <FocusCamera focusMode={focusMode} activeTarget={activeTarget} operatorPos={operatorPos} controlsRef={controlsRef} />
 
         <EffectComposer enableNormalPass={false} multisampling={2}>

@@ -37,6 +37,8 @@ export default function SystemStatusPanel() {
       className="absolute right-6 top-1/2 z-40 hidden lg:block -translate-y-1/2"
       style={{
         width: '280px',
+        maxHeight: 'calc(100% - 32px)',
+        overflowY: 'auto',
         background: 'rgba(17, 24, 39, 0.95)',
         backdropFilter: 'blur(12px)',
         border: '1px solid rgba(34, 211, 238, 0.15)',

@@ -10,6 +10,7 @@ import type {
   OperatorState,
 } from './dollhouseTypes'
 import { DEFAULT_SERVICES } from './dollhouseTypes'
+import type { PanelId } from './furnitureActions'
 
 export type { SceneMode } from './dollhouseTypes'
 
@@ -43,8 +44,8 @@ interface SceneContextType {
   activate: (target: import('./dollhouseTypes').ActiveTarget) => void
   dndActive: boolean
   toggleDnd: () => void
-  openPanel: 'nowplaying' | null
-  setOpenPanel: (p: 'nowplaying' | null) => void
+  openPanel: PanelId | null
+  setOpenPanel: (p: PanelId | null) => void
 }
 
 const noop = () => {}
@@ -80,7 +81,7 @@ export function SceneProvider({ children }: { children: ReactNode }) {
   const toggleFocusMode = useCallback(() => setFocusMode((p) => !p), [])
 
   const [dndActive, setDndActive] = useState(false)
-  const [openPanel, setOpenPanel] = useState<'nowplaying' | null>(null)
+  const [openPanel, setOpenPanel] = useState<PanelId | null>(null)
   const nonceRef = useRef(0)
   const dndRef = useRef(false)
 

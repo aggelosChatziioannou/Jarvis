@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveAction, planFurnitureEffects, shouldFireArrival } from './furnitureActions'
+import { resolveAction, planFurnitureEffects, shouldFireArrival, FURNITURE_ACTIONS } from './furnitureActions'
 
 describe('resolveAction', () => {
   it('maps the wired Living objects', () => {
@@ -8,9 +8,27 @@ describe('resolveAction', () => {
     expect(resolveAction('living-screen')).toEqual({ kind: 'panel', panel: 'nowplaying' })
     expect(resolveAction('living-headphones')).toEqual({ kind: 'focus' })
   })
+  it('maps the other-room objects to real actions', () => {
+    expect(resolveAction('office-laptop')).toEqual({ kind: 'panel', panel: 'gmail' })
+    expect(resolveAction('office-tasks')).toEqual({ kind: 'panel', panel: 'reminders' })
+    expect(resolveAction('office-pinboard')).toEqual({ kind: 'navigate', page: 'memory' })
+    expect(resolveAction('control-devices')).toEqual({ kind: 'navigate', page: 'audio' })
+    expect(resolveAction('control-server')).toEqual({ kind: 'panel', panel: 'system' })
+    expect(resolveAction('control-core')).toEqual({ kind: 'panel', panel: 'model' })
+    expect(resolveAction('wellness-water')).toEqual({ kind: 'reminder', label: 'Drink water 💧', afterMinutes: 60 })
+    expect(resolveAction('wellness-sleep')).toEqual({ kind: 'lights' })
+    expect(resolveAction('entrance-weather-station')).toEqual({ kind: 'panel', panel: 'weather' })
+    expect(resolveAction('entrance-smart-lights')).toEqual({ kind: 'lights' })
+    expect(resolveAction('run-script')).toEqual({ kind: 'testTone' })
+  })
   it('returns undefined for non-wired objects', () => {
     expect(resolveAction('living-sofa')).toBeUndefined()
-    expect(resolveAction('office-laptop')).toBeUndefined()
+  })
+  it('every registered action plans at least one effect', () => {
+    for (const [id, action] of Object.entries(FURNITURE_ACTIONS)) {
+      const effects = planFurnitureEffects(action, { spotifyPlaying: false, dndActive: false })
+      expect(effects.length, `action for ${id} should plan effects`).toBeGreaterThan(0)
+    }
   })
 })
 
@@ -34,6 +52,25 @@ describe('planFurnitureEffects', () => {
   it('focus when already active (turning off) => only toggleDnd, no pause', () => {
     expect(planFurnitureEffects({ kind: 'focus' }, { spotifyPlaying: true, dndActive: true }))
       .toEqual([{ type: 'toggleDnd' }])
+  })
+  it('navigate => navigate effect', () => {
+    expect(planFurnitureEffects({ kind: 'navigate', page: 'settings' }, { spotifyPlaying: false, dndActive: false }))
+      .toEqual([{ type: 'navigate', page: 'settings' }])
+  })
+  it('lights => toggleLights', () => {
+    expect(planFurnitureEffects({ kind: 'lights' }, { spotifyPlaying: false, dndActive: false }))
+      .toEqual([{ type: 'toggleLights' }])
+  })
+  it('reminder => createReminder then opens the reminders panel (visible write)', () => {
+    expect(planFurnitureEffects({ kind: 'reminder', label: 'Drink water 💧', afterMinutes: 60 }, { spotifyPlaying: false, dndActive: false }))
+      .toEqual([
+        { type: 'createReminder', label: 'Drink water 💧', afterMinutes: 60 },
+        { type: 'openPanel', panel: 'reminders' },
+      ])
+  })
+  it('testTone => testTone effect', () => {
+    expect(planFurnitureEffects({ kind: 'testTone' }, { spotifyPlaying: false, dndActive: false }))
+      .toEqual([{ type: 'testTone' }])
   })
 })
 

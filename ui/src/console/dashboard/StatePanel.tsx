@@ -58,7 +58,8 @@ function Chip({ active, onClick, children, accent = '#22d3ee' }: { active: boole
 
 export default function StatePanel() {
   const { sceneMode, setSceneMode, mood, setMood, services, toggleService, setActiveTarget } = useSceneContext()
-  const [open, setOpen] = useState(true)
+  // Default collapsed on short windows so the panel never buries the scene.
+  const [open, setOpen] = useState(() => (typeof window === 'undefined' ? true : window.innerHeight >= 760))
 
   const isOn = (k: keyof ServiceStates) => {
     const v = services[k]
