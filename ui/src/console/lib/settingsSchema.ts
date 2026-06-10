@@ -11,6 +11,9 @@ export interface SettingsField {
   type: FieldType
   /** Static options for a select. */
   options?: string[]
+  /** Friendly labels for static options, keyed by raw option value. The
+   *  stored value stays the raw key; only the displayed text changes. */
+  optionLabels?: Record<string, string>
   /** Populate the select from a live source (e.g. installed Ollama models). */
   dynamicOptions?: 'models'
   hint?: string
@@ -21,7 +24,12 @@ export const SETTINGS_FIELDS: SettingsField[] = [
   { key: 'intent_judge_model', label: 'Intent judge model', group: 'Language Model', type: 'select', dynamicOptions: 'models' },
   { key: 'tool_router_model', label: 'Tool router model', group: 'Language Model', type: 'select', dynamicOptions: 'models' },
 
-  { key: 'stt_backend', label: 'Speech-to-text backend', group: 'Speech', type: 'select', options: ['wispr', 'whisper'] },
+  {
+    key: 'stt_backend', label: 'Speech-to-text backend', group: 'Speech', type: 'select',
+    options: ['wispr', 'whisper'],
+    optionLabels: { wispr: 'Wispr Flow (cloud)', whisper: 'Whisper large-v3 (local)' },
+    hint: 'Switches the live listener — no restart needed',
+  },
   { key: 'whisper_default_language', label: 'Default language', group: 'Speech', type: 'text', hint: 'e.g. en, el (local Whisper only)' },
 
   { key: 'reminders_enabled', label: 'Reminders enabled', group: 'Behaviour', type: 'toggle' },

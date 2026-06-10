@@ -402,6 +402,18 @@ class VoiceListener(threading.Thread):
         # Bridge instance populated below if stt_backend == "wispr". Kept on
         # the listener so `stop()` and any thread-safety code can reach it.
         self._wispr_bridge = None
+        # ── In-process STT hot-switch state ──────────────────────────────
+        # The run() dispatcher is re-entrant: when the user flips
+        # `stt_backend` in the console, request_stt_switch() sets
+        # `_pending_backend` + `_switch_event`. The active backend loop
+        # breaks at its top-of-loop guard (so an in-flight transcription
+        # finishes first), run() tears down the old STT runtime and
+        # re-dispatches the new one — keeping control_bus / porcupine /
+        # API server / daemon closures all bound to THIS same instance.
+        self._switch_event = threading.Event()
+        self._pending_backend: Optional[str] = None
+        self._switch_from: Optional[str] = None  # backend we left, for fallback
+        self._consecutive_fast_failures = 0  # guards fallback ping-pong
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
         # ISO-639-1 code Whisper detected for the most recent utterance.
@@ -693,30 +705,7 @@ class VoiceListener(threading.Thread):
         # which we invoke from `run()` so the load happens off the main
         # init path (matches the Whisper-on-run model).
         if self._stt_backend == "wispr":
-            try:
-                from .wispr_bridge import WisprBridge
-                self._wispr_bridge = WisprBridge(
-                    cfg,
-                    on_transcription=self.feed_transcript,
-                    on_wake=self._on_wispr_wake,
-                    on_dictation_end=self._on_wispr_dictation_end,
-                    on_stop=self._handle_wispr_stop,
-                    on_wispr_unavailable=self._on_wispr_unavailable,
-                )
-                debug_log("WisprBridge instantiated (start deferred to run())", "voice")
-            except Exception as e:
-                debug_log(
-                    f"WisprBridge instantiation failed (will fall back to "
-                    f"whisper at run() time): {e}",
-                    "voice",
-                )
-                print(
-                    f"  ⚠️  WisprBridge unavailable ({e}); "
-                    f"falling back to Whisper",
-                    flush=True,
-                )
-                self._stt_backend = "whisper"
-                self._wispr_bridge = None
+            self._ensure_wispr_bridge(from_init=True)
 
     def stop(self) -> None:
         """Stop the voice listener."""
@@ -755,6 +744,91 @@ class VoiceListener(threading.Thread):
         except Exception as e:  # pragma: no cover - defensive
             debug_log(f"reconnect_audio: bridge.reconnect raised ({e!r})", "voice")
             return False
+
+    # ── In-process STT backend hot-switch ────────────────────────────────
+
+    def _ensure_wispr_bridge(self, from_init: bool = False) -> bool:
+        """(Re)create the Wispr bridge if needed. Returns True if usable.
+
+        Called from ``__init__`` (when stt_backend == "wispr") and from
+        ``_run_wispr_backend`` so a whisper→wispr hot-switch builds a fresh
+        bridge (teardown nulls it). The heavy imports (openWakeWord, Silero)
+        happen here, not at module load. On failure during init we fall back
+        to whisper; on failure during a live switch we report False and let
+        run()'s dispatcher revert to the previous backend.
+        """
+        if self._wispr_bridge is not None:
+            return True
+        try:
+            from .wispr_bridge import WisprBridge
+            self._wispr_bridge = WisprBridge(
+                self.cfg,
+                on_transcription=self.feed_transcript,
+                on_wake=self._on_wispr_wake,
+                on_dictation_end=self._on_wispr_dictation_end,
+                on_stop=self._handle_wispr_stop,
+                on_wispr_unavailable=self._on_wispr_unavailable,
+            )
+            debug_log("WisprBridge instantiated (start deferred to run())", "voice")
+            return True
+        except Exception as e:
+            debug_log(f"WisprBridge instantiation failed: {e}", "voice")
+            print(f"  ⚠️  WisprBridge unavailable ({e})", flush=True)
+            self._wispr_bridge = None
+            if from_init:
+                # Init-time fallback: degrade to local Whisper so the daemon
+                # still comes up with a working STT path.
+                self._stt_backend = "whisper"
+            return False
+
+    def _teardown_stt_runtime(self, backend: str) -> None:
+        """Release the resources owned by ``backend`` before re-dispatching.
+
+        Whisper → drop the model reference and free CUDA memory (so a switch
+        to Wispr returns VRAM to a co-resident LLM). Wispr → stop the bridge
+        and null it so the next whisper→wispr switch builds a fresh one.
+        Never raises — teardown must not wedge the dispatcher.
+        """
+        try:
+            if backend == "wispr":
+                if self._wispr_bridge is not None:
+                    try:
+                        self._wispr_bridge.stop()
+                    except Exception as e:
+                        debug_log(f"teardown: wispr bridge stop error ({e!r})", "voice")
+                    self._wispr_bridge = None
+            else:
+                self.model = None
+                self._whisper_backend = None
+                try:
+                    import gc
+                    gc.collect()
+                    import torch  # local import: optional dep
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+        except Exception as e:  # pragma: no cover - defensive
+            debug_log(f"_teardown_stt_runtime({backend}) raised: {e!r}", "voice")
+
+    def request_stt_switch(self, new_backend: str) -> bool:
+        """Ask the listener to switch STT backend in-process. Thread-safe.
+
+        Returns True if a switch was scheduled, False if it was a no-op /
+        invalid. The actual swap happens on the listener thread the next time
+        the active backend loop checks its top-of-loop guard — so any
+        in-flight transcription completes before the backend is torn down.
+        """
+        new_backend = (new_backend or "").strip().lower()
+        if new_backend not in ("whisper", "wispr"):
+            debug_log(f"request_stt_switch: ignoring invalid backend {new_backend!r}", "voice")
+            return False
+        if new_backend == self._stt_backend and not self._switch_event.is_set():
+            return False
+        self._pending_backend = new_backend
+        self._switch_event.set()
+        debug_log(f"request_stt_switch: scheduled switch → {new_backend}", "voice")
+        return True
 
     def _consume_manual_finalize(self) -> bool:
         """Atomically read-and-clear the manual-finalize handshake.
@@ -3309,8 +3383,89 @@ class VoiceListener(threading.Thread):
             return f"\"How's the weather, {wake_title}?\""
         return f"\"How's the weather in [your city], {wake_title}?\""
 
+    # Fast-failure window: if a (re)dispatched backend returns within this
+    # many seconds it almost certainly failed to *start* (model OOM, mic
+    # busy, bridge import error) rather than running and being asked to
+    # switch — that distinction drives the fallback logic in run().
+    _STT_FAST_FAIL_SEC = 8.0
+
     def run(self) -> None:
-        """Main voice listening loop."""
+        """Re-entrant STT dispatcher.
+
+        Runs the selected backend via ``_dispatch_once`` and loops so the
+        backend can be hot-swapped in-process: a ``request_stt_switch`` sets
+        ``_switch_event`` + ``_pending_backend``, the active backend loop
+        breaks, we tear down its runtime and re-dispatch the new backend.
+        On a fast startup failure of a freshly-requested backend we revert
+        to the previous one (and persist that revert so the console reflects
+        reality), guarding against fallback ping-pong.
+        """
+        while not self._should_stop:
+            self._switch_event.clear()
+            backend = self._stt_backend
+            started = time.monotonic()
+            crashed = False
+            try:
+                self._dispatch_once()
+            except Exception as e:
+                crashed = True
+                debug_log(f"STT backend '{backend}' dispatch raised: {e!r}", "voice")
+                print(f"  ❌ STT backend '{backend}' error: {e}", flush=True)
+
+            if self._should_stop:
+                break
+
+            ran_long = (time.monotonic() - started) >= self._STT_FAST_FAIL_SEC
+            if ran_long:
+                # The backend genuinely started and ran, so any prior switch
+                # succeeded — reset the fallback bookkeeping.
+                self._consecutive_fast_failures = 0
+                self._switch_from = None
+
+            # Case 1: an explicit user-requested switch.
+            if self._switch_event.is_set() and self._pending_backend:
+                target = self._pending_backend
+                self._pending_backend = None
+                self._teardown_stt_runtime(backend)
+                self._switch_from = backend
+                self._stt_backend = target
+                print(f"  🔀 Switching STT backend → {target}", flush=True)
+                continue
+
+            # Case 2: the backend ended on its own (returned early or raised)
+            # without a switch request. A backend only returns from its loop
+            # on failure (no mic, model OOM, bridge start error) — a quick
+            # return therefore means it failed to *start*. Revert to the
+            # backend we came from (or the other one) so the mic isn't left
+            # dead, and persist that so the console shows the truth.
+            if not ran_long and self._consecutive_fast_failures < 2:
+                fallback = self._switch_from or ("whisper" if backend == "wispr" else "wispr")
+                self._switch_from = None
+                if fallback and fallback != backend:
+                    self._consecutive_fast_failures += 1
+                    self._teardown_stt_runtime(backend)
+                    print(
+                        f"  ❌ STT backend '{backend}' failed to start; "
+                        f"reverting to '{fallback}'",
+                        flush=True,
+                    )
+                    try:
+                        from .. import daemon as _daemon
+                        _daemon._persist_stt_backend(fallback)
+                    except Exception as e:
+                        debug_log(f"persist stt revert failed: {e!r}", "voice")
+                    self._stt_backend = fallback
+                    continue
+
+            # Clean stop, fatal error, or fallbacks exhausted → exit thread.
+            break
+
+        # Final teardown of whatever backend was last active.
+        self._teardown_stt_runtime(self._stt_backend)
+
+    def _dispatch_once(self) -> None:
+        """Run the currently-selected STT backend once (blocks until the
+        backend loop exits on stop or a requested switch)."""
         # Phase C: dispatch on STT backend. The Wispr branch owns its own
         # audio stream (openWakeWord + Silero VAD inside WisprBridge) and
         # delivers final transcripts via the on_transcription callback
@@ -3940,7 +4095,7 @@ class VoiceListener(threading.Thread):
             _audio_start_time = time.time()
             _audio_health_logged = False
 
-            while not self._should_stop:
+            while not self._should_stop and not self._switch_event.is_set():
                 # Manual finalize: mute pressed during Trigger Now listening.
                 # Read-and-clear atomically so a concurrent MUTE on the bus
                 # worker can never be lost or consumed twice.
@@ -4392,15 +4547,11 @@ class VoiceListener(threading.Thread):
         events arrive asynchronously via the callbacks wired up in
         ``__init__``.
         """
-        if self._wispr_bridge is None:
-            debug_log(
-                "_run_wispr_backend invoked but bridge is None — refusing to "
-                "start. Check WisprBridge instantiation in __init__.",
-                "voice",
-            )
+        # Build (or rebuild, after a whisper→wispr hot-switch) the bridge.
+        if not self._ensure_wispr_bridge():
             print(
                 "  ❌ Wispr backend selected but bridge unavailable. "
-                "Set `stt_backend: whisper` in config to fall back.",
+                "Falling back to local Whisper.",
                 flush=True,
             )
             return
@@ -4468,8 +4619,8 @@ class VoiceListener(threading.Thread):
 
         # Stay alive — the bridge runs its own threads. We just need to
         # keep the VoiceListener thread alive so stop() can be called
-        # cleanly from the outside.
-        while not self._should_stop:
+        # cleanly from the outside (or a hot-switch can yield us).
+        while not self._should_stop and not self._switch_event.is_set():
             time.sleep(0.2)
 
         # Clean shutdown — stop the bridge if it's still running.

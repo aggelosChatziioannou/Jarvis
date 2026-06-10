@@ -48,6 +48,47 @@ def get_active_listener():
     """Return the running VoiceListener, or None if Jarvis hasn't started one yet."""
     return _active_listener
 
+
+def request_stt_switch(new_backend: str) -> bool:
+    """Ask the live VoiceListener to hot-switch its STT backend in-process.
+
+    Returns False if no listener is running yet (or the request was a no-op).
+    Safe to call from the API-server thread; the swap itself happens on the
+    listener thread at its next top-of-loop check.
+    """
+    listener = _active_listener
+    if listener is None:
+        return False
+    try:
+        return bool(listener.request_stt_switch(new_backend))
+    except Exception as e:
+        debug_log(f"request_stt_switch failed: {e!r}", "jarvis")
+        return False
+
+
+def _persist_stt_backend(backend: str) -> None:
+    """Write ``stt_backend`` back to the config file.
+
+    Used by the listener's fallback-revert so that when a requested backend
+    fails to start and we drop back to the previous one, the persisted config
+    (and therefore the console Settings view) reflects the backend that is
+    actually running.
+    """
+    try:
+        import os as _os
+        from pathlib import Path as _Path
+        from . import config_safety
+        from .config import default_config_path, _load_json
+
+        cfg_path = _Path(_os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+        current = _load_json(cfg_path)
+        if not isinstance(current, dict):
+            current = {}
+        current["stt_backend"] = backend
+        config_safety.safe_write_config(cfg_path, current)
+    except Exception as e:
+        debug_log(f"_persist_stt_backend failed: {e!r}", "jarvis")
+
 from .config import load_settings, uses_local_whisper
 from .memory.db import Database
 from .memory.conversation import DialogueMemory, update_diary_from_dialogue_memory

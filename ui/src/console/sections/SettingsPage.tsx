@@ -53,7 +53,7 @@ function Field({ field, value, models, onChange }: {
         {labelEl}
         <select value={String(value)} onChange={(e) => onChange(e.target.value)} className={`${inputCls} cursor-pointer appearance-none`}>
           {!opts.includes(String(value)) && <option value={String(value)}>{String(value) || '— none —'}</option>}
-          {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+          {opts.map((o) => <option key={o} value={o}>{field.optionLabels?.[o] ?? o}</option>)}
         </select>
       </div>
     )
@@ -79,6 +79,7 @@ export default function SettingsPage() {
   const [mcps, setMcps] = useState<MCPInfo[]>([])
   const [connected, setConnected] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [savedMsg, setSavedMsg] = useState('Saved · restart may be required')
 
   useEffect(() => {
     let alive = true
@@ -109,8 +110,14 @@ export default function SettingsPage() {
 
   const save = async () => {
     if (!dirty) return
+    const switchingStt = 'stt_backend' in diff
     await api.patchConfig(diff)
     setOriginal({ ...edited })
+    setSavedMsg(
+      switchingStt
+        ? 'Saved · switching STT backend… (watch Live Logs)'
+        : 'Saved · restart may be required',
+    )
     setSaved(true)
   }
 
@@ -125,7 +132,7 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-sm font-semibold tracking-widest text-[#f8fafc] uppercase">Settings</h1>
           <div className="flex items-center gap-2">
-            {saved && <span className="text-[10px] text-[#fbbf24]">Saved · restart may be required</span>}
+            {saved && <span className="text-[10px] text-[#fbbf24]">{savedMsg}</span>}
             <span className="text-[9px] font-mono-data px-1.5 py-0.5 rounded-full" style={{ color: connected ? '#34d399' : '#475569', background: connected ? '#34d3991a' : '#47556922' }}>
               {connected ? 'Connected' : 'Offline'}
             </span>
