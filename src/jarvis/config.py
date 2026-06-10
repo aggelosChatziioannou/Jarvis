@@ -360,6 +360,10 @@ class Settings:
     location_ip_address: str | None
     location_auto_detect: bool
     location_cgnat_resolve_public_ip: bool
+    # Manual weather location override. A city name ("Ioannina") or
+    # "lat,lon" ("39.66,20.85"). When set, the dashboard weather uses this
+    # directly and bypasses GeoIP detection (which needs the GeoLite2 DB).
+    weather_location: str | None
 
     # Web Search
     web_search_enabled: bool
@@ -1053,6 +1057,8 @@ def get_default_config() -> Dict[str, Any]:
         # When behind CGNAT (100.64.0.0/10), attempt a privacy-light external DNS query to discover true public IP.
         # Uses a single OpenDNS resolver lookup of myip.opendns.com over DNS (no HTTP services). Disable to avoid any external request.
         "location_cgnat_resolve_public_ip": True,
+        # Manual weather location ("Ioannina" or "39.66,20.85"). None => use GeoIP.
+        "weather_location": None,
 
         # Web Search
         "web_search_enabled": True,
@@ -1507,6 +1513,8 @@ def load_settings() -> Settings:
     location_ip_address = None if location_ip_address_val in (None, "", "null") else str(location_ip_address_val)
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
+    weather_location_val = merged.get("weather_location")
+    weather_location = None if weather_location_val in (None, "", "null") else str(weather_location_val).strip()
     web_search_enabled = bool(merged.get("web_search_enabled", True))
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
@@ -1749,6 +1757,7 @@ def load_settings() -> Settings:
         location_ip_address=location_ip_address,
         location_auto_detect=location_auto_detect,
         location_cgnat_resolve_public_ip=location_cgnat_resolve_public_ip,
+        weather_location=weather_location,
 
         # Web Search
         web_search_enabled=web_search_enabled,
