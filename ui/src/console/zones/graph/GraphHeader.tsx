@@ -29,7 +29,7 @@ const SearchInput = React.memo(function SearchInput({ value, onChange }: {
         ? 'shadow-[inset_0_0_0_1px_rgba(34,211,238,0.15)] border-[#22d3ee]/30'
         : 'border-white/5'
     }`}
-      style={{ width: 170, minWidth: 140, backgroundColor: 'rgba(15, 23, 42, 0.6)' }}>
+      style={{ width: '100%', maxWidth: 170, minWidth: 110, backgroundColor: 'rgba(15, 23, 42, 0.6)' }}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#475569] shrink-0 mr-2">
         <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
       </svg>

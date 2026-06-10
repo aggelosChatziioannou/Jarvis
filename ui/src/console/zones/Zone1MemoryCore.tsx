@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import Card from '@/console/components/Card';
 import MemoryGraphZone from './graph/MemoryGraphZone';
+import { useMemoryDataCtx } from '@/console/services/MemoryDataContext';
 
 interface Props {
   selectedNodeId: string | null;
@@ -32,12 +33,17 @@ function useCountUp(target: number, duration: number = 1200) {
 }
 
 export default function Zone1MemoryCore({ selectedNodeId, onNodeSelect }: Props) {
+  const { graphNodes, reminders: liveReminders, episodic } = useMemoryDataCtx();
   const stats = useMemo(() => {
-    const facts = 26;
-    const reminders = 12;
-    const changes = 3;
+    const facts = graphNodes.filter((n) => n.type === 'memory').length;
+    const reminders = liveReminders.filter((r) => r.status === 'pending').length;
+    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+    const changes = episodic.filter((e) => {
+      const t = e.date ? Date.parse(e.date) : NaN;
+      return Number.isFinite(t) && t >= weekAgo;
+    }).length;
     return { facts, reminders, changes };
-  }, []);
+  }, [graphNodes, liveReminders, episodic]);
 
   const animatedFacts = useCountUp(stats.facts);
   const animatedReminders = useCountUp(stats.reminders);
@@ -58,7 +64,9 @@ export default function Zone1MemoryCore({ selectedNodeId, onNodeSelect }: Props)
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none z-30">
           <div className="text-center">
             <p className="text-[#94a3b8] text-xs mb-1.5">
-              Select a memory node to inspect or edit
+              {stats.facts === 0
+                ? 'No facts stored yet — Jarvis learns from every conversation'
+                : 'Select a memory node to inspect or edit'}
             </p>
             <p className="text-[#475569] text-[11px]">
               <span className="text-[#22d3ee] font-mono tabular-nums">{animatedFacts}</span>{' '}

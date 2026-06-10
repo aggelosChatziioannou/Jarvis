@@ -4,8 +4,6 @@ import type { MemoryNode, CategoryDef } from '@/console/types/graph'
 import type { Reminder, EpisodicMemory } from '@/console/types'
 import { memoryApi } from './memoryApi'
 import { mapGraphData, mapReminders, mapEpisodic, STANDARD_CATEGORIES } from '@/console/lib/memoryMap'
-import { memoryNodes as MOCK_NODES, categories as MOCK_CATEGORIES } from '@/console/data/graphMock'
-import { sampleReminders as MOCK_REMINDERS, sampleEpisodic as MOCK_EPISODIC } from '@/console/data/demo'
 
 export interface MemoryData {
   /** True once real daemon data loaded; false while on demo/mock fallback. */
@@ -35,31 +33,32 @@ function isoFrom(date: string, time: string): string {
 
 function useMemoryData(): MemoryData {
   const [live, setLive] = useState(false)
-  const [graphNodes, setGraphNodes] = useState<MemoryNode[]>(MOCK_NODES)
-  const [categories, setCategories] = useState<CategoryDef[]>(MOCK_CATEGORIES)
-  const [reminders, setReminders] = useState<Reminder[]>(MOCK_REMINDERS)
-  const [episodic, setEpisodic] = useState<EpisodicMemory[]>(MOCK_EPISODIC)
+  const [graphNodes, setGraphNodes] = useState<MemoryNode[]>([])
+  const [categories, setCategories] = useState<CategoryDef[]>(STANDARD_CATEGORIES)
+  const [reminders, setReminders] = useState<Reminder[]>([])
+  const [episodic, setEpisodic] = useState<EpisodicMemory[]>([])
 
+  // Real data only — when the daemon is unreachable or the graph is empty we
+  // show the honest empty state, never demo memories (data privacy first).
   const load = useCallback(async () => {
     try {
       const graph = await memoryApi.graph()
       const mapped = mapGraphData(graph)
-      setGraphNodes(mapped.nodes.length ? mapped.nodes : MOCK_NODES)
+      setGraphNodes(mapped.nodes)
       setCategories(mapped.categories.length ? mapped.categories : STANDARD_CATEGORIES)
       setLive(true)
     } catch {
-      setGraphNodes(MOCK_NODES)
-      setCategories(MOCK_CATEGORIES)
+      setLive(false)
     }
     try {
       setReminders(mapReminders(await memoryApi.reminders()))
     } catch {
-      setReminders(MOCK_REMINDERS)
+      /* keep current */
     }
     try {
       setEpisodic(mapEpisodic(await memoryApi.episodic()))
     } catch {
-      setEpisodic(MOCK_EPISODIC)
+      /* keep current */
     }
   }, [])
 
