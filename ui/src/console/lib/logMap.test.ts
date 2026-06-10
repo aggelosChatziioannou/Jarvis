@@ -66,3 +66,39 @@ describe('toLogEntry', () => {
     expect(e.meta).toMatchObject({ backendLevel: 'warning', clock: '14:35:14.50' })
   })
 })
+
+describe('deriveSource (extended keywords)', () => {
+  it('routes STT/transcription lines to Voice', async () => {
+    const { deriveSource } = await import('./logMap')
+    expect(deriveSource('📝 Heard (Wispr): something')).toBe('Voice')
+    expect(deriveSource('STT backend change requested')).toBe('Voice')
+  })
+  it('routes LLM/intent/tool lines to Brain', async () => {
+    const { deriveSource } = await import('./logMap')
+    expect(deriveSource('🧠 Intent (fused): directed → tool')).toBe('Brain')
+    expect(deriveSource('💬 Generating response...')).toBe('Brain')
+    expect(deriveSource('🛠️ Agent → getWeather {}')).toBe('Brain')
+  })
+  it('routes reminder lines to Services', async () => {
+    const { deriveSource } = await import('./logMap')
+    expect(deriveSource('Reminder created for tomorrow')).toBe('Services')
+  })
+})
+
+describe('describeActivity (plain-language live activity)', () => {
+  it('describes the heard -> thinking -> reply pipeline', async () => {
+    const { describeActivity } = await import('./logMap')
+    expect(describeActivity('────\n📝 Heard: τι ώρα είναι')).toMatch(/Heard you/)
+    expect(describeActivity('✨ Working on it: τι ώρα είναι')).toMatch(/Thinking/)
+    expect(describeActivity('🤖 Jarvis\n  Η ώρα είναι 13:00')).toMatch(/Replied/)
+  })
+  it('describes memory writes and stop', async () => {
+    const { describeActivity } = await import('./logMap')
+    expect(describeActivity('  🧠 Knowledge graph: learned 2 new facts')).toMatch(/Learned new facts/)
+    expect(describeActivity('⏹  STOP — TTS interrupted')).toMatch(/Stopped/)
+  })
+  it('returns null for routine lines', async () => {
+    const { describeActivity } = await import('./logMap')
+    expect(describeActivity('Config updated: [foo]')).toBeNull()
+  })
+})
