@@ -105,3 +105,16 @@ class TestRegistryWiring:
             assert tool.name == name
             assert tool.description
             assert tool.inputSchema["type"] == "object"
+
+
+class TestTransientWindowPenalty:
+    def test_real_window_beats_installer_splash(self):
+        windows = [
+            {"title": "Spotify Installer", "process": "Spotify.exe"},
+            {"title": "Spotify Premium", "process": "Spotify.exe"},
+        ]
+        assert pick_window(windows, "spotify")["title"] == "Spotify Premium"
+
+    def test_installer_still_matches_when_alone(self):
+        windows = [{"title": "Spotify Installer", "process": "Spotify.exe"}]
+        assert pick_window(windows, "spotify") is not None

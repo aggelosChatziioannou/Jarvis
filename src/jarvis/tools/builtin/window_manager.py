@@ -29,30 +29,48 @@ _SHELL_PROCESSES = frozenset({
 })
 
 
+# Transient launcher surfaces (splash/installer/updater windows) that appear
+# FIRST when an app starts and then hand off to the real window. Matching
+# them moves a window that is about to vanish. Technical window-title terms,
+# not user-language patterns.
+_TRANSIENT_TITLE_WORDS = ("installer", "install", "setup", "updater", "updating")
+
+
+def is_transient_window(title: str) -> bool:
+    t = (title or "").lower()
+    return any(w in t for w in _TRANSIENT_TITLE_WORDS)
+
+
 def score_window_match(query: str, title: str, process: str) -> int:
     """Rank how well a window answers the user's description.
 
     Returns 0 for no match; higher is better. Process-name hits beat title
     hits ("chrome" should match chrome.exe even when no tab says "chrome").
+    Splash/installer windows are heavily penalised so the real app window
+    wins whenever both exist.
     """
     q = (query or "").strip().lower()
     if not q:
         return 0
     t = (title or "").lower()
     p = (process or "").lower().removesuffix(".exe")
+    score = 0
     if q == p:
-        return 100
-    if p and (q in p or p in q):
-        return 80
-    if q == t:
-        return 70
-    if q in t:
-        return 60
-    # All query words present somewhere in the title (any order).
-    words = [w for w in q.split() if len(w) >= 2]
-    if words and all(w in t or w in p for w in words):
-        return 40
-    return 0
+        score = 100
+    elif p and (q in p or p in q):
+        score = 80
+    elif q == t:
+        score = 70
+    elif q in t:
+        score = 60
+    else:
+        # All query words present somewhere in the title (any order).
+        words = [w for w in q.split() if len(w) >= 2]
+        if words and all(w in t or w in p for w in words):
+            score = 40
+    if score and is_transient_window(title):
+        score = max(1, score - 60)
+    return score
 
 
 def pick_window(windows: List[Dict[str, Any]], query: str) -> Optional[Dict[str, Any]]:
@@ -313,10 +331,39 @@ class ManageWindowTool(Tool):
         if not action or not query:
             return ToolExecutionResult(success=False, reply_text=None,
                                        error_message="action and window are required")
+        # Tolerant action normalisation: small models emit creative variants
+        # like 'move_to_left_monitor'. Map them onto the real enum and pull
+        # an embedded monitor/position out rather than failing the request.
+        if action not in ("focus", "move", "maximize", "minimize", "close", "split"):
+            compact = action.replace("-", "_")
+            for known in ("split", "maximize", "minimize", "close", "focus", "move"):
+                if known in compact or (known == "maximize" and "maximise" in compact):
+                    action = known
+                    break
+            else:
+                action = "move"  # placement-ish unknowns degrade to a move
+            if not a.get("monitor"):
+                if "left" in compact:
+                    a["monitor"] = "left"
+                elif "right" in compact:
+                    a["monitor"] = "right"
         try:
+            import time as _time
+
             monitors = _enum_monitors()
             windows = _enum_windows()
             target = pick_window(windows, query)
+            # The window may belong to an app launched a moment ago (the
+            # open_app -> manageWindow sequence): poll before giving up so
+            # "open Spotify on the left" works in one breath. A transient
+            # splash/installer match keeps polling for the REAL window (it
+            # is accepted only if nothing better ever appears).
+            for _ in range(8):
+                if target is not None and not is_transient_window(target.get("title", "")):
+                    break
+                _time.sleep(1.2)
+                windows = _enum_windows()
+                target = pick_window(windows, query) or target
             if target is None:
                 open_names = ", ".join(sorted({w["process"].removesuffix(".exe")
                                                for w in windows if w["process"]})[:12])
@@ -361,6 +408,21 @@ class ManageWindowTool(Tool):
                 pos = str(a.get("position") or "full")
                 _apply_rect(target["hwnd"], compute_target_rect(mon, pos))
                 _force_foreground(target["hwnd"])
+                # Freshly-launched apps often recreate their window (or
+                # restore remembered geometry) SEVERAL seconds after the
+                # splash — Spotify does both — so an early move loses the
+                # race. Keep verifying and re-applying on the CURRENT best
+                # match; exits on the first check for already-open apps.
+                for _ in range(6):
+                    _time.sleep(2.0)
+                    cur = pick_window(_enum_windows(), query)
+                    if cur is None:
+                        break
+                    if (_monitor_of(cur, monitors) == mon["index"]
+                            and not is_transient_window(cur.get("title", ""))):
+                        break
+                    _apply_rect(cur["hwnd"], compute_target_rect(mon, pos))
+                    _force_foreground(cur["hwnd"])
                 return ToolExecutionResult(success=True,
                                            reply_text=f"Moved {target['title']} ({pos}).")
 

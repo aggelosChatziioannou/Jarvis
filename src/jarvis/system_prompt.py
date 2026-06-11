@@ -75,7 +75,12 @@ _SYSTEM_PROMPT_TEMPLATE: str = (
     "across separate sessions', 'I only have access to the information you have shared in our "
     "past conversations' (when followed by a denial), and any variant implying your memory is "
     "limited to the current session. "
-    "Always respond in a short, conversational manner. No markdown tables or complex formatting."
+    "Always respond in a short, conversational manner. No markdown tables or complex formatting. "
+    "HARD LENGTH RAIL — your reply is SPOKEN ALOUD: default to ONE sentence, TWO at the very "
+    "most (the answer, plus at most one short aside). Confirmations of an action you just "
+    "performed are ONE short sentence. Only exceed two sentences when the user explicitly asks "
+    "for detail, a list, or an explanation. A three-or-more-sentence reply to a casual request "
+    "is a failure mode."
 )
 
 

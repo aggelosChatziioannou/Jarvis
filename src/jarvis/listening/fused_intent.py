@@ -144,19 +144,34 @@ def build_tool_catalogue() -> list[tuple[str, str]]:
         lines = (text or "").strip().splitlines()
         return (lines[0].strip() if lines else "")[:120]
 
+    def _arg_keys(schema) -> str:
+        # Advertise each tool's REAL argument keys: without them the model
+        # invents plausible ones (live failure: app_name='Spotify' for a
+        # tool whose only key is `name`), the concrete step parser rejects
+        # the call, and the whole sequence silently degrades to prose.
+        try:
+            props = (schema or {}).get("properties") or {}
+            keys = ", ".join(sorted(props.keys()))
+            return f" (args: {keys})" if keys else ""
+        except Exception:
+            return ""
+
     out: list[tuple[str, str]] = []
     for name, tool in BUILTIN_TOOLS.items():
         if name in _NON_ROUTABLE_TOOLS:
             continue
         try:
             desc = _first_line(getattr(tool, "description", "") or "")
+            desc += _arg_keys(getattr(tool, "inputSchema", None))
         except Exception:
             desc = ""
         out.append((name, desc))
 
     try:
         for name, spec in (get_cached_mcp_tools() or {}).items():
-            out.append((name, _first_line(getattr(spec, "description", "") or "")))
+            desc = _first_line(getattr(spec, "description", "") or "")
+            desc += _arg_keys(getattr(spec, "inputSchema", None))
+            out.append((name, desc))
     except Exception:
         pass
 
@@ -203,7 +218,12 @@ class FusedIntentEngine:
 
     # 8s hard cap per spec. intent_judge.py uses 6s; we add headroom because
     # this prompt is wider (judge + router + plan combined).
-    DEFAULT_TIMEOUT_SEC = 8.0
+    # Generous cap: the first query after boot pays a cold multi-k-token
+    # prompt eval (and the warm-up prime can be evicted by any interleaved
+    # request), which reliably needs >10s on a loaded GPU. Waiting a few
+    # extra seconds ONCE beats falling back to the legacy router, which is
+    # markedly less reliable at picking the window/market tools.
+    DEFAULT_TIMEOUT_SEC = 18.0
 
     SAFE_DEFAULT_PLAN = ["Reply to user."]
 
@@ -213,9 +233,11 @@ class FusedIntentEngine:
             getattr(cfg, "ollama_base_url", "http://localhost:11434")
         ).rstrip("/")
         self.model = str(getattr(cfg, "intent_judge_model", "gemma4:e2b"))
-        # Match intent_judge.py's configured timeout, but cap at 8s per spec.
+        # The fused call does judge+router+planner in one shot over a multi-
+        # k-token prompt — give it its own floor (15s) regardless of the
+        # plain intent judge's tighter setting, capped by DEFAULT_TIMEOUT_SEC.
         configured = float(getattr(cfg, "intent_judge_timeout_sec", 6.0))
-        self.timeout_sec = min(configured, self.DEFAULT_TIMEOUT_SEC)
+        self.timeout_sec = min(max(configured, 15.0), self.DEFAULT_TIMEOUT_SEC)
         # Build the tool catalogue from the LIVE registry (real names + MCP),
         # not a hardcoded list. ``_catalogue_names`` is the signature used to
         # rebuild the prompt when MCP tools are discovered after construction.
@@ -278,9 +300,13 @@ class FusedIntentEngine:
             "- COMPUTER CONTROL: JARVIS can arrange real OS windows. When the user asks (in ANY language) "
             "what windows/apps are open or running, select listOpenWindows. When they ask to move, focus, "
             "maximise, minimise, close, snap or split an app/window, or to put an app on the left/right "
-            "screen or half, select manageWindow with the app name in `window`. When they ask to OPEN/launch "
-            "an app that may not be running AND place it somewhere, emit the app-launcher tool (open_app) "
-            "first and manageWindow second, with a 2-step plan.\n"
+            "screen or half, select manageWindow with the app name in `window`. manageWindow arguments use "
+            "EXACTLY these values: action is one of focus|move|maximize|minimize|close|split, monitor is "
+            "left|right|primary, position is left-half|right-half|top-half|bottom-half|full. Putting ONE "
+            "app on a screen/side is action=move with monitor; use action=split ONLY when the user names "
+            "TWO apps to sit side by side (second app goes in second_window). When they ask "
+            "to OPEN/launch an app that may not be running AND place it somewhere, emit the app-launcher "
+            "tool (open_app) first and manageWindow second, with a 2-step plan.\n"
             "- MARKETS: when the user asks the price or performance of a stock, crypto coin, gold/silver or "
             "an FX pair (in ANY language), select getStockPrice with the asset name as `symbol`. Prefer it "
             "over webSearch for price questions.\n\n"

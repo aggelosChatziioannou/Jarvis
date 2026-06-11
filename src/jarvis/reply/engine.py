@@ -873,15 +873,35 @@ def _translate_fused_to_planner_shape(
         # contract for direct-reply plans).
         return list(fused_plan) if fused_plan else ["Reply to the user."]
 
-    # Re-render each tool entry as ``name`` (the planner step parser only
-    # needs the first word to be a tool name). We do NOT serialise the
-    # arguments here because the engine's allow-list path treats these
-    # steps as advisory; the actual arguments come from the fused tools
-    # list when downstream code reaches the direct-exec path.
+    # Re-render each tool entry as a CONCRETE step: ``name key='value' …``.
+    # The fused engine already extracted the arguments; serialising them into
+    # the step lets the planner's deterministic fast-parse dispatch them
+    # as-is. (The old bare-name rendering relied on "downstream reads the
+    # fused tools list", which was only ever implemented for forgetMemory —
+    # every other direct-exec step fired with empty arguments and failed:
+    # ``manageWindow {}`` -> "action and window are required".)
+    # Launch-before-place invariant: the model sometimes orders manageWindow
+    # before the app launcher, so the move ran against a not-yet-open app and
+    # the launch landed wherever Windows pleased. App-launcher entries always
+    # execute first (stable sort keeps every other relative order).
+    ordered_tools = sorted(
+        [e for e in fused_tools if isinstance(e, dict)],
+        key=lambda e: 0 if str(e.get("name", "")).endswith("open_app") else 1,
+    )
     out: list[str] = []
-    for entry in fused_tools:
-        name = entry.get("name", "").strip() if isinstance(entry, dict) else ""
-        if name:
+    for entry in ordered_tools:
+        name = entry.get("name", "").strip()
+        if not name:
+            continue
+        args = entry.get("arguments")
+        if isinstance(args, dict) and args:
+            rendered = " ".join(
+                f"{k}='{str(v).replace(chr(39), chr(8217))}'"
+                for k, v in args.items()
+                if v is not None and not isinstance(v, (dict, list))
+            )
+            out.append(f"{name} {rendered}".strip())
+        else:
             out.append(name)
 
     # Append the fused prose plan after the tool steps. The LAST entry
@@ -1932,20 +1952,36 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # plan direct-exec path that guards the vision tools.
     _window_routed = [t for t in (routed_tools or [])
                       if t in ("manageWindow", "listOpenWindows")]
-    if _window_routed and not tool_steps_of(action_plan or []):
+    _opener = next(
+        (t for t in (routed_tools or []) if t.endswith("open_app")), None)
+    if (_window_routed or _opener) and not tool_steps_of(action_plan or []):
         # listOpenWindows takes no arguments — a bare name fast-parses to {}.
         # manageWindow's arguments live in the user's request, and the step
         # resolver only sees the step text — so embed the request verbatim;
         # the free text defeats the concrete fast-parse and routes the step
         # to the LLM resolver, which fills action/window/monitor from it.
-        _wt = _window_routed[0]
-        _step = _wt if _wt == "listOpenWindows" else (
-            f'manageWindow — satisfy the user request: "{redacted}"'
-        )
-        action_plan = [_step, "Reply to user."]
+        #
+        # "Open Spotify on the left" must launch THEN place — but the legacy
+        # router is inconsistent about picking both tools. Whenever an app
+        # launcher is routed, synthesise the full open->place sequence and
+        # make sure manageWindow is in the allow-list; with no placement in
+        # the request the resolver degrades to a focus, which is what
+        # "open X" should feel like anyway. manageWindow itself waits
+        # briefly for the just-launched window to appear.
+        _steps: list[str] = []
+        if _opener:
+            _steps.append(f'{_opener} — satisfy the user request: "{redacted}"')
+            if "manageWindow" not in (routed_tools or []):
+                routed_tools = list(routed_tools or []) + ["manageWindow"]
+        if _opener or "manageWindow" in _window_routed:
+            _steps.append(f'manageWindow — satisfy the user request: "{redacted}"')
+        elif _window_routed:
+            _steps.append(_window_routed[0])  # bare listOpenWindows -> {}
+        _steps.append("Reply to user.")
+        action_plan = _steps
         debug_log(
-            f"window tool routed without a plan step — synthesised direct-exec "
-            f"plan: {action_plan}",
+            f"window/app tools routed without a plan step — synthesised "
+            f"direct-exec plan: {action_plan}",
             "planning",
         )
 
@@ -2463,9 +2499,13 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # OS-window steps force direct-exec on ANY model size for the same
             # reason as vision: the chat model narrates the action instead of
             # calling it. A wrong pick fails harmlessly (move is reversible,
-            # list is read-only, close is a graceful WM_CLOSE).
+            # list is read-only, close is a graceful WM_CLOSE). App-launcher
+            # steps (…__open_app) are included: the synthesised
+            # open-then-place plan leads with one, and skipping it stalled
+            # the whole sequence ("Spotify just moved" — nothing executed).
             _window_step = bool(re.match(
-                r"^\s*(manageWindow|listOpenWindows)\b", _next_step_text or ""))
+                r"^\s*(manageWindow|listOpenWindows|\w+__open_app)\b",
+                _next_step_text or ""))
             _direct_exec_active = (
                 (use_text_tools and not _plan_under_specified)
                 or _vtool is not None
@@ -3207,6 +3247,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 print(f"\n[jarvis]\n  {_indent_text(safe_reply)}\n", flush=True)
         except Exception as e:
             debug_log(f"reply formatting failed: {e}", "planning")
+        # The stdout mirror splits multi-line prints into separate log
+        # entries, so the console feed showed the reply fragmented (or not
+        # at all). Publish the WHOLE reply as one entry for Live Logs.
+        try:
+            from .. import api_server
+            from ..utils.redact import scrub_secrets
+            api_server.publish_log("info", f"💬 Jarvis: {scrub_secrets(safe_reply)}")
+        except Exception:
+            pass
 
         # TTS output - callbacks handled by calling code
         if tts is not None and tts.enabled:

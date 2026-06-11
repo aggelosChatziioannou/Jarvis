@@ -638,9 +638,11 @@ class VoiceListener(threading.Thread):
         # Stash for the fused engine's tool/plan output. Not consumed yet
         # (reply.engine still runs its own router+planner); kept here so a
         # future reply.engine pass can pick them up without an extra LLM
-        # call. Updated on every successful Tier 2 hit; cleared on dispatch.
-        self._last_fused_tools: list = []
-        self._last_fused_plan: list = []
+        # call. Updated on every successful Tier 2 hit; cleared on dispatch
+        # AND at the top of every cascade run. None means "no fused signal —
+        # engine must run its own router"; [] means "fused decided no tools".
+        self._last_fused_tools: Optional[list] = None
+        self._last_fused_plan: Optional[list] = None
 
         # Thinking tune player
         self._tune_player: Optional = None
@@ -1159,6 +1161,14 @@ class VoiceListener(threading.Thread):
 
         Never raises; on any exception falls through to 'fallback'.
         """
+        # Every classification starts with a CLEAN fused stash; only a real
+        # Tier 2 judgment may populate it. Without this, a Tier 1 / cache hit
+        # leaves the previous value behind — the boot-time [] then reads as
+        # "the model decided no tools", the engine skips its router, and the
+        # first window command after a restart gets a confabulated refusal.
+        self._last_fused_tools = None
+        self._last_fused_plan = None
+
         # Cache lookup first — same shape as intent_judge's cache so the two
         # systems don't compete on duplicate (text, hot_window, tts) tuples.
         cache_key = self._cascade_cache_key(text_lower, could_be_hot_window, last_tts_text)
@@ -1183,20 +1193,40 @@ class VoiceListener(threading.Thread):
                     "voice",
                 )
 
+                # Tool-implying intents must NOT short-circuit Tier 2: the
+                # heuristic answers "was Jarvis addressed?" but cannot pick
+                # tools or arguments. Accepting them here sent variations like
+                # "Open Spotify on the left side" straight to the engine with
+                # no fused routing — and the wrong tools got picked. Plain
+                # commands ("άνοιξε spotify") are already 0ms via the Tier 0
+                # fast-path regexes, so deferring costs nothing common.
+                _tier1_local = result.intent in (
+                    "general_chat", "clarification", "stop",
+                    "time_current", "time_date",
+                )
+                _can_defer = self._fused_intent is not None and not _tier1_local
+
                 # Aho-Corasick + high confidence → fast-path equivalent.
                 if result.tier == "aho_corasick" and result.confidence == "high":
-                    print(
-                        f"  ⚡ Tier 1 heuristic: {result.intent} "
-                        f"(conf=high, {elapsed_ms:.1f}ms)",
-                        flush=True,
-                    )
-                    judgment = self._classifier_to_judgment(result, text_lower)
-                    self._cascade_cache_put(cache_key, judgment)
-                    return judgment, "tier1_high"
+                    if _can_defer:
+                        debug_log(
+                            f"Tier 1 {result.intent} (high) needs tool routing "
+                            f"— deferring to Tier 2 fused",
+                            "voice",
+                        )
+                    else:
+                        print(
+                            f"  ⚡ Tier 1 heuristic: {result.intent} "
+                            f"(conf=high, {elapsed_ms:.1f}ms)",
+                            flush=True,
+                        )
+                        judgment = self._classifier_to_judgment(result, text_lower)
+                        self._cascade_cache_put(cache_key, judgment)
+                        return judgment, "tier1_high"
 
                 # Med confidence (with the lowered 0.5 threshold) → accept
                 # locally, skip LLM. Treat as directed with raw text as query.
-                if result.confidence == "med":
+                if result.confidence == "med" and not _can_defer:
                     print(
                         f"  ⚡ Tier 1 heuristic: {result.intent} "
                         f"(conf=med, {elapsed_ms:.1f}ms)",
@@ -3353,6 +3383,17 @@ class VoiceListener(threading.Thread):
                 # Router reusing chat_model is already covered.
                 if router_model and router_model == chat_model:
                     self._llm_warmup_results["router"] = (chat_model, ok)
+                # Prime the fused router's BIG system prompt too: warming the
+                # weights alone leaves its multi-k-token prompt eval cold, so
+                # the first real query reliably blew the 10s fused timeout
+                # and fell back to the (less reliable) legacy router.
+                if ok and getattr(self, "_fused_intent", None) is not None:
+                    try:
+                        self._fused_intent.classify_route_plan(
+                            "warmup ping", language="en")
+                        self._llm_warmup_results["fused"] = (chat_model, True)
+                    except Exception:
+                        self._llm_warmup_results["fused"] = (chat_model, False)
 
             threads.append(threading.Thread(target=_warm_chat, daemon=True, name="warmup-chat"))
 
