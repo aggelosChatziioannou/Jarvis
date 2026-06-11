@@ -496,7 +496,7 @@ def check_model_support() -> Optional[str]:
         # startup (custom Modelfiles like qwen3.5:9b-8k would otherwise warn).
         try:
             import requests
-            base_url = config.get("ollama_base_url", "http://localhost:11434")
+            base_url = config.get("ollama_base_url", "http://127.0.0.1:11434")
             resp = requests.get(base_url.rstrip("/") + "/api/tags", timeout=2.0)
             if resp.status_code == 200:
                 installed = {m.get("name", "") for m in resp.json().get("models", [])}

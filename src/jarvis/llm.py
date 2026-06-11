@@ -6,6 +6,7 @@ import requests
 import json
 
 from .debug import debug_log
+from .config import load_settings
 
 
 class ToolsNotSupportedError(Exception):
@@ -13,13 +14,28 @@ class ToolsNotSupportedError(Exception):
     pass
 
 
-def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False, num_ctx: int = 4096, temperature: Optional[float] = None) -> Optional[str]:
+def shared_num_ctx() -> int:
+    """The ONE context size every call on the shared brain must request.
+
+    Ollama fully reloads a model's runner whenever a request's num_ctx differs
+    from the loaded one — measured ~8.5s per transition on qwen3.5:9b-4k, in
+    BOTH directions. Mixed sizes (chat 8192 / fused 4096 / reminder parser
+    1024) made every voice query pay up to two reloads and pushed sub-second
+    calls past their timeouts. Config dial: ``llm_num_ctx`` (default 4096,
+    matching the deliberately-built -4k model); changing it moves every call
+    site together so the runner is never thrashed.
+    """
+    try:
+        return int(getattr(load_settings(), "llm_num_ctx", 4096) or 4096)
+    except Exception:
+        return 4096
+
+
+def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False, num_ctx: Optional[int] = None, temperature: Optional[float] = None) -> Optional[str]:
     """Direct LLM call without temporal context, location, or other ask_coach features.
 
-    ``num_ctx`` controls Ollama's context window for this call. Default 4096 is
-    fine for small classification-shaped passes; callers that assemble richer
-    prompts (planner with dialogue + memory + tool catalogue) should pass a
-    larger value to avoid silent truncation.
+    ``num_ctx`` rides ``shared_num_ctx()`` when omitted — see its docstring;
+    pass a value ONLY for a model that does not share the main brain's runner.
 
     ``temperature`` is forwarded to Ollama when set. Pass ``0.0`` for
     classification / extraction calls where determinism beats creativity —
@@ -31,7 +47,7 @@ def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_con
         {"role": "user", "content": user_content}
     ]
 
-    options: Dict[str, Any] = {"num_ctx": num_ctx}
+    options: Dict[str, Any] = {"num_ctx": int(num_ctx) if num_ctx else shared_num_ctx()}
     if temperature is not None:
         options["temperature"] = temperature
 
@@ -96,7 +112,7 @@ def call_llm_streaming(
         "model": chat_model,
         "messages": messages,
         "stream": True,
-        "options": {"num_ctx": 4096},
+        "options": {"num_ctx": shared_num_ctx()},
         "think": thinking,
     }
 
@@ -199,15 +215,15 @@ def chat_with_messages(
 
     Returns the parsed JSON response dict on success, or None on error/timeout.
     """
-    # Main agentic chat uses 8192 so the system prompt (tool list + protocol
-    # guidance + memory context) doesn't overflow and force ollama to truncate
-    # — which previously dropped the tool schema on smaller models like
-    # gemma4:e2b, tipping them into their pre-trained tool_code scaffolding.
+    # Rides shared_num_ctx() like every other shared-brain call: the old
+    # hardcoded 8192 here (vs 4096 elsewhere) forced an ~8.5s Ollama runner
+    # reload TWICE per voice query. If a richer prompt needs more context,
+    # raise `llm_num_ctx` in config — every call site moves together.
     payload: Dict[str, Any] = {
         "model": chat_model,
         "messages": messages,
         "stream": False,
-        "options": {"num_ctx": 8192},
+        "options": {"num_ctx": shared_num_ctx()},
         "think": thinking,
     }
     if extra_options and isinstance(extra_options, dict):

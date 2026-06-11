@@ -9,7 +9,8 @@ This module is standalone — DO NOT import from `listener.py` or
 Uses Ollama's `/api/generate` with:
 - `format=<JSON schema>` for structured output (Ollama 0.5+).
 - `cache_prompt=True` to reuse the KV cache for the system prompt across calls.
-- `keep_alive="30m"` to keep the model warm.
+- `keep_alive=-1` so the shared brain stays resident (a finite value here
+  re-armed an unload timer on every voice query).
 
 The system prompt is in English; multilingual handling (Greek + English
 transcripts) relies on the LLM's intrinsic capacity.
@@ -39,6 +40,7 @@ except ImportError:  # pragma: no cover
     OLLAMA_PKG_AVAILABLE = False
 
 from ..debug import debug_log
+from ..llm import shared_num_ctx as _shared_num_ctx
 
 
 # JSON Schema constant — exact shape we want the model to return.
@@ -230,7 +232,7 @@ class FusedIntentEngine:
     def __init__(self, cfg):
         self.cfg = cfg
         self.base_url = str(
-            getattr(cfg, "ollama_base_url", "http://localhost:11434")
+            getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434")
         ).rstrip("/")
         self.model = str(getattr(cfg, "intent_judge_model", "gemma4:e2b"))
         # The fused call does judge+router+planner in one shot over a multi-
@@ -398,14 +400,19 @@ class FusedIntentEngine:
             "prompt": user,
             "system": system,
             "stream": False,
-            "keep_alive": "30m",
+            # -1 = stay resident. This call rides the SAME warm model as
+            # chat/reply; a finite value here re-armed a 30m unload timer on
+            # every voice query, evicting the brain after idle gaps.
+            "keep_alive": -1,
             "cache_prompt": True,                # Ollama: reuse KV cache for system prompt
             "think": False,                      # Disable chain-of-thought (qwen3/etc emit to `thinking` field)
             "format": FUSED_INTENT_SCHEMA,       # Ollama: enforce JSON schema
             "options": {
                 "temperature": temperature,
                 "num_predict": 300,
-                "num_ctx": 4096,                 # smaller than judge's 8k — our prompt is short
+                # Shared-brain context size — a per-call value here would
+                # thrash the runner (~8.5s reload per num_ctx change).
+                "num_ctx": _shared_num_ctx(),
             },
         }
 

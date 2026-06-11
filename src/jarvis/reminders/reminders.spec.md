@@ -85,7 +85,11 @@ Each channel is best-effort; a failure in one never blocks the others.
 `createReminder`, `listReminders`, `cancelReminder`, `snoozeReminder` — each exposes a
 single optional `text` property (planner fast-path), opens its own `ReminderStore`, and
 returns raw data (no LLM formatting), per the tool contract. `createReminder` computes a
-recurring reminder's first fire via `croniter` and fails closed on unparseable time.
+recurring reminder's first fire via `croniter` and fails closed on unparseable time —
+but before failing it retries `parse_when` with the user's full utterance
+(`context.redacted_text`): the router sometimes strips the time phrase from the arg
+("check the oven" for "remind me in 3 hours to check the oven") while the utterance
+almost always carries it. On a successful retry the stored text is the full utterance.
 
 ## Configuration
 

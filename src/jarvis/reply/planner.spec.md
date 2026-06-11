@@ -162,10 +162,29 @@ The engine consumes the plan in two phases.
   result is impossible to know without executing it, so a large model
   "trusted" to call it natively instead hallucinates the screen ("your
   screen is mostly blank" with the tool never invoked). Forcing the step
-  guarantees Jarvis actually looks. Action tools
-  (`clickScreen`/`typeOnScreen`/`scrollScreen`) are excluded — they have
-  side effects and their own safety gating, so they stay on the normal
-  model-driven path.
+  guarantees Jarvis actually looks. Screen ACTION tools
+  (`clickScreen`/`typeOnScreen`/`scrollScreen`) are not on this vision
+  list, but they can still force via the concrete-step rule below — their
+  propose→confirm safety gating lives in the tool itself
+  (`vision.spec.md`, unbypassable), so a forced call proposes exactly
+  like a model-emitted one.
+- **Tool-headed-step rule (any model size).** Direct-exec also fires when
+  the next plan tool step's HEAD token names an allow-listed tool —
+  `step_names_allowed_tool()`. Rationale: the narrate-instead-of-call
+  failure is NOT specific to vision/window/forget — observed live with
+  `getStockPrice symbol='BTC'` ("Bitcoin is hovering around 650 dollars",
+  tool never invoked, price hallucinated), `gmail__list_recent_emails`
+  ("I've scanned my inbox", a fabricated inbox summary) and
+  `createReminder` ("Done — reminder set" over an EMPTY reminders table).
+  A tool-headed step IS the router's decision; executing it is not
+  optional. Dispatch within the rule: a FULLY CONCRETE step
+  (`step_is_concrete()`: `toolName key='value' …` or a bare no-arg name,
+  declared keys only, no `<placeholder>`) goes through the deterministic
+  fast-parse with the router's arguments verbatim — no LLM involved;
+  steps with extra/undeclared keys or prose tails go through the resolver
+  LLM, which strips unknown keys against the tool's schema before
+  dispatch. Steps that do not name a tool (plain prose, synthesis)
+  remain advisory exactly as before.
 - **forgetMemory exception (any model size).** Direct-exec also fires when the
   next plan tool step names `forgetMemory`, on any model size. The chat model is
   unreliable here — it narrates a confabulated "deleted that for you" without
@@ -205,8 +224,13 @@ The engine consumes the plan in two phases.
   free-form by design).
 - Tolerates markdown fences the model may add despite instructions.
 - Both planner LLM calls (`plan_query` and `resolve_next_tool_call`)
-  request `num_ctx=8192` from Ollama so enriched memory and tool
-  catalogue don't silently truncate in the 4096-token default window.
+  ride the shared context size (`llm_num_ctx`, default 4096) like every
+  other call on the shared brain. They previously requested a private
+  `num_ctx=8192`, but Ollama fully reloads the model runner (~8.5s on
+  qwen3.5:9b-4k) whenever a request's num_ctx differs from the loaded
+  one — mixed sizes thrashed the GPU on every voice query. If enriched
+  prompts ever truncate, raise `llm_num_ctx` once; all call sites move
+  together.
 
 ## Fail-open invariants
 

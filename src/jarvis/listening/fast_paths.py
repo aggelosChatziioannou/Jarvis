@@ -216,9 +216,14 @@ _register(r"\bclose\s+(the\s+)?browser\b", "browser", "close_browser", response_
 _register(r"\b(δείξε|δειξε)\s+(μου\s+)?(τις\s+)?(σημειώσεις|σημειωσεις|notes)\b", "notes", "list_notes", {"limit": 5})
 _register(r"\b(list|show)\s+(my\s+)?notes\b", "notes", "list_notes", {"limit": 5})
 
-# List due reminders
-_register(r"\b(υπενθυμίσεις|υπενθυμισεις|reminders)\s+(due|σήμερα|σημερα)?\b", "notes", "list_due_reminders")
-_register(r"\b(any\s+)?(due\s+)?reminders?\b", "notes", "list_due_reminders")
+# List due reminders — LIST-INTENT shapes only. The bare word "reminder(s)"
+# must NOT short-circuit: modification commands ("cancel the oven reminder",
+# "set a reminder to…") were hijacked here and answered with a due-list while
+# the actual cancel/create never ran. Those belong to the fused router
+# (cancelReminder/createReminder tools), so anything non-listy falls through.
+_register(r"\b(υπενθυμίσεις|υπενθυμισεις|reminders)\s+(due|σήμερα|σημερα)\b", "notes", "list_due_reminders")
+_register(r"\b(any|what|which|list|show)\b[\w\s']*\breminders?\b", "notes", "list_due_reminders")
+_register(r"\b(τι|ποιες|ποια|δείξε|δειξε|λίστα|λιστα)\b.*\b(υπενθυμίσεις|υπενθυμισεις)\b", "notes", "list_due_reminders")
 
 # List upcoming
 _register(r"\b(επόμενες|επομενες)\s+(υπενθυμίσεις|υπενθυμισεις)\b", "notes", "list_upcoming_reminders")

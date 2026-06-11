@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional, List
 
 from ..debug import debug_log
+from ..llm import shared_num_ctx as _shared_num_ctx
 from .transcript_buffer import TranscriptSegment
 
 try:
@@ -486,14 +487,13 @@ Examples:
                     "options": {
                         "temperature": 0.0,
                         "num_predict": 200,
-                        # Headroom for: ~2k-token system prompt + up to 2 minutes
-                        # of chatty multi-speaker transcript (default
-                        # transcript_buffer_duration_sec=120 in listener.py).
-                        # 4096 was cutting close to 90% utilisation in the
-                        # worst case after the prompt grew in PR #362, which
-                        # risks silent ollama truncation of the system
-                        # prompt's tail.
-                        "num_ctx": 8192,
+                        # Shared-brain context size (llm_num_ctx). The old
+                        # per-call 8192 here forced an ~8.5s Ollama runner
+                        # reload whenever it alternated with 4096 callers —
+                        # far worse than the truncation it hedged against.
+                        # Raise llm_num_ctx if long transcripts ever truncate;
+                        # all call sites move together.
+                        "num_ctx": _shared_num_ctx(),
                     },
                 },
                 timeout=self.config.timeout_sec,

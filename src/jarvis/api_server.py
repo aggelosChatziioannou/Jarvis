@@ -1182,7 +1182,7 @@ def system_metrics() -> Dict[str, Any]:
         import requests
 
         settings = _load_settings_safe()
-        base = getattr(settings, "ollama_base_url", "http://localhost:11434")
+        base = getattr(settings, "ollama_base_url", "http://127.0.0.1:11434")
         resp = requests.get(base.rstrip("/") + "/api/ps", timeout=4)
         out["models"] = [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
     except Exception:
@@ -1403,7 +1403,7 @@ def list_llm_models() -> List[Dict[str, Any]]:
     try:
         import requests
         cfg = load_config()
-        url = cfg.get("ollama_base_url", "http://localhost:11434") + "/api/tags"
+        url = cfg.get("ollama_base_url", "http://127.0.0.1:11434") + "/api/tags"
         r = requests.get(url, timeout=2.0)
         if r.status_code == 200:
             data = r.json()

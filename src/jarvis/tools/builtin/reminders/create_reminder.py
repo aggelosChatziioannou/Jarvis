@@ -52,6 +52,16 @@ class CreateReminderTool(Tool):
         now = datetime.now().astimezone()
         parsed = parse_when(text, context.cfg, now, language=context.language)
         if parsed is None:
+            # The router sometimes strips the time phrase from the arg
+            # ("check the oven" for "remind me in 3 hours to check the
+            # oven"). The user's full utterance almost always carries it —
+            # retry with that before failing closed.
+            utterance = (context.redacted_text or "").strip()
+            if utterance and utterance != text:
+                parsed = parse_when(utterance, context.cfg, now, language=context.language)
+                if parsed is not None:
+                    text = utterance
+        if parsed is None:
             context.user_print("⚠️ I couldn't work out when to remind you.")
             return ToolExecutionResult(success=False, reply_text="Could not parse a time from the reminder")
 

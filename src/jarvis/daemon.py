@@ -871,7 +871,7 @@ def main() -> None:
         # End-Task skips this path — scripts/stop-jarvis.ps1 covers that.)
         try:
             import requests as _rq
-            _base = str(getattr(cfg, "ollama_base_url", "http://localhost:11434")).rstrip("/")
+            _base = str(getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434")).rstrip("/")
             for _m in (_rq.get(f"{_base}/api/ps", timeout=3).json().get("models") or []):
                 _name = _m.get("name")
                 if not _name:

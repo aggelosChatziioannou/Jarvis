@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 from dataclasses import dataclass
@@ -136,6 +137,11 @@ class Settings:
     # sentinel -1.0 meaning "unset / use the model default".
     llm_chat_max_tokens: int
     llm_chat_temperature: float
+    # ONE context size for every call on the shared brain (chat, fused intent,
+    # judge, planner, reminder parser). Ollama fully reloads a model's runner
+    # (~8.5s on qwen3.5:9b-4k) whenever a request's num_ctx differs from the
+    # loaded one — in BOTH directions — so mixed per-call sizes thrash the GPU.
+    llm_num_ctx: int
 
     # Profiles & Behavior
     active_profiles: list[str]
@@ -719,6 +725,23 @@ def _ensure_dict(value: Any) -> Dict[str, Any]:
     return {}
 
 
+def normalise_ollama_base_url(url: str) -> str:
+    """Rewrite a `localhost` host to `127.0.0.1`, leaving everything else alone.
+
+    On Windows, `localhost` resolves IPv6-first (::1) while Ollama binds IPv4
+    only, so every new connection pays a ~2s fallback penalty — a flat tax on
+    every LLM call in the app. Only the exact host `localhost` is rewritten;
+    explicit IPs (including [::1]) and real hostnames are respected.
+    """
+    try:
+        match = re.match(r"^(https?://)localhost(?=[:/]|$)(.*)$", url, re.IGNORECASE)
+        if match:
+            return f"{match.group(1)}127.0.0.1{match.group(2)}"
+    except Exception:
+        pass
+    return url
+
+
 def get_default_config() -> Dict[str, Any]:
     """Returns the default configuration values."""
     return {
@@ -742,6 +765,9 @@ def get_default_config() -> Dict[str, Any]:
         # means "leave the model default untouched".
         "llm_chat_max_tokens": 512,
         "llm_chat_temperature": -1.0,
+        # Shared context size for the one warm brain — see Settings.llm_num_ctx.
+        # 4096 matches the deliberately-built -4k model topology.
+        "llm_num_ctx": 4096,
 
         # Profiles & Behavior
         "active_profiles": ["developer", "business", "life"],
@@ -1136,7 +1162,7 @@ def load_settings() -> Settings:
     sqlite_vss_path = merged.get("sqlite_vss_path")
     allowlist_bundles = _ensure_list(merged.get("allowlist_bundles"))
 
-    ollama_base_url = str(merged.get("ollama_base_url"))
+    ollama_base_url = normalise_ollama_base_url(str(merged.get("ollama_base_url")))
     ollama_embed_model = str(merged.get("ollama_embed_model"))
     ollama_chat_model = str(merged.get("ollama_chat_model"))
     use_stdin = bool(merged.get("use_stdin", False))
@@ -1564,6 +1590,7 @@ def load_settings() -> Settings:
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
     llm_chat_max_tokens = int(merged.get("llm_chat_max_tokens", 512))
     llm_chat_temperature = float(merged.get("llm_chat_temperature", -1.0))
+    llm_num_ctx = int(merged.get("llm_num_ctx", 4096) or 4096)
 
     return Settings(
         # Database & Storage
@@ -1581,6 +1608,7 @@ def load_settings() -> Settings:
         llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
         llm_chat_max_tokens=llm_chat_max_tokens,
         llm_chat_temperature=llm_chat_temperature,
+        llm_num_ctx=llm_num_ctx,
 
         # Profiles & Behavior
         active_profiles=active_profiles,

@@ -149,7 +149,10 @@ def _llm_fallback(text: str, cfg, now: datetime) -> Optional[ParsedWhen]:
             user_content,
             timeout_sec=timeout,
             thinking=False,
-            num_ctx=1024,
+            # No num_ctx override: the old 1024 forced an ~8.5s runner reload
+            # (shared brain runs at llm_num_ctx) that alone blew the 8s
+            # timeout — every reminder parse failed with "couldn't work out
+            # when" on perfectly parseable phrases.
             temperature=0.0,
         )
     except Exception as exc:

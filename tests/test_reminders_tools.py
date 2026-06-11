@@ -84,6 +84,28 @@ def test_create_uses_redacted_text_when_no_arg(cfg):
 
 
 @pytest.mark.unit
+def test_create_retries_with_full_utterance_when_arg_lacks_a_time(cfg, monkeypatch):
+    """Live failure: the fused router stripped the time phrase — args carried
+    'check the oven' for 'remind me in 3 hours to check the oven' — and the
+    tool failed closed even though the user's utterance had a perfectly
+    parseable time. The tool must retry parsing with the full utterance."""
+    def fake_parse(text, cfg_, now, language=None):
+        if "3 hours" in text:
+            from jarvis.reminders.models import ParsedWhen
+            return ParsedWhen(trigger_at=now + timedelta(hours=3))
+        return None
+    monkeypatch.setattr(
+        "jarvis.tools.builtin.reminders.create_reminder.parse_when", fake_parse,
+    )
+    ctx, _ = _ctx(cfg, redacted="remind me in 3 hours to check the oven")
+    res = CreateReminderTool().run({"text": "check the oven"}, ctx)
+    assert res.success
+    rows = _rows(cfg)
+    assert len(rows) == 1
+    assert rows[0].trigger_at > _now()
+
+
+@pytest.mark.unit
 def test_create_fails_closed_when_time_unparseable(cfg, monkeypatch):
     monkeypatch.setattr(
         "jarvis.tools.builtin.reminders.create_reminder.parse_when",

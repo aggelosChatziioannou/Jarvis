@@ -36,6 +36,7 @@ from .planner import (
     memory_topic_of,
     is_search_memory_step,
     resolve_next_tool_call as _resolve_plan_step,
+    step_names_allowed_tool,
 )
 from ..tools.selection import select_tools, ToolSelectionStrategy
 import concurrent.futures
@@ -2506,11 +2507,29 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             _window_step = bool(re.match(
                 r"^\s*(manageWindow|listOpenWindows|\w+__open_app)\b",
                 _next_step_text or ""))
+            # ANY step whose head token names an allow-listed tool forces
+            # direct-exec on ANY model size. Same failure class as
+            # vision/windows/forget, observed live for the remaining tools:
+            # the chat model, advised by the plan, narrated instead of
+            # calling — "Bitcoin is hovering around 650 dollars" with
+            # getStockPrice never invoked; "I've scanned my inbox" with
+            # gmail__list_recent_emails never invoked; "Done — reminder set"
+            # over an EMPTY reminders table. A tool-headed step IS the
+            # router's decision; executing it is not optional. Fully-concrete
+            # steps dispatch via the deterministic fast-parse (args verbatim
+            # from the fused router, no LLM); steps with extra/undeclared
+            # keys or prose tails go through the resolver, which strips
+            # unknown keys before dispatch. Tool-level safety flows
+            # (clickScreen propose→confirm, forgetMemory pending-confirm)
+            # apply unchanged.
+            _tool_headed_step = step_names_allowed_tool(
+                _next_step_text or "", tools_json_schema or [])
             _direct_exec_active = (
                 (use_text_tools and not _plan_under_specified)
                 or _vtool is not None
                 or _forget_step
                 or _window_step
+                or _tool_headed_step
             )
             if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False

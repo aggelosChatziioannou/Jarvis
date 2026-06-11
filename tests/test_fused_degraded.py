@@ -48,6 +48,42 @@ class TestListenerStash:
         assert tools == [] and plan == ["Reply to user."]
 
 
+class TestFusedKeepsModelResident:
+    """The fused call shares the ONE warm brain with chat/reply. It must not
+    re-arm an unload timer on every voice query: a `keep_alive: 30m` here
+    silently scheduled the 9b for eviction after half an hour of idle, making
+    the next query pay a full model reload."""
+
+    def test_ollama_payload_keeps_model_loaded_forever(self, monkeypatch):
+        from types import SimpleNamespace
+        from jarvis.listening import fused_intent as fi
+
+        captured = {}
+
+        class _FakeResp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"response": '{"intent":"query","confidence":"high","tools":[],"plan":["Reply to user."],"fast_path_match":null,"explanation":""}'}
+
+        def fake_post(url, json=None, timeout=None):
+            captured.update(json or {})
+            return _FakeResp()
+
+        monkeypatch.setattr(fi.requests, "post", fake_post)
+        eng = fi.FusedIntentEngine(SimpleNamespace(
+            ollama_base_url="http://127.0.0.1:11434",
+            intent_judge_model="qwen3.5:9b-4k",
+            intent_judge_timeout_sec=8.0,
+        ))
+        eng._ollama_call("sys", "user")
+        assert captured.get("keep_alive") == -1, (
+            f"fused call must keep the shared model resident (keep_alive=-1), "
+            f"got {captured.get('keep_alive')!r}"
+        )
+
+
 class TestFastPathPlacementGuard:
     """Window-arrangement phrases must skip the keyword layer entirely."""
 
@@ -60,6 +96,34 @@ class TestFastPathPlacementGuard:
             "άνοιξε το spotify στην δεξιά οθόνη",
         ]:
             assert fast_paths.match(q) is None, q
+
+    def test_reminder_modification_phrases_fall_through_to_the_router(self):
+        """Live failure: 'cancel the oven reminder' was hijacked by the
+        list-due keyword rule and answered 'No reminders are due right now'
+        while the reminder stayed active. Any phrase that MODIFIES reminders
+        (cancel/delete/snooze/set) must reach the fused router, which routes
+        cancelReminder/createReminder correctly."""
+        from jarvis.listening import fast_paths
+        for q in [
+            "cancel the oven reminder",
+            "delete my stretching reminder",
+            "snooze that reminder",
+            "set a reminder to check the oven",
+            "ακύρωσε τις υπενθυμίσεις για σήμερα",
+        ]:
+            assert fast_paths.match(q) is None, q
+
+    def test_reminder_list_questions_still_fast_path(self):
+        from jarvis.listening import fast_paths
+        for q in [
+            "any reminders due?",
+            "what reminders do I have?",
+            "show my reminders",
+            "υπενθυμίσεις σήμερα",
+        ]:
+            m = fast_paths.match(q)
+            assert m is not None, q
+            assert "reminder" in (m.tool_name or ""), (q, m.tool_name)
 
     def test_plain_music_and_app_commands_still_fast_path(self):
         from jarvis.listening import fast_paths

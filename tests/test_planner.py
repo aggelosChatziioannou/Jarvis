@@ -501,6 +501,108 @@ class TestResolveNextToolCall:
         assert result == ("freeform", {"anything": "goes"})
 
 
+class TestStepIsConcrete:
+    """Gate predicate for forcing direct-exec on ANY model size.
+
+    Live failures this guards: the chat model, advised by a concrete fused
+    plan step, narrated instead of calling — "Bitcoin is hovering around 650
+    dollars" with `getStockPrice symbol='BTC'` never invoked, and "I've
+    scanned my inbox" with `gmail__list_recent_emails` never invoked. A step
+    that parses deterministically to an allow-listed call must execute
+    directly; only vague/prose steps stay advisory."""
+
+    def _schema(self):
+        return [
+            {"type": "function", "function": {
+                "name": "getStockPrice",
+                "description": "Live market price.",
+                "parameters": {"type": "object",
+                               "properties": {"symbol": {"type": "string"}}},
+            }},
+            {"type": "function", "function": {
+                "name": "listOpenWindows",
+                "description": "List windows.",
+                "parameters": {"type": "object", "properties": {}},
+            }},
+        ]
+
+    def test_concrete_step_with_args_is_concrete(self):
+        from jarvis.reply.planner import step_is_concrete
+        assert step_is_concrete("getStockPrice symbol='BTC'", self._schema())
+
+    def test_bare_no_arg_tool_name_is_concrete(self):
+        from jarvis.reply.planner import step_is_concrete
+        assert step_is_concrete("listOpenWindows", self._schema())
+
+    def test_prose_step_is_not_concrete(self):
+        from jarvis.reply.planner import step_is_concrete
+        assert not step_is_concrete("look up the bitcoin price", self._schema())
+
+    def test_unknown_tool_is_not_concrete(self):
+        from jarvis.reply.planner import step_is_concrete
+        assert not step_is_concrete("mysteryTool x='1'", self._schema())
+
+    def test_placeholder_step_is_not_concrete(self):
+        from jarvis.reply.planner import step_is_concrete
+        assert not step_is_concrete(
+            "getStockPrice symbol='<ticker from prior step>'", self._schema()
+        )
+
+    def test_empty_inputs_are_not_concrete(self):
+        from jarvis.reply.planner import step_is_concrete
+        assert not step_is_concrete("", self._schema())
+        assert not step_is_concrete("getStockPrice symbol='BTC'", [])
+
+
+class TestStepNamesAllowedTool:
+    """Broader force-gate predicate: a step whose HEAD token is an
+    allow-listed tool must direct-exec even when not fully concrete.
+
+    Live failure this guards: the fused router emitted an extra undeclared
+    key (`createReminder text='check the oven' time='in 3 hours'`), the
+    concrete fast-parse correctly deferred to the resolver — but the force
+    gate keyed on concreteness, so nothing forced the step at all and the
+    chat model narrated "Done — reminder set" with an EMPTY reminders table."""
+
+    def _schema(self):
+        return [
+            {"type": "function", "function": {
+                "name": "createReminder",
+                "description": "Set a reminder.",
+                "parameters": {"type": "object",
+                               "properties": {"text": {"type": "string"}}},
+            }},
+        ]
+
+    def test_tool_headed_step_with_extra_keys_is_forced(self):
+        from jarvis.reply.planner import step_names_allowed_tool
+        assert step_names_allowed_tool(
+            "createReminder text='check the oven' time='in 3 hours'", self._schema()
+        )
+
+    def test_tool_headed_prose_step_is_forced(self):
+        from jarvis.reply.planner import step_names_allowed_tool
+        assert step_names_allowed_tool(
+            "createReminder for the oven in three hours", self._schema()
+        )
+
+    def test_plain_prose_step_is_not_forced(self):
+        from jarvis.reply.planner import step_names_allowed_tool
+        assert not step_names_allowed_tool("Reply to the user.", self._schema())
+        assert not step_names_allowed_tool(
+            "Set a reminder for the oven", self._schema()
+        )
+
+    def test_unknown_tool_head_is_not_forced(self):
+        from jarvis.reply.planner import step_names_allowed_tool
+        assert not step_names_allowed_tool("mysteryTool x='1'", self._schema())
+
+    def test_empty_inputs_are_not_forced(self):
+        from jarvis.reply.planner import step_names_allowed_tool
+        assert not step_names_allowed_tool("", self._schema())
+        assert not step_names_allowed_tool("createReminder text='x'", [])
+
+
 class TestUrlArgNormalisation:
     """The resolver must hand chrome/browser MCP tools a fully-qualified
     URL.

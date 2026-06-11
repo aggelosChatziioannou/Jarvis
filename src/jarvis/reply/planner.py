@@ -475,7 +475,6 @@ def plan_query(
             user_content=user_content,
             timeout_sec=effective_timeout,
             thinking=False,
-            num_ctx=8192,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner: LLM call failed — {exc}", "planning")
@@ -659,6 +658,58 @@ def _parse_plan_step_concrete(
     return name, _normalise_url_args(args)
 
 
+def step_is_concrete(next_step_text: str, tools_schema: Sequence[dict]) -> bool:
+    """True when a plan step deterministically parses to an allow-listed call.
+
+    Used by the reply engine to force direct-exec on ANY model size: a chat
+    model that is merely *advised* by a concrete plan step frequently narrates
+    the outcome instead of emitting the tool call (live: "Bitcoin is hovering
+    around 650 dollars" with ``getStockPrice symbol='BTC'`` never invoked).
+    Concreteness is the safety valve — the args come verbatim from the fused
+    router / planner, the tool must be in this turn's allow-list, and no LLM
+    resolver is involved. Vague or placeholder steps return False and stay
+    advisory.
+    """
+    if not next_step_text or not next_step_text.strip() or not tools_schema:
+        return False
+    allowed_names: list[str] = []
+    allowed_props: dict[str, set] = {}
+    for entry in tools_schema:
+        fn = entry.get("function", {}) if isinstance(entry, dict) else {}
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if not name:
+            continue
+        allowed_names.append(str(name))
+        params = (fn.get("parameters") or {}) if isinstance(fn, dict) else {}
+        props = params.get("properties") if isinstance(params, dict) else None
+        allowed_props[str(name)] = set(props.keys()) if isinstance(props, dict) else set()
+    return _parse_plan_step_concrete(next_step_text, allowed_names, allowed_props) is not None
+
+
+def step_names_allowed_tool(next_step_text: str, tools_schema: Sequence[dict]) -> bool:
+    """True when a plan step's HEAD token is an allow-listed tool name.
+
+    Broader than ``step_is_concrete``: the reply engine forces direct-exec for
+    ANY tool-headed step, because a step that explicitly names a tool came
+    from the router's decision and the chat model cannot be trusted to emit
+    the call (live: "Done — reminder set" narrated over an EMPTY reminders
+    table when the router added an extra undeclared arg key, which correctly
+    defeats the concrete fast-parse but must NOT defeat the forcing). Fully
+    concrete steps still dispatch via the deterministic fast-parse; the rest
+    go through the resolver, which strips undeclared keys before dispatch.
+    """
+    if not next_step_text or not next_step_text.strip() or not tools_schema:
+        return False
+    head = next_step_text.strip().split(None, 1)[0].rstrip(":")
+    if not head:
+        return False
+    for entry in tools_schema:
+        fn = entry.get("function", {}) if isinstance(entry, dict) else {}
+        if isinstance(fn, dict) and fn.get("name") == head:
+            return True
+    return False
+
+
 def resolve_next_tool_call(
     cfg,
     next_step_text: str,
@@ -749,7 +800,6 @@ def resolve_next_tool_call(
             user_content=user_content,
             timeout_sec=effective_timeout,
             thinking=False,
-            num_ctx=8192,
         )
     except Exception as exc:  # pragma: no cover — defensive
         debug_log(f"planner.resolve_next_tool_call: LLM failed — {exc}", "planning")

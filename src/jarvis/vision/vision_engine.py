@@ -211,7 +211,7 @@ class VisionEngine:
         monitors = MonitorMap()
         capture = ScreenCapture(monitor_map=monitors)
         client = VisionModelClient(
-            base_url=getattr(cfg, "ollama_base_url", "http://localhost:11434"),
+            base_url=getattr(cfg, "ollama_base_url", "http://127.0.0.1:11434"),
             model=getattr(cfg, "vision_model", "qwen2.5vl:3b"),
             keep_alive=getattr(cfg, "vision_keep_alive", "5m"),
             timeout_sec=float(getattr(cfg, "vision_timeout_sec", 20.0)),
