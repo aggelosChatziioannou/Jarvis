@@ -1100,9 +1100,17 @@ class VoiceListener(threading.Thread):
         is_stop = (fused.intent == "stop")
         directed = fused.intent in ("directed", "query", "stop", "clarification")
 
-        # Stash the fused output for downstream consumers (currently logs only).
-        self._last_fused_tools = list(fused.tools or [])
-        self._last_fused_plan = list(fused.plan or [])
+        # Stash the fused output for the engine's fast path. A DEGRADED
+        # judgment (timeout / parse failure) must pass None, not []: an empty
+        # list means "the model decided no tools", which makes the engine skip
+        # its own router — locking a fused miss into a wrong "I can't do that"
+        # reply. None lets the legacy router+planner run instead.
+        if getattr(fused, "degraded", False):
+            self._last_fused_tools = None
+            self._last_fused_plan = None
+        else:
+            self._last_fused_tools = list(fused.tools or [])
+            self._last_fused_plan = list(fused.plan or [])
 
         return IntentJudgment(
             directed=directed,
@@ -4747,6 +4755,14 @@ class VoiceListener(threading.Thread):
         self._post_abort_suppress_until = 0.0
         try:
             self._set_face_state_listening()
+        except Exception:
+            pass
+        # Clear the PREVIOUS turn's query on the HUD: Wispr only delivers the
+        # transcript at the end of the utterance, so without this the eye
+        # preview shows the old text while the user is speaking the new one.
+        try:
+            from .. import api_server
+            api_server.publish_state(query="")
         except Exception:
             pass
         # Set a synthetic wake timestamp so the cascade's

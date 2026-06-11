@@ -178,6 +178,11 @@ class FusedJudgment:
     explanation: str
     elapsed_ms: float
     llm_raw: str = ""
+    # True when this judgment is the safe-default fallback (timeout / parse
+    # failure) rather than a real model decision. Consumers must NOT treat
+    # its empty tools as "no tools needed" — the engine's own router should
+    # run instead.
+    degraded: bool = False
 
 
 class FusedIntentEngine:
@@ -270,6 +275,15 @@ class FusedIntentEngine:
             "look at the screen (seeScreen), not casual chat. To click/press/tap something, use clickScreen "
             "(NOT locateOnScreen); use locateOnScreen ONLY when the user just wants to know where something "
             "is without pressing it.\n\n"
+            "- COMPUTER CONTROL: JARVIS can arrange real OS windows. When the user asks (in ANY language) "
+            "what windows/apps are open or running, select listOpenWindows. When they ask to move, focus, "
+            "maximise, minimise, close, snap or split an app/window, or to put an app on the left/right "
+            "screen or half, select manageWindow with the app name in `window`. When they ask to OPEN/launch "
+            "an app that may not be running AND place it somewhere, emit the app-launcher tool (open_app) "
+            "first and manageWindow second, with a 2-step plan.\n"
+            "- MARKETS: when the user asks the price or performance of a stock, crypto coin, gold/silver or "
+            "an FX pair (in ANY language), select getStockPrice with the asset name as `symbol`. Prefer it "
+            "over webSearch for price questions.\n\n"
             "- PENDING CONFIRMATION: if the Context shows a non-empty "
             "`pending_confirmation` naming a tool, JARVIS has just asked the "
             "user to confirm that pending action. Judge the user's reply IN ITS "
@@ -411,6 +425,7 @@ class FusedIntentEngine:
             explanation="safe-default fallback",
             elapsed_ms=elapsed_ms,
             llm_raw=raw,
+            degraded=True,
         )
 
     def classify_route_plan(

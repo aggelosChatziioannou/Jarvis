@@ -1923,6 +1923,32 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     use_text_tools = (model_size == ModelSize.SMALL)
     prompts = get_system_prompts(model_size)
 
+    # Force-exec synthesis for OS-window tools: when the router selected
+    # manageWindow / listOpenWindows but the (advisory) plan carries no tool
+    # step, the chat model is "trusted" to call the tool natively — and, as
+    # with the vision tools, it instead narrates a confabulated "I've moved
+    # Spotify to your left screen" without ever invoking it (live field
+    # failure). Synthesising a 2-step plan routes these through the same
+    # plan direct-exec path that guards the vision tools.
+    _window_routed = [t for t in (routed_tools or [])
+                      if t in ("manageWindow", "listOpenWindows")]
+    if _window_routed and not tool_steps_of(action_plan or []):
+        # listOpenWindows takes no arguments — a bare name fast-parses to {}.
+        # manageWindow's arguments live in the user's request, and the step
+        # resolver only sees the step text — so embed the request verbatim;
+        # the free text defeats the concrete fast-parse and routes the step
+        # to the LLM resolver, which fills action/window/monitor from it.
+        _wt = _window_routed[0]
+        _step = _wt if _wt == "listOpenWindows" else (
+            f'manageWindow — satisfy the user request: "{redacted}"'
+        )
+        action_plan = [_step, "Reply to user."]
+        debug_log(
+            f"window tool routed without a plan step — synthesised direct-exec "
+            f"plan: {action_plan}",
+            "planning",
+        )
+
     # ── Consolidated planning summary ─────────────────────────────────
     # One line replaces the previous scattered 10+ line planning dump.
     _plan_label = "Reply (direct)"
@@ -2434,10 +2460,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # only on router-classified assent) are both safe. See
             # forget_memory.spec.md and #2b in docs/llm_contexts.md.
             _forget_step = bool(re.match(r"^\s*forgetMemory\b", _next_step_text or ""))
+            # OS-window steps force direct-exec on ANY model size for the same
+            # reason as vision: the chat model narrates the action instead of
+            # calling it. A wrong pick fails harmlessly (move is reversible,
+            # list is read-only, close is a graceful WM_CLOSE).
+            _window_step = bool(re.match(
+                r"^\s*(manageWindow|listOpenWindows)\b", _next_step_text or ""))
             _direct_exec_active = (
                 (use_text_tools and not _plan_under_specified)
                 or _vtool is not None
                 or _forget_step
+                or _window_step
             )
             if _direct_exec_active and 0 <= _tool_results_so_far < len(_plan_tool_steps):
                 _plan_exec_handled = False

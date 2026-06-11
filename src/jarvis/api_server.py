@@ -1191,6 +1191,39 @@ def system_metrics() -> Dict[str, Any]:
     return out
 
 
+class AskBody(BaseModel):
+    text: str
+
+
+@app.post("/api/ask")
+def ask(body: AskBody) -> Dict[str, Any]:
+    """Feed a TEXT query into the exact pipeline a voice transcript takes.
+
+    The reply streams to TTS and the Live Logs feed like any spoken turn —
+    this is the testing/debugging seam ("type to Jarvis") so behaviour can
+    be exercised without a microphone. Returns immediately; watch /ws/logs
+    (or the console Live Logs page) for the routing trace and the reply.
+    """
+    text = (body.text or "").strip()
+    if not text:
+        return {"ok": False, "reason": "empty text"}
+    try:
+        from . import daemon
+
+        listener = daemon.get_active_listener()
+        if listener is None:
+            return {"ok": False, "reason": "listener not running"}
+        publish_log("info", f"⌨️  Text query: {text}")
+        threading.Thread(
+            target=listener.feed_transcript, args=(text,),
+            name="TextAsk", daemon=True,
+        ).start()
+        return {"ok": True}
+    except Exception as e:
+        debug_log(f"/api/ask failed: {e!r}", "jarvis")
+        return {"ok": False, "reason": type(e).__name__}
+
+
 _markets_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 _MARKETS_TTL_SEC = 60.0
 _DEFAULT_WATCHLIST = ["gold", "BTC", "NVDA"]

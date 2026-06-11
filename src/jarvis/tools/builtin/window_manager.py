@@ -323,7 +323,9 @@ class ManageWindowTool(Tool):
                 return ToolExecutionResult(
                     success=True,
                     reply_text=(f"No open window matches '{query}'. "
-                                f"Currently open apps: {open_names or 'none'}."),
+                                f"Currently open apps: {open_names or 'none'}. "
+                                f"(If the app isn't running, launch it with the open_app tool, "
+                                f"then call manageWindow again.)"),
                 )
 
             import win32con

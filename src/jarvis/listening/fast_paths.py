@@ -238,6 +238,20 @@ _register(r"\bupcoming\s+events?\b", "calendar", "list_events_upcoming", {"days"
 _register(r"\bevents?\s+(this\s+)?week\b", "calendar", "list_events_upcoming", {"days": 7})
 
 
+# Window-placement commands must reach the tool router (manageWindow), not
+# this keyword layer: "βάλε το spotify στην αριστερή οθόνη" is an arrangement
+# command, but the "βάλε X" music catch-all (and the bare app-launch
+# patterns) would swallow it and play a song called "spotify στην αριστερή
+# οθόνη". Skipping the WHOLE layer is safe — the only cost is the smarter
+# (slower) router answering instead. This file is already an explicitly
+# EL+EN pattern layer, so the hint list lives within that design.
+_PLACEMENT_HINT = re.compile(
+    r"οθόν|οθον|παράθυρ|παραθυρ|screen|monitor|\bwindow|split|"
+    r"αριστερ|δεξι|\bleft\b|\bright\b|maximi[sz]e|minimi[sz]e",
+    re.IGNORECASE,
+)
+
+
 def match(query: str) -> Optional[FastPathMatch]:
     """Try to match a query against registered fast-path patterns.
 
@@ -246,6 +260,8 @@ def match(query: str) -> Optional[FastPathMatch]:
     if not query or not query.strip():
         return None
     cleaned = re.sub(r"[?!.,;:·]+$", "", query.strip())
+    if _PLACEMENT_HINT.search(cleaned):
+        return None
     for pattern, server, tool, args, response_override, action_only, capture_arg in _PATTERNS:
         m = pattern.search(cleaned)
         if m:

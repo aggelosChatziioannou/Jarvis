@@ -89,7 +89,7 @@ function CloseIcon() {
   );
 }
 
-function truncateQuery(text: string, maxWords = 24): string {
+function truncateQuery(text: string, maxWords = 40): string {
   // Generous truncation — the display now wraps to 3 lines with ellipsis,
   // so we only cut here as a safety net for runaway transcripts.
   const words = text.trim().split(/\s+/);
@@ -103,8 +103,9 @@ export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop
   const [stopFlash, setStopFlash] = useState(false);
   const prevStateRef = useRef<VoiceState>('idle');
 
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Dragging is fully OS-native (startSystemMove via the PyQt bridge): the
+  // old JS delta-move re-positioned the window once per mousemove event,
+  // which visibly lagged and stuttered behind the cursor.
 
   const [showQuery, setShowQuery] = useState(() => {
     try {
@@ -114,12 +115,6 @@ export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop
     }
   });
 
-  // We check window.hudMove on every drag — not at mount — because the
-  // PyQt JS bridge injects it after the page loads, which can be AFTER
-  // React first renders. Caching it once would leave the drag broken
-  // when the page finishes loading.
-  const hasHudBridge = (): boolean =>
-    typeof window !== 'undefined' && typeof (window as any).hudMove === 'function';
 
   // Border breathing animation
   useEffect(() => {
@@ -159,30 +154,6 @@ export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop
     prevStateRef.current = state;
   }, [state]);
 
-  // Global mouse move/up for dragging
-  useEffect(() => {
-    if (!isDragging) return;
-
-    const handleMove = (e: MouseEvent) => {
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-      const fn = (window as any).hudMove;
-      if (typeof fn === 'function') fn(dx, dy);
-    };
-
-    const handleUp = () => {
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
-    };
-  }, [isDragging]);
-
   const handleCardClick = useCallback((e: React.MouseEvent) => {
     // Ignore clicks on buttons or the window-control bar
     if ((e.target as HTMLElement).closest('button')) return;
@@ -190,10 +161,12 @@ export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop
   }, [onStartDemo]);
 
   const handleDragMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!hasHudBridge()) return;
+    // Checked per-drag, not at mount: the PyQt bridge injects the function
+    // after the page loads, which can be after React first renders.
+    const start = (window as any).hudStartSystemMove;
+    if (typeof start !== 'function') return;
     e.preventDefault();
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    start(); // OS takes over: pixel-perfect, DPI-safe, zero JS in the loop
   }, []);
 
   const handleMinimize = useCallback((e: React.MouseEvent) => {
@@ -379,16 +352,21 @@ export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop
           </div>
       </div>
 
-      {/* Query text display — readable, wrapped to up to 3 lines, with a
-          subtle background pill so it's visually separated from the JARVIS
-          wordmark above and the waveform below. Uses `-webkit-line-clamp` to
-          clip cleanly at 3 lines with an ellipsis when the transcript is long. */}
+      {/* Query text display — what Jarvis heard, wrapped up to 4 lines.
+          While the user is still speaking (listening, no transcript yet —
+          Wispr delivers text only at the end of the utterance) we show a
+          "Listening…" placeholder instead of stale or no text. */}
+      {(() => {
+        const heard = (query || '').trim()
+        const placeholder = state === 'listening' && !heard
+        const visible = showQuery && state !== 'idle' && (heard || placeholder)
+        return (
       <div
         style={{
           width: '100%',
-          maxHeight: showQuery && state !== 'idle' && query ? 84 : 0,
-          opacity: showQuery && state !== 'idle' && query ? 1 : 0,
-          marginBottom: showQuery && state !== 'idle' && query ? 10 : 0,
+          maxHeight: visible ? 110 : 0,
+          opacity: visible ? 1 : 0,
+          marginBottom: visible ? 10 : 0,
           overflow: 'hidden',
           transition: 'opacity 0.3s ease, max-height 0.3s ease, margin-bottom 0.3s ease',
           display: 'flex',
@@ -411,25 +389,28 @@ export default function JarvisCard({ state, isMuted, query, onMuteToggle, onStop
               fontFamily: "'Inter', sans-serif",
               fontSize: 13,
               fontWeight: 500,
-              color: '#FFFFFF',
+              color: placeholder ? '#7FB3C8' : '#FFFFFF',
+              fontStyle: placeholder ? 'italic' : 'normal',
               textShadow: '0 0 6px rgba(0, 212, 255, 0.35)',
               textAlign: 'center',
               lineHeight: 1.35,
               letterSpacing: '0.01em',
-              // 3-line clamp with ellipsis — works across modern Chromium
+              // 4-line clamp with ellipsis — works across modern Chromium
               // (which the embedded QWebEngineView is built on).
               display: '-webkit-box',
-              WebkitLineClamp: 3,
+              WebkitLineClamp: 4,
               WebkitBoxOrient: 'vertical' as const,
               overflow: 'hidden',
               wordBreak: 'break-word',
               hyphens: 'auto',
             }}
           >
-            {truncateQuery(query || '')}
+            {placeholder ? 'Listening…' : truncateQuery(heard)}
           </div>
         </div>
       </div>
+        )
+      })()}
 
       {/* Middle - Waveform */}
       <WaveformRings state={state} />
