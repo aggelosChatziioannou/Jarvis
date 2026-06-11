@@ -2,7 +2,7 @@ export type CategoryType = 'identity' | 'preferences' | 'events' | 'directives' 
 
 export interface MemoryNode {
   id: string;
-  type: 'central' | 'category' | 'memory';
+  type: 'central' | 'category' | 'cluster' | 'memory';
   label: string;
   subtitle?: string;
   category: CategoryType;

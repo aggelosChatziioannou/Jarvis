@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { categories } from '@/console/data/graphMock';
 import { useMemoryDataCtx } from '@/console/services/MemoryDataContext';
 import { useGraphLayout } from './useGraphLayout';
@@ -87,6 +88,9 @@ const ZoneVignette = memo(function ZoneVignette() {
   );
 });
 
+// Hubs start open so the constellation greets you; clusters bloom on click.
+const DEFAULT_EXPANDED = ['cat-identity', 'cat-directives', 'cat-events', 'cat-preferences', 'cat-health'];
+
 export default function MemoryGraphZone({
   selectedNodeId,
   onNodeSelect,
@@ -100,9 +104,7 @@ export default function MemoryGraphZone({
   const [searchQuery, setSearchQuery] = useState('');
   const [showEmphasis, setShowEmphasis] = useState(false);
   const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null);
-  // Editable memory overrides
-  const [memoryOverrides, setMemoryOverrides] = useState<Record<string, { value: string; importance: number; permanent: boolean }>>({});
-  // All categories always visible — no filter chips needed
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set(DEFAULT_EXPANDED));
   const allCategories = React.useMemo(() => new Set(categories.map((c) => c.type)), []);
 
   const {
@@ -111,9 +113,11 @@ export default function MemoryGraphZone({
     zoomIn, zoomOut, resetView,
   } = useZoomPan(containerRef);
 
-  const { graphNodes } = useMemoryDataCtx();
-  const { nodes, connections } = useGraphLayout({ searchQuery, visibleCategories: allCategories, showEmphasis, nodes: graphNodes });
-  const visibleMemoryCount = nodes.filter((n) => n.type === 'memory' && n.visible).length;
+  const { graphNodes, saveNodeData, deleteNode } = useMemoryDataCtx();
+  const { nodes, connections } = useGraphLayout({
+    searchQuery, visibleCategories: allCategories, showEmphasis, nodes: graphNodes, expandedIds,
+  });
+  const totalFacts = nodes.filter((n) => n.type === 'memory').length;
 
   useEffect(() => {
     if (containerRef.current) {
@@ -121,43 +125,41 @@ export default function MemoryGraphZone({
     }
   }, []);
 
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const handleNodeClick = useCallback((node: GraphLayoutNode) => {
-    if (node.type === 'category') {
-      // Click category node → open cluster panel (or close if same)
-      if (node.id === selectedClusterId) {
-        setSelectedClusterId(null);
-      } else {
-        setSelectedClusterId(node.id);
-      }
+    if (node.type === 'category' || node.type === 'cluster') {
+      // Toggle the subtree; opening also surfaces the cluster overview panel.
+      const opening = !expandedIds.has(node.id);
+      toggleExpanded(node.id);
+      setSelectedClusterId(opening ? node.id : (selectedClusterId === node.id ? null : selectedClusterId));
     } else if (node.type === 'memory') {
-      // Click memory node → close cluster panel, select node
       setSelectedClusterId(null);
       onNodeSelect(node.id === selectedNodeId ? null : node.id);
     } else {
-      // Central node → close cluster, reset view
       setSelectedClusterId(null);
       resetView();
     }
-  }, [onNodeSelect, selectedNodeId, selectedClusterId, resetView]);
+  }, [onNodeSelect, selectedNodeId, selectedClusterId, expandedIds, toggleExpanded, resetView]);
 
   const handleCloseCluster = useCallback(() => {
     setSelectedClusterId(null);
   }, []);
 
-  const handleUpdateMemory = useCallback((id: string, value: string, importance: number, permanent: boolean) => {
-    setMemoryOverrides((prev) => ({ ...prev, [id]: { value, importance, permanent } }));
-  }, []);
+  const handleSaveMemory = useCallback((id: string, value: string) => {
+    void saveNodeData(id, value);
+  }, [saveNodeData]);
 
-  // Merge overrides into nodes for ClusterPanel
-  const enrichedNodes = React.useMemo(() => {
-    return nodes.map((n) => {
-      const ov = memoryOverrides[n.id];
-      if (ov && n.type === 'memory') {
-        return { ...n, value: ov.value, importance: ov.importance, permanent: ov.permanent };
-      }
-      return n;
-    });
-  }, [nodes, memoryOverrides]);
+  const handleDeleteMemory = useCallback((id: string) => {
+    void deleteNode(id);
+  }, [deleteNode]);
 
   const handleBackgroundClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -168,6 +170,9 @@ export default function MemoryGraphZone({
   }, [onNodeSelect]);
 
   const graphTransform = React.useMemo(() => `translate(${panX}, ${panY}) scale(${zoom})`, [panX, panY, zoom]);
+
+  const visibleConnections = React.useMemo(() => connections.filter((c) => c.visible), [connections]);
+  const visibleNodes = React.useMemo(() => nodes.filter((n) => n.visible), [nodes]);
 
   return (
     <div ref={containerRef}
@@ -181,25 +186,40 @@ export default function MemoryGraphZone({
       <ZoneVignette />
       <svg ref={svgRef} width="100%" height="100%" className="absolute inset-0" style={{ zIndex: 10 }}>
         <g transform={graphTransform}>
-          {connections.map((conn) => (
-            <ConnectionLine key={conn.id} connection={conn}
-              selectedNodeId={selectedNodeId} />
-          ))}
-          {nodes.map((node) => (
-            <GraphNode key={node.id} node={node} isSelected={node.id === selectedNodeId}
-              emphasisMode={showEmphasis} selectedNodeId={selectedNodeId} onClick={handleNodeClick} />
-          ))}
+          <AnimatePresence>
+            {visibleConnections.map((conn) => (
+              <motion.g key={conn.id}
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}>
+                <ConnectionLine connection={conn} selectedNodeId={selectedNodeId} />
+              </motion.g>
+            ))}
+          </AnimatePresence>
+          <AnimatePresence>
+            {visibleNodes.map((node) => (
+              <motion.g key={node.id}
+                initial={{ opacity: 0, scale: 0.3 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.3 }}
+                transition={{ duration: 0.35, delay: node.type === 'memory' ? (node.entranceDelay % 400) / 1000 : 0, ease: [0.34, 1.56, 0.64, 1] }}
+                style={{ transformOrigin: `${node.computedX}px ${node.computedY}px` }}>
+                <GraphNode node={node} isSelected={node.id === selectedNodeId}
+                  emphasisMode={showEmphasis} selectedNodeId={selectedNodeId} onClick={handleNodeClick} />
+              </motion.g>
+            ))}
+          </AnimatePresence>
         </g>
       </svg>
-      <GraphHeader totalNodes={visibleMemoryCount} searchQuery={searchQuery} onSearchChange={setSearchQuery}
+      <GraphHeader totalNodes={totalFacts} searchQuery={searchQuery} onSearchChange={setSearchQuery}
         showEmphasis={showEmphasis} onToggleEmphasis={setShowEmphasis}
         zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onResetView={resetView} />
 
-      {/* Cluster Info Panel */}
+      {/* Cluster Info Panel — real per-fact edit + delete */}
       <ClusterPanel
-        categoryNode={enrichedNodes.find((n) => n.id === selectedClusterId) ?? null}
-        allNodes={enrichedNodes}
-        onUpdateMemory={handleUpdateMemory}
+        categoryNode={nodes.find((n) => n.id === selectedClusterId) ?? null}
+        allNodes={nodes}
+        onSaveMemory={handleSaveMemory}
+        onDeleteMemory={handleDeleteMemory}
         onClose={handleCloseCluster}
       />
     </div>

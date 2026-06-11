@@ -22,8 +22,8 @@ interface Props {
 }
 
 export default function MiniCalendar({ eventDates = [], memoryDates = [], onDayClick, selectedDate }: Props) {
-  const [currentMonth, setCurrentMonth] = useState(new Date(2026, 4, 29));
-  const today = new Date(2026, 4, 29);
+  const [currentMonth, setCurrentMonth] = useState(() => new Date());
+  const today = new Date();
 
   const days = useMemo(() => {
     const monthStart = startOfMonth(currentMonth);

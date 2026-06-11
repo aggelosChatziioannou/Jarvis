@@ -41,14 +41,15 @@ describe('mapGraphData', () => {
     expect(ids).toContain('cat-events') // world
   })
 
-  it('flattens depth>=2 nodes into memory leaves under their branch category', () => {
+  it('keeps depth>=2 nodes as clusters with the real hierarchy preserved', () => {
     const { nodes } = mapGraphData(graph)
-    const leaves = nodes.filter((n) => n.type === 'memory')
-    const coffee = leaves.find((l) => l.id === 'n1')
-    const sushi = leaves.find((l) => l.id === 'n2')
-    expect(coffee?.parentId).toBe('cat-identity') // under user branch
+    const clusters = nodes.filter((n) => n.type === 'cluster')
+    const coffee = clusters.find((l) => l.id === 'n1')
+    const sushi = clusters.find((l) => l.id === 'n2')
+    expect(coffee?.parentId).toBe('cat-identity') // child of the user branch hub
     expect(coffee?.value).toBe('black no sugar')
-    expect(sushi?.parentId).toBe('cat-identity') // deep node still rolls up to its branch
+    expect(sushi?.parentId).toBe('n1') // deep node keeps its REAL parent
+    expect(coffee?.category).toBe('identity')
   })
 
   it('returns the five standard categories for colouring', () => {
@@ -179,5 +180,26 @@ describe('fact id + line-edit helpers', () => {
     const { factLabel } = await import('./memoryMap')
     expect(factLabel('The user is named Aggelos.')).toBe('Is named Aggelos')
     expect(factLabel("The user's favourite foods are Greek cuisine, burgers, pizza, and pasta.").length).toBeLessThanOrEqual(43)
+  })
+})
+
+describe('cluster subtree counts', () => {
+  it('hub badge counts every fact in its subtree, cluster badge its own', async () => {
+    const { mapGraphData } = await import('./memoryMap')
+    const { nodes } = mapGraphData({
+      nodes: [
+        { id: 'root', name: 'Root', description: '', parent_id: null, depth: 0, facts: [], fact_count: 0 },
+        { id: 'user', name: 'User', description: '', parent_id: 'root', depth: 1, facts: ['direct fact'], fact_count: 1 },
+        { id: 'c1', name: 'Identity', description: 'who', parent_id: 'user', depth: 2, facts: ['a', 'b'], fact_count: 2 },
+      ],
+      edges: [],
+    })
+    expect(nodes.find((n) => n.id === 'cat-identity')?.subtitle).toBe('3 memories')
+    const cluster = nodes.find((n) => n.id === 'c1')
+    expect(cluster?.type).toBe('cluster')
+    expect(cluster?.subtitle).toBe('2')
+    // facts parented correctly: direct fact under the hub, others under c1
+    expect(nodes.find((n) => n.id === 'user#0')?.parentId).toBe('cat-identity')
+    expect(nodes.find((n) => n.id === 'c1#0')?.parentId).toBe('c1')
   })
 })

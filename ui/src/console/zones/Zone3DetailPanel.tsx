@@ -216,7 +216,7 @@ function EmptyInspector() {
   const stats = [
     { label: 'Facts', value: facts },
     { label: 'Reminders', value: pending },
-    { label: 'Total', value: reminders.length },
+    { label: 'Total', value: facts + reminders.length },
   ];
   return (
     <div className="h-full flex flex-col items-center justify-center p-6 text-center relative">

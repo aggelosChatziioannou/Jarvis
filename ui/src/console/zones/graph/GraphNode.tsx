@@ -199,6 +199,80 @@ const CategoryNode = React.memo(function CategoryNode({ node, isSelected, onClic
   );
 });
 
+const ClusterNode = React.memo(function ClusterNode({ node, isSelected, onClick }: {
+  node: GraphLayoutNode; isSelected: boolean; onClick: (node: GraphLayoutNode) => void;
+}) {
+  const color = getNodeColor(node);
+  const glow = getNodeGlow(node);
+  const hexPoints = hexagonPoints(node.computedX, node.computedY, node.radius);
+  const [isHovered, setIsHovered] = useState(false);
+  const count = node.subtitle ?? '';
+
+  return (
+    <g data-node="cluster"
+      onClick={() => onClick(node)}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      style={{ cursor: 'pointer' }}>
+      <defs>
+        <filter id={`cluster-shadow-${node.id}`}>
+          <feDropShadow dx="0" dy="0" stdDeviation={isHovered ? 12 : 6} floodColor={color} floodOpacity={isHovered ? 0.35 : 0.18} />
+        </filter>
+      </defs>
+
+      {isSelected && (
+        <SelectionRing cx={node.computedX} cy={node.computedY} radius={node.radius * 1.4} color={color} />
+      )}
+
+      {/* Expanded state: a slow-spinning orbit ring shows the open subtree. */}
+      {node.expanded && (
+        <g style={{ transformOrigin: `${node.computedX}px ${node.computedY}px`, animation: 'spin 14s linear infinite' }}>
+          <circle cx={node.computedX} cy={node.computedY} r={node.radius * 1.8}
+            fill="none" stroke={color} strokeWidth={0.8} strokeOpacity={0.35}
+            strokeDasharray="3 7" strokeLinecap="round" />
+        </g>
+      )}
+
+      <motion.g
+        animate={{ scale: isHovered ? 1.18 : 1 }}
+        transition={{ duration: 0.25, ease: [0.34, 1.56, 0.64, 1] }}
+        style={{ transformOrigin: `${node.computedX}px ${node.computedY}px` }}>
+        <circle cx={node.computedX} cy={node.computedY} r={node.radius * 1.7}
+          fill={glow} opacity={isHovered || node.expanded ? 0.85 : 0.45} />
+        <polygon points={hexPoints}
+          fill={node.expanded ? `${color}30` : `${color}14`}
+          stroke={color}
+          strokeWidth={isHovered ? 1.8 : 1.2}
+          strokeOpacity={node.expanded ? 0.95 : 0.6}
+          filter={`url(#cluster-shadow-${node.id})`}
+          style={{ transition: 'fill 0.3s ease, stroke-opacity 0.3s ease' }} />
+        {/* Collapsed: the badge invites the click — "+N inside". */}
+        <text x={node.computedX} y={node.computedY + 4}
+          textAnchor="middle" fill={color} fontSize={node.expanded ? 10 : 11} fontWeight={700}
+          fontFamily="'JetBrains Mono', ui-monospace, monospace"
+          style={{ pointerEvents: 'none' }}>
+          {node.expanded ? '−' : `+${count}`}
+        </text>
+      </motion.g>
+
+      <text x={node.computedX} y={node.computedY + node.radius + 15}
+        textAnchor="middle" fill="#f8fafc" fontSize={11.5} fontWeight={600}
+        fontFamily="'Inter', system-ui, sans-serif"
+        style={{ pointerEvents: 'none', textShadow: '0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.6)' }}>
+        {node.label}
+      </text>
+      {!node.expanded && (
+        <text x={node.computedX} y={node.computedY + node.radius + 28}
+          textAnchor="middle" fill="#64748b" fontSize={9} fontWeight={500}
+          fontFamily="'JetBrains Mono', ui-monospace, monospace" letterSpacing="0.08em"
+          style={{ pointerEvents: 'none' }}>
+          {count} {Number(count) === 1 ? 'FACT' : 'FACTS'}
+        </text>
+      )}
+    </g>
+  );
+});
+
 const MemoryLeafNode = React.memo(function MemoryLeafNode({ node, isSelected, emphasisMode, relatedToSelection, unrelatedOpacity, onClick }: {
   node: GraphLayoutNode; isSelected: boolean; emphasisMode: boolean;
   relatedToSelection: boolean; unrelatedOpacity: number;
@@ -313,6 +387,7 @@ export default function GraphNode({ node, isSelected, emphasisMode, selectedNode
   switch (node.type) {
     case 'central': return <CentralNode node={node} isSelected={isSelected} onClick={onClick} />;
     case 'category': return <CategoryNode node={node} isSelected={isSelected} onClick={onClick} />;
+    case 'cluster': return <ClusterNode node={node} isSelected={isSelected} onClick={onClick} />;
     case 'memory': return (
       <MemoryLeafNode node={node} isSelected={isSelected} emphasisMode={emphasisMode}
         relatedToSelection={relatedToSelection} unrelatedOpacity={unrelatedOpacity} onClick={onClick} />
@@ -321,4 +396,4 @@ export default function GraphNode({ node, isSelected, emphasisMode, selectedNode
   }
 }
 
-export { CentralNode, CategoryNode, MemoryLeafNode };
+export { CentralNode, CategoryNode, ClusterNode, MemoryLeafNode };

@@ -113,8 +113,14 @@ export function mapGraphData(graph: RawGraphData): { nodes: MemoryNode[]; catego
     return cur && cur.depth === 1 ? cur.id : null
   }
 
+  // Facts in the whole subtree of a node — hub/cluster badges show this.
+  function subtreeFactCount(id: string): number {
+    let total = byId.get(id)?.fact_count ?? 0
+    for (const n of graph.nodes) if (n.parent_id === id) total += subtreeFactCount(n.id)
+    return total
+  }
+
   const out: MemoryNode[] = []
-  const childCount = new Map<CategoryType, number>()
 
   const root = graph.nodes.find((n) => n.id === 'root' || n.depth === 0)
   if (root) {
@@ -129,18 +135,50 @@ export function mapGraphData(graph: RawGraphData): { nodes: MemoryNode[]; catego
     })
   }
 
-  // Memory leaves: every FACT (data line) of every node under a branch is
-  // one memory dot. Nodes are containers in the v2 design — a single node
-  // accumulates many facts before auto-split — so counting nodes would
-  // show "0 memories" while Jarvis actually knows plenty.
+  // The REAL hierarchy, preserved: branch hubs (depth 1) -> cluster nodes
+  // (deeper containers) -> facts (each data line is one memory dot).
+  // parentId of a fact is its container so subtrees expand/collapse cleanly.
   for (const n of graph.nodes) {
     if (n.depth < 1) continue
     const branch = n.depth === 1 ? n.id : branchIdOf(n)
     if (!branch) continue
     const cat = branchCategory(branch)
+    const parentRaw = n.parent_id ? byId.get(n.parent_id) : undefined
+    const parentKey = n.depth === 1
+      ? root?.id ?? 'root'
+      : parentRaw && parentRaw.depth === 1 ? `cat-${branchCategory(parentRaw.id)}` : n.parent_id ?? undefined
+
+    if (n.depth === 1) {
+      const count = subtreeFactCount(n.id)
+      out.push({
+        id: `cat-${cat}`,
+        type: 'category',
+        label: n.name,
+        subtitle: `${count} ${count === 1 ? 'memory' : 'memories'}`,
+        category: cat,
+        importance: 8,
+        confidence: 100,
+        parentId: root?.id,
+      })
+    } else {
+      // Deeper container: a themed cluster (even when it currently has no
+      // children of its own — it still groups its inline facts).
+      out.push({
+        id: n.id,
+        type: 'cluster',
+        label: n.name,
+        subtitle: String(subtreeFactCount(n.id)),
+        category: cat,
+        importance: clampImportance(n.data_token_count ?? 0),
+        confidence: 100,
+        value: n.description || '',
+        parentId: parentKey,
+      })
+    }
+
     const facts = n.facts ?? []
+    const factParent = n.depth === 1 ? `cat-${cat}` : n.id
     for (let i = 0; i < facts.length; i++) {
-      childCount.set(cat, (childCount.get(cat) ?? 0) + 1)
       out.push({
         id: makeFactId(n.id, i),
         type: 'memory',
@@ -149,40 +187,9 @@ export function mapGraphData(graph: RawGraphData): { nodes: MemoryNode[]; catego
         importance: 6,
         confidence: 100,
         value: facts[i],
-        parentId: `cat-${cat}`,
+        parentId: factParent,
       })
     }
-    // Deeper nodes with no inline facts still render as a single memory so
-    // legacy/structural leaves stay visible and selectable.
-    if (n.depth >= 2 && facts.length === 0) {
-      childCount.set(cat, (childCount.get(cat) ?? 0) + 1)
-      out.push({
-        id: n.id,
-        type: 'memory',
-        label: n.name,
-        category: cat,
-        importance: clampImportance(n.data_token_count ?? 0),
-        confidence: 100,
-        value: n.description || '',
-        parentId: `cat-${cat}`,
-      })
-    }
-  }
-
-  // Category hubs from depth-1 branches.
-  for (const n of graph.nodes) {
-    if (n.depth !== 1) continue
-    const cat = branchCategory(n.id)
-    const count = childCount.get(cat) ?? 0
-    out.push({
-      id: `cat-${cat}`,
-      type: 'category',
-      label: n.name,
-      subtitle: `${count} ${count === 1 ? 'memory' : 'memories'}`,
-      category: cat,
-      importance: 8,
-      confidence: 100,
-    })
   }
 
   return { nodes: out, categories: STANDARD_CATEGORIES }

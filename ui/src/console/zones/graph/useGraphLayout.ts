@@ -8,6 +8,10 @@ export interface GraphLayoutNode extends MemoryNode {
   radius: number;
   visible: boolean;
   entranceDelay: number;
+  /** Angle (rad) from this node's parent — children fan outward from it. */
+  outwardAngle: number;
+  expanded: boolean;
+  childTotal: number;
 }
 
 export interface GraphConnection {
@@ -30,27 +34,9 @@ const CATEGORY_ANGLES: Record<string, number> = {
   health: -Math.PI / 2 + 4 * (2 * Math.PI) / 5,
 };
 
-const CATEGORY_RADIUS = 185;
-const MEMORY_MIN_RADIUS = 120;
-const MEMORY_MAX_RADIUS = 175;
-
-function seededRandom(seed: string): () => number {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
-  }
-  return () => {
-    hash = (hash * 16807 + 0) % 2147483647;
-    return (hash - 1) / 2147483646;
-  };
-}
-
-function getMemoryRadius(node: MemoryNode): number {
-  const imp = node.importance;
-  if (imp <= 3) return 10;
-  if (imp <= 6) return 13;
-  return 16;
-}
+const HUB_RADIUS = 195;       // central -> branch hubs
+const CLUSTER_RADIUS = 150;   // hub -> themed clusters / direct facts
+const LEAF_RADIUS = 105;      // cluster -> fact leaves
 
 function getNodeGlow(node: GraphLayoutNode): string {
   const cat = categories.find((c) => c.type === node.category);
@@ -62,12 +48,28 @@ function getNodeColor(node: GraphLayoutNode): string {
   return cat?.color ?? '#22d3ee';
 }
 
+/** Fan `count` children around `baseAngle`. Wide fans for big families. */
+function fanAngles(baseAngle: number, count: number): number[] {
+  if (count <= 0) return [];
+  if (count === 1) return [baseAngle];
+  const span = Math.min(Math.PI * 1.5, Math.max(Math.PI * 0.55, count * 0.42));
+  return Array.from({ length: count }, (_, i) =>
+    baseAngle + (i / (count - 1) - 0.5) * span);
+}
+
+function matchesSearch(n: MemoryNode, q: string): boolean {
+  if (!q) return true;
+  return n.label.toLowerCase().includes(q) || (n.value?.toLowerCase().includes(q) ?? false);
+}
+
 export interface LayoutOptions {
   searchQuery?: string;
   visibleCategories?: Set<string>;
   showEmphasis?: boolean;
   /** Real (mapped) graph nodes; defaults to the demo mock when omitted. */
   nodes?: MemoryNode[];
+  /** Ids of hubs/clusters whose children are shown. */
+  expandedIds?: Set<string>;
 }
 
 export function useGraphLayout(options: LayoutOptions = {}) {
@@ -76,6 +78,7 @@ export function useGraphLayout(options: LayoutOptions = {}) {
     visibleCategories = new Set(categories.map((c) => c.type)),
     showEmphasis = false,
     nodes: inputNodes = memoryNodes,
+    expandedIds = new Set<string>(),
   } = options;
   const searchLower = searchQuery.toLowerCase().trim();
 
@@ -86,117 +89,100 @@ export function useGraphLayout(options: LayoutOptions = {}) {
     const centralNode = inputNodes.find((n) => n.type === 'central');
     if (!centralNode) return { nodes: [], connections: [] };
 
+    const byParent = new Map<string, MemoryNode[]>();
+    for (const n of inputNodes) {
+      if (n.type === 'central' || !n.parentId) continue;
+      const list = byParent.get(n.parentId) ?? [];
+      list.push(n);
+      byParent.set(n.parentId, list);
+    }
+
+    // Search reveals matches even inside collapsed subtrees: every ancestor
+    // of a matching node is force-expanded for the duration of the search.
+    const forceExpanded = new Set<string>();
+    if (searchLower) {
+      const parentOf = new Map(inputNodes.map((n) => [n.id, n.parentId] as const));
+      for (const n of inputNodes) {
+        if (n.type !== 'memory' || !matchesSearch(n, searchLower)) continue;
+        let p = n.parentId;
+        while (p) {
+          forceExpanded.add(p);
+          p = parentOf.get(p) ?? undefined;
+        }
+      }
+    }
+    const isExpanded = (id: string) => expandedIds.has(id) || forceExpanded.has(id);
+
     const centralLayout: GraphLayoutNode = {
       ...centralNode,
-      computedX: 0,
-      computedY: 0,
-      radius: 48,
-      visible: true,
-      entranceDelay: 500,
+      computedX: 0, computedY: 0, radius: 48,
+      visible: true, entranceDelay: 400,
+      outwardAngle: 0, expanded: true,
+      childTotal: byParent.get(centralNode.id)?.length ?? 0,
     };
     nodeMap.set(centralLayout.id, centralLayout);
 
-    const categoryNodes = inputNodes.filter((n) => n.type === 'category');
-    categoryNodes.forEach((cat, i) => {
-      const angle = CATEGORY_ANGLES[cat.category] ?? 0;
-      const x = Math.cos(angle) * CATEGORY_RADIUS;
-      const y = Math.sin(angle) * CATEGORY_RADIUS;
+    function place(
+      parent: GraphLayoutNode,
+      children: MemoryNode[],
+      ringRadius: number,
+      level: number,
+      parentVisible: boolean,
+    ) {
+      const angles = parent.type === 'central'
+        ? children.map((c) => CATEGORY_ANGLES[c.category] ?? 0)
+        : fanAngles(parent.outwardAngle, children.length);
 
-      const layoutNode: GraphLayoutNode = {
-        ...cat,
-        computedX: x,
-        computedY: y,
-        radius: 28,
-        visible: visibleCategories.has(cat.category),
-        entranceDelay: 700 + i * 100,
-      };
-      nodeMap.set(layoutNode.id, layoutNode);
+      children.forEach((child, i) => {
+        const angle = angles[i];
+        const x = parent.computedX + Math.cos(angle) * ringRadius;
+        const y = parent.computedY + Math.sin(angle) * ringRadius;
+        const kids = byParent.get(child.id) ?? [];
+        const expanded = isExpanded(child.id);
 
-      connections.push({
-        id: `conn-${centralLayout.id}-${layoutNode.id}`,
-        sourceId: centralLayout.id,
-        targetId: layoutNode.id,
-        source: centralLayout,
-        target: layoutNode,
-        visible: visibleCategories.has(cat.category),
-        color: '#22d3ee',
-        level: 0,
-        entranceDelay: 1000 + i * 50,
-      });
-    });
+        const searchVisible = child.type !== 'memory' || matchesSearch(child, searchLower);
+        const visible = parentVisible && visibleCategories.has(child.category) && searchVisible;
 
-    const memoryLeafs = inputNodes.filter((n) => n.type === 'memory');
-    const memoriesPerCategory = new Map<string, MemoryNode[]>();
-    memoryLeafs.forEach((mem) => {
-      const list = memoriesPerCategory.get(mem.category) ?? [];
-      list.push(mem);
-      memoriesPerCategory.set(mem.category, list);
-    });
-
-    memoriesPerCategory.forEach((memories, catType) => {
-      const parentNode = nodeMap.get(`cat-${catType}`);
-      if (!parentNode) return;
-
-      const rand = seededRandom(catType);
-      const count = memories.length;
-      const angleSpan = (2.5 * Math.PI) / 3;
-      const baseAngle = CATEGORY_ANGLES[catType] ?? 0;
-
-      memories.forEach((mem, i) => {
-        const frac = count <= 1 ? 0.5 : i / (count - 1);
-        const jitterAngle = (rand() - 0.5) * angleSpan * 0.12;
-        const angle = baseAngle + (frac - 0.5) * angleSpan + jitterAngle;
-
-        const distJitter = rand() * 16 - 8;
-        const distance =
-          MEMORY_MIN_RADIUS +
-          (MEMORY_MAX_RADIUS - MEMORY_MIN_RADIUS) * (0.3 + rand() * 0.7) +
-          distJitter;
-
-        const mx = parentNode.computedX + Math.cos(angle) * distance;
-        const my = parentNode.computedY + Math.sin(angle) * distance;
-
-        const matchesSearch =
-          !searchLower ||
-          mem.label.toLowerCase().includes(searchLower) ||
-          (mem.value?.toLowerCase().includes(searchLower) ?? false);
-
-        const categoryVisible = visibleCategories.has(mem.category);
-        const visible = categoryVisible && matchesSearch;
-
-        let radius = getMemoryRadius(mem);
-        if (showEmphasis) {
-          if (mem.importance <= 3) radius *= 0.85;
-          else if (mem.importance >= 7) radius *= 1.2;
+        let radius = child.type === 'category' ? 30 : child.type === 'cluster' ? 20 : 11;
+        if (showEmphasis && child.type === 'memory') {
+          if (child.importance <= 3) radius *= 0.85;
+          else if (child.importance >= 7) radius *= 1.2;
         }
 
         const layoutNode: GraphLayoutNode = {
-          ...mem,
-          computedX: mx,
-          computedY: my,
-          radius,
+          ...child,
+          computedX: x, computedY: y, radius,
           visible,
-          entranceDelay: 1200 + connections.length * 30,
+          entranceDelay: 120 + level * 160 + i * 55,
+          outwardAngle: angle,
+          expanded,
+          childTotal: kids.length,
         };
         nodeMap.set(layoutNode.id, layoutNode);
 
         connections.push({
-          id: `conn-${parentNode.id}-${layoutNode.id}`,
-          sourceId: parentNode.id,
+          id: `conn-${parent.id}-${layoutNode.id}`,
+          sourceId: parent.id,
           targetId: layoutNode.id,
-          source: parentNode,
+          source: parent,
           target: layoutNode,
-          visible: categoryVisible && matchesSearch,
+          visible,
           color: getNodeColor(layoutNode),
-          level: 1,
-          entranceDelay: 1000 + connections.length * 50,
+          level,
+          entranceDelay: 80 + level * 160 + i * 45,
         });
+
+        if (kids.length) {
+          place(layoutNode, kids, level === 0 ? CLUSTER_RADIUS : LEAF_RADIUS, level + 1, visible && expanded);
+        }
       });
-    });
+    }
+
+    place(centralLayout, byParent.get(centralLayout.id) ?? [], HUB_RADIUS, 0, true);
 
     const nodes = Array.from(nodeMap.values());
     return { nodes, connections };
-  }, [searchLower, visibleCategories, showEmphasis, inputNodes]);
+  }, [searchLower, visibleCategories, showEmphasis, inputNodes, expandedIds]);
 }
 
 export { getNodeColor, getNodeGlow };
