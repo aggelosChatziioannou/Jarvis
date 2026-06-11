@@ -865,6 +865,23 @@ def main() -> None:
                 pass
             _warm_profile_graph_listener = None
 
+        # Return the VRAM: our models are loaded with long/forever keep_alive,
+        # so Ollama keeps ~10GB resident long after Jarvis exits. On a
+        # graceful shutdown ask it to drop everything that's loaded. (A hard
+        # End-Task skips this path — scripts/stop-jarvis.ps1 covers that.)
+        try:
+            import requests as _rq
+            _base = str(getattr(cfg, "ollama_base_url", "http://localhost:11434")).rstrip("/")
+            for _m in (_rq.get(f"{_base}/api/ps", timeout=3).json().get("models") or []):
+                _name = _m.get("name")
+                if not _name:
+                    continue
+                _rq.post(f"{_base}/api/generate",
+                         json={"model": _name, "keep_alive": 0}, timeout=8)
+                print(f"  🧹 Unloaded {_name} from VRAM", flush=True)
+        except Exception as _e:
+            debug_log(f"ollama unload on shutdown failed: {_e!r}", "jarvis")
+
         debug_log("daemon stopped", "jarvis")
         print("👋 Daemon stopped", flush=True)
 

@@ -328,6 +328,10 @@ class ManageWindowTool(Tool):
         a = args or {}
         action = str(a.get("action", "")).strip().lower()
         query = str(a.get("window", "")).strip()
+        # Half-split emissions sometimes carry only second_window — treat it
+        # as the window rather than failing the call.
+        if not query and str(a.get("second_window", "")).strip():
+            query = str(a.pop("second_window")).strip()
         if not action or not query:
             return ToolExecutionResult(success=False, reply_text=None,
                                        error_message="action and window are required")
@@ -428,6 +432,17 @@ class ManageWindowTool(Tool):
 
             if action == "split":
                 second_q = str(a.get("second_window", "")).strip()
+                # Models often emit a split as TWO half-position calls
+                # (split window=A position=left-half, then split
+                # second_window=B position=right-half). Each half IS just a
+                # move — honour the intent instead of erroring.
+                if not second_q and a.get("position"):
+                    action = "move"
+                    pos = str(a.get("position"))
+                    _apply_rect(target["hwnd"], compute_target_rect(mon, pos))
+                    _force_foreground(target["hwnd"])
+                    return ToolExecutionResult(success=True,
+                                               reply_text=f"Moved {target['title']} ({pos}).")
                 second = pick_window(windows, second_q) if second_q else None
                 if second is None:
                     return ToolExecutionResult(
