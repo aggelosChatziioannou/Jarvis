@@ -2,6 +2,7 @@
 
 from typing import List, Optional, Tuple
 import difflib
+import re
 
 from ..debug import debug_log
 
@@ -118,9 +119,12 @@ def extract_query_after_wake(text_lower: str, wake_word: str, aliases: List[str]
     
     all_aliases = set(aliases) | {wake_word}
     fragment = text_lower
-    
-    # Remove all aliases from the text
-    for alias in all_aliases:
+
+    # Remove all aliases from the text — LONGEST FIRST. Set iteration order
+    # is hash-randomised per process; removing "jarvis" before "hey jarvis"
+    # left a stray "hey" in the fragment (flaky wake-only detection, polluted
+    # extracted queries).
+    for alias in sorted(all_aliases, key=len, reverse=True):
         fragment = fragment.replace(alias, " ")
     
     # Clean up punctuation that might be left after wake word removal
@@ -128,6 +132,29 @@ def extract_query_after_wake(text_lower: str, wake_word: str, aliases: List[str]
     fragment = fragment.strip()
     
     return fragment if fragment else ""
+
+
+def is_wake_only_utterance(
+    text_lower: str,
+    wake_word: str,
+    aliases: List[str],
+    fuzzy_ratio: float = 0.78,
+) -> bool:
+    """True when the utterance is JUST the wake word (plus filler/punctuation).
+
+    A bare "Hey Jarvis." must not be dispatched as a query: the user paused
+    for an acknowledgement, so the listener should ack and open a listening
+    window for the actual command instead of running the full reply pipeline.
+    Language-agnostic: after removing the wake aliases, any remaining token
+    of 3+ word characters (``\\w{3,}`` with re.UNICODE) means there IS a
+    command in the utterance.
+    """
+    if not text_lower or not text_lower.strip():
+        return False
+    if not is_wake_word_detected(text_lower, wake_word, aliases, fuzzy_ratio):
+        return False
+    remainder = extract_query_after_wake(text_lower, wake_word, aliases)
+    return not re.search(r"\w{3,}", remainder, re.UNICODE)
 
 
 def is_stop_command(text_lower: str, stop_commands: List[str], fuzzy_ratio: float = 0.8) -> bool:

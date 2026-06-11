@@ -22,6 +22,16 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - HUD stuck at boot splash + bare "Hey Jarvis." rambled and dropped the real command
+- **Category**: bug-fix
+- **Files**: `ui/src/hooks/useBootSequence.ts`, `src/jarvis/listening/{wake_detection,state_manager,listener}.py` (+`listening.spec.md`), `src/jarvis/config.py`, new `tests/test_wake_ack.py`.
+- **What**:
+  - **HUD splash stuck at "JARVIS / 100% / Ready"**: the boot hook's fast-forward path (all probes < 350ms) shared one `aliveRef` between two effects; the fast-forward state updates re-ran the walker effect, whose cleanup flipped the ref false BEFORE the 600ms completion timer fired, so `isComplete` never set. Ironically surfaced by the 2026-06-11 latency fixes (probes only now finish under the threshold). Liveness is now per-effect-run; failed subsystem checks are also RETRIED every 800ms (a HUD opened mid-daemon-boot used to cache one `false` and stall forever).
+  - **Bare wake word**: "Hey Jarvis." + pause was dispatched as a full query (fused call + ~20s rambling chat reply) and the actual command, spoken after the pause, arrived with no wake signal and was dropped ("Heard: 'Spotify and Spotify in the left monitor.'" → idle). Now `is_wake_only_utterance` (language-agnostic: aliases stripped, no `\w{3,}` token left) short-circuits BEFORE any LLM call → canned `wake_ack_text` ("Yes, Boss?") + `StateManager.activate_hot_window_now(wake_ack_window_sec=8s)` listening window, independent of `hot_window_enabled` (that flag is post-REPLY follow-ups). Safety net in `_dispatch_query` for tiers that echo the wake word back as the query.
+  - **Latent alias-ordering bug**: `extract_query_after_wake` removed aliases in SET order (hash-randomised per process) — removing "jarvis" before "hey jarvis" left a stray "hey" in extracted queries; now longest-first.
+- **Why**: user report with screenshot + logs: "δεν φορτώνει το hub και βλέπω πρόβλημα με τα logs".
+- **Verified**: orb page live via Playwright shows the JarvisCard (AWAITING COMMAND) instead of the stuck splash; e2e through /api/ask — "hey jarvis." produced NO LLM turn, then "put spotify on the right half" WITHOUT a wake word was accepted and direct-exec'd manageWindow right-half, reply 14 words; tests/test_wake_ack.py 5/5 (×3 runs for hash-order stability); 164 affected pytest + 95 ui vitest green. Whisper hallucination "Sous-titrage ST' 501" correctly ignored (no action needed).
+
 ## 2026-06-11 - Deep-test sweep: three flat latency taxes killed + tool-headed plan steps now actually execute
 - **Category**: bug-fix + perf + infra
 - **Files**: `src/jarvis/config.py`, `src/jarvis/llm.py`, `src/jarvis/listening/{fused_intent,intent_judge,fast_paths}.py`, `src/jarvis/reply/{engine,planner}.py` (+`planner.spec.md`), `src/jarvis/reminders/parser.py` (+`reminders.spec.md`), `src/jarvis/tools/builtin/reminders/create_reminder.py`, `src/{desktop_app/app,jarvis/api_server,jarvis/daemon,jarvis/vision/vision_engine}.py` (fallback literals), `docs/llm_contexts.md`, new tests `test_config_ollama_url.py` + `test_num_ctx_alignment.py`, extended `test_planner.py` / `test_fused_degraded.py` / `test_reminders_tools.py`, live config.json.

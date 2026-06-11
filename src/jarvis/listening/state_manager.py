@@ -318,10 +318,42 @@ class StateManager:
         self._schedule_hot_window_expiry()
         debug_log(f"hot window expiry reset (echo rejected, restarting {self.hot_window_seconds}s timer)", "state")
 
-    def _schedule_hot_window_expiry(self) -> None:
+    def activate_hot_window_now(self, duration_sec: Optional[float] = None) -> None:
+        """Immediately open a hot window, optionally with a custom duration.
+
+        Used for the wake-ack listening window: a bare "Hey Jarvis." gets a
+        spoken ack and this window so the user's actual command (spoken after
+        the pause) is accepted without re-waking. Deliberately NOT gated by
+        `hot_window_enabled` — that flag governs post-REPLY follow-ups; here
+        the user explicitly summoned the assistant and expects it to listen.
+        Never clobbers COLLECTING (a query is already being gathered).
+        """
+        with self._state_lock:
+            if self._state == ListeningState.COLLECTING:
+                debug_log("wake-ack hot window skipped (already collecting)", "state")
+                return
+            self._state = ListeningState.HOT_WINDOW
+            self._hot_window_start_time = time.time()
+            self._hot_window_span_start = self._hot_window_start_time
+            self._hot_window_span_end = 0.0
+
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            get_jarvis_state().set_state(JarvisState.LISTENING)
+            log_state_transition("LISTENING", "wake-ack hot window")
+        except ImportError:
+            pass
+        except Exception as e:
+            debug_log(f"failed to set face state to LISTENING: {e}", "state")
+
+        self._schedule_hot_window_expiry(duration_sec)
+
+    def _schedule_hot_window_expiry(self, duration_sec: Optional[float] = None) -> None:
         """Schedule hot window expiry timer.
 
         This timer guarantees expiry will fire even if no audio is being processed.
+        ``duration_sec`` overrides the configured window length for this one
+        span (wake-ack windows are longer than post-reply follow-up windows).
         """
         self._cancel_hot_window_expiry_timer()
 
@@ -348,12 +380,13 @@ class StateManager:
             # Single visible expiry line
             info_log(f"💤 Hot window expired → IDLE ({duration:.1f}s)")
 
+        effective_seconds = float(duration_sec) if duration_sec else self.hot_window_seconds
         with self._timer_lock:
-            self._hot_window_expiry_timer = threading.Timer(self.hot_window_seconds, _expire)
+            self._hot_window_expiry_timer = threading.Timer(effective_seconds, _expire)
             self._hot_window_expiry_timer.daemon = True
             self._hot_window_expiry_timer.start()
 
-        debug_log(f"scheduled hot window expiry in {self.hot_window_seconds}s", "state")
+        debug_log(f"scheduled hot window expiry in {effective_seconds}s", "state")
         # Hot window expiry is handled by the timer callback above; no extra info line needed.
 
     def schedule_hot_window_activation(self, voice_debug: bool = False) -> None:

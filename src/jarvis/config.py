@@ -202,6 +202,11 @@ class Settings:
     wake_word: str
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
+    # Bare wake word ("Hey Jarvis." then a pause): spoken acknowledgement +
+    # how long the follow-up listening window stays open. Independent of
+    # hot_window_enabled, which governs post-REPLY follow-ups.
+    wake_ack_text: str
+    wake_ack_window_sec: float
 
     # STT backend selection — "whisper" (local faster-whisper) or "wispr" (cloud Wispr Flow via push-to-talk bridge)
     stt_backend: str
@@ -824,6 +829,8 @@ def get_default_config() -> Dict[str, Any]:
         "wake_word": "jarvis",
         "wake_aliases": ["joris", "charis", "chavis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
         "wake_fuzzy_ratio": 0.78,
+        "wake_ack_text": "Yes, Boss?",
+        "wake_ack_window_sec": 8.0,
 
         # Whisper Speech Recognition
         # `large-v3-turbo` is ~2-5x faster than large-v3 and roughly the speed
@@ -1228,6 +1235,8 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
+    wake_ack_text = str(merged.get("wake_ack_text", "Yes, Boss?") or "Yes, Boss?")
+    wake_ack_window_sec = float(merged.get("wake_ack_window_sec", 8.0) or 8.0)
     # STT backend selection (Phase B of Wispr-bridge rollout)
     stt_backend = str(merged.get("stt_backend", "whisper")).lower()
     if stt_backend not in ("whisper", "wispr"):
@@ -1660,6 +1669,8 @@ def load_settings() -> Settings:
         wake_word=wake_word,
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
+        wake_ack_text=wake_ack_text,
+        wake_ack_window_sec=wake_ack_window_sec,
 
         # STT backend selection + Wispr Flow bridge settings
         stt_backend=stt_backend,

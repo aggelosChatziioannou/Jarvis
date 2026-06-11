@@ -139,6 +139,22 @@ System is waiting for wake word activation.
 4. If `directed=true` and `query` exists, dispatch to reply engine
 5. If rejected, stop the beep and revert face state to IDLE
 
+**Bare wake word (wake-ack):** when the utterance is JUST the wake word plus
+filler/punctuation (`is_wake_only_utterance` — wake aliases stripped, no
+remaining `\w{3,}` token, language-agnostic), it must NEVER reach the reply
+engine. The user paused for an acknowledgement: the listener speaks
+`wake_ack_text` (default "Yes, Boss?", canned — no LLM) and opens an
+immediate listening window of `wake_ack_window_sec` (default 8s) via
+`StateManager.activate_hot_window_now`, so the command spoken after the
+pause is accepted without re-waking. This window is deliberately NOT gated
+by `hot_window_enabled` (that flag governs post-REPLY follow-ups; here the
+user explicitly summoned the assistant). Enforced at two layers: an early
+short-circuit in the cascade (before any LLM call — the ack is instant) and
+a safety net in `_dispatch_query` for tiers that echo the wake word back as
+the extracted query. Live failure this encodes: "Hey Jarvis." was dispatched
+as a chat query (fused call + ~20s rambling reply) and the real command,
+spoken right after, arrived with no wake signal active and was dropped.
+
 ### 2. Hot Window Mode
 
 After TTS finishes, allow wake-word-free follow-up.

@@ -25,7 +25,7 @@ from .hallucinations import (
     looks_like_hallucination,
 )
 from .state_manager import StateManager, ListeningState
-from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, find_wake_word_position
+from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, find_wake_word_position, is_wake_only_utterance
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, IntentJudgment, create_intent_judge, warm_up_ollama_model
 from ..debug import debug_log, log_state_transition
@@ -1417,6 +1417,33 @@ class VoiceListener(threading.Thread):
         # Schedule delayed hot window activation
         self.state_manager.schedule_hot_window_activation(self.cfg.voice_debug)
 
+    def _acknowledge_wake_only(self, text_lower: str) -> None:
+        """Bare wake word: speak a quick ack and open a listening window.
+
+        NOT a reply-engine turn — the whole point is to be instant and to
+        keep the floor open for the user's actual command. The window uses
+        ``activate_hot_window_now`` (custom duration, independent of the
+        post-reply ``hot_window_enabled`` flag: the user explicitly summoned
+        the assistant, so it must listen).
+        """
+        self._wake_timestamp = None
+        self._stop_thinking_tune()
+        try:
+            self._transcript_buffer.mark_segment_processed(text_lower)
+        except Exception:
+            pass
+        self._clear_audio_buffers()
+
+        ack = str(getattr(self.cfg, "wake_ack_text", "Yes, Boss?") or "Yes, Boss?")
+        window_sec = float(getattr(self.cfg, "wake_ack_window_sec", 8.0) or 8.0)
+        info_log(f"👂 Wake acknowledged → listening {window_sec:.0f}s for the command")
+        if self.tts:
+            try:
+                self.tts.speak(ack)
+            except Exception as e:
+                debug_log(f"wake ack TTS failed (non-fatal): {e}", "voice")
+        self.state_manager.activate_hot_window_now(window_sec)
+
     def _process_transcript(self, text: str, utterance_energy: float = 0.0, utterance_start_time: float = 0.0, utterance_end_time: float = 0.0, source: str = "whisper") -> None:
         """
         Process a transcript from speech recognition.
@@ -1753,6 +1780,16 @@ class VoiceListener(threading.Thread):
                     _after = _stripped[_pos + _mlen:].lstrip(" ,.;:!?")
                     if _after:
                         _stripped = _after
+
+                # WAKE-ONLY SHORT-CIRCUIT: a bare "Hey Jarvis." means the
+                # user paused for an acknowledgement. Dispatching it as a
+                # query burned a fused call + a rambling chat reply (~20s of
+                # TTS), and the actual command — spoken right after — arrived
+                # with no wake signal active and was dropped. Ack instantly
+                # and open a listening window for the command instead.
+                if is_wake_only_utterance(text_lower, _wake_word, _aliases, _fuzzy_ratio):
+                    self._acknowledge_wake_only(text_lower)
+                    return
 
                 _early_match = _fp_match_early(_stripped)
                 if _early_match is not None:
@@ -2241,6 +2278,16 @@ class VoiceListener(threading.Thread):
             query: Complete user query to process
         """
         debug_log(f"dispatching query: '{query}'", "voice")
+
+        # Safety net: a wake-only "query" must never reach the reply engine,
+        # whichever tier extracted it (judge, fused, wake fallback). The
+        # early short-circuit in the cascade catches most; this catches the
+        # rest (e.g. the judge echoing "hey jarvis." as the query).
+        _wake_word = getattr(self.cfg, "wake_word", "jarvis")
+        _aliases = list(set(getattr(self.cfg, "wake_aliases", [])) | {_wake_word})
+        if is_wake_only_utterance((query or "").strip().lower(), _wake_word, _aliases):
+            self._acknowledge_wake_only((query or "").strip().lower())
+            return
 
         # Manual trigger mode ends once the query is dispatched
         with self._control_flags_lock:
