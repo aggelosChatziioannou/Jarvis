@@ -22,6 +22,13 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - HOTFIX: wake-ack NameError killed the STT loop (deaf until restart) + loop hardening
+- **Category**: bug-fix (regression of the same day's wake-ack feature)
+- **Files**: `src/jarvis/listening/listener.py` (+`listening.spec.md`), `tests/test_wake_ack.py`.
+- **What**: `_acknowledge_wake_only` used `info_log`, which listener.py only imported LOCALLY inside one TTS callback — first real "Hey Jarvis" raised NameError, the exception reached the STT dispatcher, and because the backend had run past the 8s fast-fail window the dispatcher hit its terminal `break`: **STT thread exited, assistant permanently deaf**; later backend-switch requests and the HUD manual trigger talked to a dead thread. Fixed the import; added a unit test that exercises the METHOD (unbound, fake self) so a missing module-global can never pass again. Hardened both layers: per-utterance try/except around `_process_transcript` (whisper + wispr call sites — one bad utterance drops, loop survives) and dispatcher case 1b — a long-running backend that crashes is RESTARTED, never treated as a fatal startup failure.
+- **Why**: user report: wake stopped triggering entirely, even the manual-trigger lightning did nothing.
+- **Verified**: red→green on the exact NameError; restart → "Listening via Wispr Flow!" with openWakeWord ready; e2e "what time is it?" answered in ~2s; 57 affected tests green.
+
 ## 2026-06-12 - HUD stuck at boot splash + bare "Hey Jarvis." rambled and dropped the real command
 - **Category**: bug-fix
 - **Files**: `ui/src/hooks/useBootSequence.ts`, `src/jarvis/listening/{wake_detection,state_manager,listener}.py` (+`listening.spec.md`), `src/jarvis/config.py`, new `tests/test_wake_ack.py`.

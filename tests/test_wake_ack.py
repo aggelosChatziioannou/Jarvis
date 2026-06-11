@@ -43,6 +43,37 @@ class TestIsWakeOnlyUtterance:
         assert not is_wake_only_utterance("", WAKE, ALIASES)
 
 
+class TestAcknowledgeWakeOnly:
+    """Exercise the listener's ack method itself, not just the pure helpers.
+
+    Live failure this guards: the method referenced a module-global
+    (`info_log`) that listener.py never imported at module level — a
+    NameError that unit tests on the pure predicates could not see. It
+    fired on the user's first real "Hey Jarvis" and KILLED the whisper STT
+    loop ("STT backend 'whisper' error: name 'info_log' is not defined"),
+    leaving the assistant deaf until restart."""
+
+    def test_runs_without_nameerror_and_opens_window(self):
+        from types import SimpleNamespace
+        from jarvis.listening.listener import VoiceListener
+
+        sm = StateManager(hot_window_seconds=3.0)
+        spoken = []
+        fake = SimpleNamespace(
+            cfg=SimpleNamespace(wake_ack_text="Yes?", wake_ack_window_sec=0.4),
+            tts=SimpleNamespace(speak=lambda text, **kw: spoken.append(text)),
+            state_manager=sm,
+            _wake_timestamp=123.0,
+            _stop_thinking_tune=lambda: None,
+            _clear_audio_buffers=lambda: None,
+            _transcript_buffer=SimpleNamespace(mark_segment_processed=lambda t: None),
+        )
+        VoiceListener._acknowledge_wake_only(fake, "hey jarvis.")
+        assert spoken == ["Yes?"]
+        assert fake._wake_timestamp is None
+        assert sm.is_hot_window_active()
+
+
 class TestActivateHotWindowNow:
     def test_opens_immediately_with_custom_duration(self):
         sm = StateManager(hot_window_seconds=3.0)

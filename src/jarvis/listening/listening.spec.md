@@ -155,6 +155,15 @@ the extracted query. Live failure this encodes: "Hey Jarvis." was dispatched
 as a chat query (fused call + ~20s rambling reply) and the real command,
 spoken right after, arrived with no wake signal active and was dropped.
 
+**Failure isolation (both STT backends):** an exception while PROCESSING one
+transcript is caught at the call site, logged, and the utterance dropped —
+it must never propagate into the backend loop or the bridge callback. At the
+dispatcher level, a backend that crashes AFTER running past the fast-fail
+window is restarted (same backend), never treated as a fatal startup failure.
+Live failure this encodes: one NameError during a single utterance exited the
+whole STT dispatcher thread; the assistant went permanently deaf, and later
+backend-switch requests and the manual trigger talked to a dead thread.
+
 ### 2. Hot Window Mode
 
 After TTS finishes, allow wake-word-free follow-up.

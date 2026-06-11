@@ -28,7 +28,7 @@ from .state_manager import StateManager, ListeningState
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command, find_wake_word_position, is_wake_only_utterance
 from .transcript_buffer import TranscriptBuffer
 from .intent_judge import IntentJudge, IntentJudgment, create_intent_judge, warm_up_ollama_model
-from ..debug import debug_log, log_state_transition
+from ..debug import debug_log, info_log, log_state_transition
 from ..utils.location import is_location_available
 
 # Tier 1/2 intent cascade — optional, gracefully degrades if missing.
@@ -3557,6 +3557,17 @@ class VoiceListener(threading.Thread):
                 print(f"  🔀 Switching STT backend → {target}", flush=True)
                 continue
 
+            # Case 1b: a LONG-RUNNING backend crashed mid-flight. It started
+            # fine (ran past the fast-fail window), so the crash was a
+            # processing fluke, not a startup failure — restart the same
+            # backend instead of exiting the thread. Exiting here left the
+            # assistant permanently deaf (live: one bad utterance, then
+            # switch requests and the manual trigger talked to a dead thread).
+            if crashed and ran_long:
+                print(f"  🔁 STT backend '{backend}' crashed after running — restarting it", flush=True)
+                self._teardown_stt_runtime(backend)
+                continue
+
             # Case 2: the backend ended on its own (returned early or raised)
             # without a switch request. A backend only returns from its loop
             # on failure (no mic, model OOM, bridge start error) — a quick
@@ -4648,8 +4659,18 @@ class VoiceListener(threading.Thread):
             is_during_tts=is_during_tts,
         )
 
-        # Process the transcript with pre-calculated energy and utterance timing
-        self._process_transcript(text, utterance_energy, utterance_start_time, utterance_end_time)
+        # Process the transcript with pre-calculated energy and utterance timing.
+        # Per-utterance isolation: an exception while HANDLING one transcript
+        # must never collapse the backend loop (live: a NameError in the
+        # wake-ack path propagated to the dispatcher, which treated the
+        # long-running backend's crash as fatal and exited the STT thread —
+        # the assistant went permanently deaf until restart).
+        try:
+            self._process_transcript(text, utterance_energy, utterance_start_time, utterance_end_time)
+        except Exception as e:
+            debug_log(f"transcript processing failed (utterance dropped): {e!r}", "error")
+            self._stop_thinking_tune()
+            self._set_face_state_idle()
 
     # ==================================================================
     # Phase C + D — Wispr Flow backend
@@ -5041,6 +5062,12 @@ class VoiceListener(threading.Thread):
         # utterance — no more partials will arrive via audio callback).
         try:
             self._process_transcript(text, 0.0, now, now, source="wispr")
+        except Exception as e:
+            # Per-utterance isolation — a processing exception must never
+            # propagate into the bridge callback and take the listener down.
+            debug_log(f"transcript processing failed (utterance dropped): {e!r}", "error")
+            self._stop_thinking_tune()
+            self._set_face_state_idle()
         finally:
             # Always clear, even if _process_transcript raised, so non-wispr
             # invocations (TRIGGER button, etc.) downstream behave normally.
