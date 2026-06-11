@@ -39,6 +39,10 @@ def test_casual_replies_stay_under_three_sentences(prompt):
         user_content=prompt,
         timeout_sec=30.0,
         thinking=False,
+        # Greedy: this gates the PROMPT's effect; at the model's default
+        # temperature (~0.8) the same prompt passes or fails by luck of the
+        # draw and the eval flakes.
+        temperature=0.0,
     )
     assert reply and reply.strip(), "empty reply"
     n = _sentences(reply)

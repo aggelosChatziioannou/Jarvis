@@ -67,3 +67,44 @@ class TestReplyLanguageConsistencyLive:
             "Greek input must get an English reply when tts_engine is English-only "
             f"(piper); found Greek characters in: {resp[:200]!r}"
         )
+
+    @pytest.mark.eval
+    @requires_judge_llm
+    def test_greek_command_with_tool_failure_still_replies_english(
+        self, mock_config, eval_db, eval_dialogue_memory
+    ):
+        """Live failure: «βάλε το στην αριστερή οθόνη full screen» →
+        manageWindow direct-exec failed ("missing required field(s)") and the
+        APOLOGY came back in Greek — error/apology turns mirror the user's
+        language harder than informational ones, and the clamp lost."""
+        from jarvis.reply.engine import run_reply_engine
+        from jarvis.tools.types import ToolExecutionResult
+
+        mock_config.ollama_base_url = "http://127.0.0.1:11434"
+        mock_config.ollama_chat_model = JUDGE_MODEL
+        mock_config.tts_engine = "piper"
+
+        def failing_tool_run(db, cfg, tool_name, tool_args, **kwargs):
+            return ToolExecutionResult(
+                success=False, reply_text=None,
+                error_message="missing required field(s): window",
+            )
+
+        with patch('jarvis.reply.engine.run_tool_with_retries',
+                   side_effect=failing_tool_run):
+            resp = run_reply_engine(
+                db=eval_db, cfg=mock_config, tts=None,
+                text="μπορείς να μου το βάλεις στην αριστερή οθόνη full screen;",
+                dialogue_memory=eval_dialogue_memory, language="el",
+                fused_tools=[{"name": "manageWindow", "arguments": {
+                    "action": "move", "monitor": "left", "position": "full"}}],
+                fused_plan=["Move the window to the left monitor full screen.",
+                            "Reply to the user."],
+            ) or ""
+
+        greek = _GREEK.findall(resp)
+        print(f"\n  Tool-failure apology ({JUDGE_MODEL}):\n   -> {resp[:200]!r}\n   greek chars: {len(greek)}")
+        assert not greek, (
+            "An error apology after a failed tool call must STILL be English "
+            f"(English-only TTS); found Greek characters in: {resp[:200]!r}"
+        )

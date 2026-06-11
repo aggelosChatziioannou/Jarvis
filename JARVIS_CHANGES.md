@@ -22,6 +22,16 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - Greek apology + failed pronoun window command: deterministic English enforcement + last-managed-window fallback
+- **Category**: bug-fix
+- **Files**: `src/jarvis/reply/engine.py`, `src/jarvis/tools/builtin/window_manager.py` (+spec), `evals/test_reply_language_consistency.py`, `evals/test_voice_brevity.py`, `tests/test_window_and_stock_tools.py`, `docs/llm_contexts.md`.
+- **What**:
+  - **«βάλε ΤΟ στην αριστερή οθόνη full screen» failed**: the router emitted `manageWindow {action, monitor:left, position:full}` without `window` (the pronoun), and the tool failed closed with a misleading "action and window are required". manageWindow now falls back to the LAST window it managed this session when `window` is omitted (pronoun follow-ups name no app); validation errors name only the actually-missing fields. Standalone repro showed the router CAN resolve the pronoun from `last_tts_text` (emits window='Spotify') — the live miss was sampling variance, which the deterministic tool fallback now covers.
+  - **The apology came back in GREEK** despite the reply-language clamp: error/apology turns mirror the user's language hardest, and live chat decodes at the model's default temperature, so the prompt clamp is inherently probabilistic. Two layers: clamp text now explicitly covers apologies/errors/clarifying questions + "start with an English word"; AND a deterministic Step-10 enforcement — if the final reply still contains non-Latin letters, ONE greedy translation pass rewrites it in English before TTS (translation has no pull toward the user's language; fail-open).
+  - **Eval stability**: new eval case reproduces the exact live failure (Greek window command + tool error -> apology must be English) — failed before, passes 2x consecutive suite runs after (even the xfail joke case passes now); `test_voice_brevity` pinned to temperature 0.0 (it gates the prompt, not sampling luck).
+- **Why**: user report: Jarvis replied in Greek and failed to put Spotify fullscreen on the left monitor; standing directive — Jarvis ALWAYS thinks and answers in English, concisely.
+- **Verified**: live e2e of the exact phrase — `direct-exec manageWindow {..., "window": "spotify"}`, Spotify physically at x=-2048 w=2048 (FULL left monitor), reply in English; 143 affected unit tests + language eval 2x + brevity 3/3 green.
+
 ## 2026-06-12 - Audio I/O output selection wrote a dead config key - voice kept playing through the old speakers
 - **Category**: bug-fix
 - **Files**: `ui/src/console/lib/audioConfig.ts` (+test), live config repair via PATCH /api/config.

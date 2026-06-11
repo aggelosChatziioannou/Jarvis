@@ -19,7 +19,7 @@ Answers "what do I have open?" without burning a vision call.
 | arg | values | notes |
 |---|---|---|
 | `action` | focus, move, maximize, minimize, close, split | required |
-| `window` | free text | the app/title the user named, any language |
+| `window` | free text | the app/title the user named, any language; when OMITTED, falls back to `second_window`, then to the LAST window this tool managed (session-lifetime) — pronoun follow-ups («βάλε ΤΟ full screen») name no app and must not fail over a field the conversation just established. Validation errors name ONLY the actually-missing fields. |
 | `monitor` | left, right, primary, current, 1, 2 | default: window's current screen |
 | `position` | left-half, right-half, top-half, bottom-half, full | default full |
 | `second_window` | free text | split only: takes the right half |

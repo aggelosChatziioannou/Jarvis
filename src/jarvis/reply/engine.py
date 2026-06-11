@@ -48,6 +48,10 @@ from datetime import datetime, timezone
 from ..utils.location import get_location_context_with_timezone
 from ..utils.time_context import format_time_context
 
+# Scripts the English-only voice cannot speak (Greek incl. extended, Cyrillic,
+# CJK). Used by the deterministic reply-language enforcement in Step 10.
+_NON_LATIN_LETTERS = re.compile(r"[Ͱ-Ͽἀ-῿Ѐ-ӿ一-鿿]")
+
 if TYPE_CHECKING:
     from ..memory.db import Database
 
@@ -2127,8 +2131,14 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             guidance.append(
                 "\nREPLY LANGUAGE (overrides everything above): always write "
                 "your entire reply in English, even if the user writes in "
-                "another language. This is non-negotiable — the voice engine "
-                "only speaks English, so a non-English reply would be unusable."
+                "another language. This INCLUDES apologies, error reports and "
+                "clarifying questions — when a tool fails or you need to ask "
+                "something back, that reply is in English too (these turns "
+                "mirror the user's language hardest; do not). Mentally "
+                "translate the user's request to English first, then answer "
+                "in English, starting with an English word. This is "
+                "non-negotiable — the voice engine only speaks English, so a "
+                "non-English reply would be unusable."
             )
 
         return "\n".join(guidance)
@@ -3257,6 +3267,36 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     if not safe_reply:
         safe_reply = "Sorry, I had trouble processing that. Could you try again?"
         reply = safe_reply
+    # Deterministic reply-language enforcement. The system-prompt clamp is a
+    # probabilistic lever — live chat decodes at the model's default
+    # temperature, and apology/clarification turns mirror the user's language
+    # hard enough that the clamp occasionally loses ("Λυπάμαι αλλά δεν
+    # κατάφερα…" spoken as garbled audio by the English-only voice). When the
+    # final reply still carries non-Latin text, run ONE greedy translation
+    # pass — translating has no pull toward the user's language, so it is
+    # reliable where regeneration is not. Fail-open: any error keeps the
+    # original reply.
+    if safe_reply and getattr(cfg, 'tts_engine', 'piper') in ('piper', 'chatterbox'):
+        try:
+            if _NON_LATIN_LETTERS.search(safe_reply):
+                from ..llm import call_llm_direct as _translate_call
+                translated = _translate_call(
+                    getattr(cfg, 'ollama_base_url', ''),
+                    getattr(cfg, 'ollama_chat_model', ''),
+                    "Rewrite the assistant reply below entirely in English. "
+                    "Keep the meaning, tone and brevity. Output ONLY the "
+                    "rewritten reply.",
+                    safe_reply,
+                    timeout_sec=12.0,
+                    thinking=False,
+                    temperature=0.0,
+                )
+                if translated and translated.strip() and not _NON_LATIN_LETTERS.search(translated):
+                    print("  🌐 Reply language corrected to English", flush=True)
+                    safe_reply = translated.strip()
+                    reply = safe_reply
+        except Exception as e:
+            debug_log(f"reply-language enforcement failed (non-fatal): {e!r}", "voice")
     if safe_reply:
         # Print reply with appropriate header
         try:

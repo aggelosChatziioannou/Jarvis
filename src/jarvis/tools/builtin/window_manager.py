@@ -41,6 +41,25 @@ def is_transient_window(title: str) -> bool:
     return any(w in t for w in _TRANSIENT_TITLE_WORDS)
 
 
+# The last window query manageWindow successfully resolved (process name).
+# Pronoun follow-ups ("put IT fullscreen on the left") name no app — the
+# router emits action/monitor/position without `window`, and failing the
+# call over a field the conversation just established broke the natural
+# two-step flow. Session-lifetime state, deliberately not persisted.
+_LAST_MANAGED_QUERY: Optional[str] = None
+
+
+def effective_window_query(args: Dict[str, Any], last_managed: Optional[str]) -> str:
+    """The window a manageWindow call targets: explicit `window`, else
+    `second_window` (half-split emissions), else the last managed window."""
+    q = str((args or {}).get("window", "") or "").strip()
+    if not q:
+        q = str((args or {}).get("second_window", "") or "").strip()
+    if not q and last_managed:
+        q = str(last_managed).strip()
+    return q
+
+
 def score_window_match(query: str, title: str, process: str) -> int:
     """Rank how well a window answers the user's description.
 
@@ -330,6 +349,7 @@ class ManageWindowTool(Tool):
         }
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
+        global _LAST_MANAGED_QUERY
         a = args or {}
         action = str(a.get("action", "")).strip().lower()
         query = str(a.get("window", "")).strip()
@@ -337,9 +357,15 @@ class ManageWindowTool(Tool):
         # as the window rather than failing the call.
         if not query and str(a.get("second_window", "")).strip():
             query = str(a.pop("second_window")).strip()
-        if not action or not query:
+        # Pronoun follow-ups ("put IT fullscreen on the left") name no app:
+        # fall back to the last window this tool managed in this session.
+        if not query and _LAST_MANAGED_QUERY:
+            query = _LAST_MANAGED_QUERY
+            print(f"  🪟 No window named — using the last managed window '{query}'", flush=True)
+        missing = [name for name, val in (("action", action), ("window", query)) if not val]
+        if missing:
             return ToolExecutionResult(success=False, reply_text=None,
-                                       error_message="action and window are required")
+                                       error_message=f"missing required field(s): {', '.join(missing)}")
         # Tolerant action normalisation: small models emit creative variants
         # like 'move_to_left_monitor'. Map them onto the real enum and pull
         # an embedded monitor/position out rather than failing the request.
@@ -386,6 +412,11 @@ class ManageWindowTool(Tool):
                                 f"(If the app isn't running, launch it with the open_app tool, "
                                 f"then call manageWindow again.)"),
                 )
+            # Remember the target so a pronoun follow-up ("put it fullscreen")
+            # can omit `window` and still mean this app.
+            _LAST_MANAGED_QUERY = (
+                target.get("process", "").removesuffix(".exe") or query
+            )
 
             import win32con
             import win32gui

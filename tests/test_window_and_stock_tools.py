@@ -118,3 +118,34 @@ class TestTransientWindowPenalty:
     def test_installer_still_matches_when_alone(self):
         windows = [{"title": "Spotify Installer", "process": "Spotify.exe"}]
         assert pick_window(windows, "spotify") is not None
+
+
+class TestLastManagedFallback:
+    """Pronoun follow-ups name no app. Live failure: «βάλε ΤΟ στην αριστερή
+    οθόνη full screen» right after Jarvis moved Spotify — the router emitted
+    action/monitor/position but no `window`, and the tool failed the call
+    over a field the conversation had already established."""
+
+    def test_missing_window_uses_last_managed(self):
+        from jarvis.tools.builtin.window_manager import effective_window_query
+        assert effective_window_query({"action": "move"}, "spotify") == "spotify"
+
+    def test_explicit_window_wins_over_history(self):
+        from jarvis.tools.builtin.window_manager import effective_window_query
+        assert effective_window_query({"window": "chrome"}, "spotify") == "chrome"
+
+    def test_second_window_beats_history(self):
+        from jarvis.tools.builtin.window_manager import effective_window_query
+        assert effective_window_query({"second_window": "chrome"}, "spotify") == "chrome"
+
+    def test_no_window_no_history_is_empty(self):
+        from jarvis.tools.builtin.window_manager import effective_window_query
+        assert effective_window_query({"action": "move"}, None) == ""
+
+    def test_error_names_only_the_missing_fields(self, monkeypatch):
+        from jarvis.tools.builtin import window_manager as wm
+        monkeypatch.setattr(wm, "_LAST_MANAGED_QUERY", None)
+        res = wm.ManageWindowTool().run({"action": "move"}, None)
+        assert res.success is False
+        assert "window" in res.error_message
+        assert "action" not in res.error_message
