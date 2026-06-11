@@ -35,6 +35,57 @@ export interface RawGraphNode {
   depth: number
   data_token_count?: number
   access_count?: number
+  /** Non-empty data lines — each line is one remembered fact (graph v2). */
+  facts?: string[]
+  fact_count?: number
+}
+
+// ── Per-fact synthetic ids ─────────────────────────────────────────────────
+// Facts live as lines inside a node's data, so a single fact is addressed as
+// "<nodeId>#<lineIndex>". The data context resolves these back to the real
+// node for fetch/save/delete (line-level edits via PUT of the full data).
+
+const FACT_SEP = '#'
+
+export function makeFactId(nodeId: string, index: number): string {
+  return `${nodeId}${FACT_SEP}${index}`
+}
+
+export function parseFactId(id: string): { nodeId: string; factIndex: number | null } {
+  const at = id.lastIndexOf(FACT_SEP)
+  if (at < 0) return { nodeId: id, factIndex: null }
+  const idx = Number(id.slice(at + 1))
+  if (!Number.isInteger(idx) || idx < 0) return { nodeId: id, factIndex: null }
+  return { nodeId: id.slice(0, at), factIndex: idx }
+}
+
+/** Normalise node data into its fact lines (matches the backend's split). */
+export function factLines(data: string): string[] {
+  return data.split('\n').map((l) => l.trim()).filter(Boolean)
+}
+
+export function replaceFactLine(data: string, index: number, newLine: string): string {
+  const lines = factLines(data)
+  if (index < 0 || index >= lines.length) return data
+  const next = newLine.trim()
+  if (next) lines[index] = next
+  else lines.splice(index, 1) // emptied = removed
+  return lines.join('\n')
+}
+
+export function removeFactLine(data: string, index: number): string {
+  const lines = factLines(data)
+  if (index < 0 || index >= lines.length) return data
+  lines.splice(index, 1)
+  return lines.join('\n')
+}
+
+/** Short display label for a fact line (the full line stays in `value`). */
+export function factLabel(line: string): string {
+  let s = line.trim().replace(/^the user'?s?\s+/i, '')
+  s = s.charAt(0).toUpperCase() + s.slice(1)
+  if (s.length > 42) s = `${s.slice(0, 42).trimEnd()}…`
+  return s.replace(/\.$/, '')
 }
 
 export interface RawGraphData {
@@ -78,23 +129,44 @@ export function mapGraphData(graph: RawGraphData): { nodes: MemoryNode[]; catego
     })
   }
 
-  // Memory leaves (depth >= 2) first, so we can count per category.
+  // Memory leaves: every FACT (data line) of every node under a branch is
+  // one memory dot. Nodes are containers in the v2 design — a single node
+  // accumulates many facts before auto-split — so counting nodes would
+  // show "0 memories" while Jarvis actually knows plenty.
   for (const n of graph.nodes) {
-    if (n.depth < 2) continue
-    const branch = branchIdOf(n)
+    if (n.depth < 1) continue
+    const branch = n.depth === 1 ? n.id : branchIdOf(n)
     if (!branch) continue
     const cat = branchCategory(branch)
-    childCount.set(cat, (childCount.get(cat) ?? 0) + 1)
-    out.push({
-      id: n.id,
-      type: 'memory',
-      label: n.name,
-      category: cat,
-      importance: clampImportance(n.data_token_count ?? 0),
-      confidence: 100,
-      value: n.description || '',
-      parentId: `cat-${cat}`,
-    })
+    const facts = n.facts ?? []
+    for (let i = 0; i < facts.length; i++) {
+      childCount.set(cat, (childCount.get(cat) ?? 0) + 1)
+      out.push({
+        id: makeFactId(n.id, i),
+        type: 'memory',
+        label: factLabel(facts[i]),
+        category: cat,
+        importance: 6,
+        confidence: 100,
+        value: facts[i],
+        parentId: `cat-${cat}`,
+      })
+    }
+    // Deeper nodes with no inline facts still render as a single memory so
+    // legacy/structural leaves stay visible and selectable.
+    if (n.depth >= 2 && facts.length === 0) {
+      childCount.set(cat, (childCount.get(cat) ?? 0) + 1)
+      out.push({
+        id: n.id,
+        type: 'memory',
+        label: n.name,
+        category: cat,
+        importance: clampImportance(n.data_token_count ?? 0),
+        confidence: 100,
+        value: n.description || '',
+        parentId: `cat-${cat}`,
+      })
+    }
   }
 
   // Category hubs from depth-1 branches.

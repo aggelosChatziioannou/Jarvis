@@ -362,6 +362,25 @@ class TestGraphVisualisation:
         # seeded edges (root->each branch) + root->A + A->B
         assert len(data["edges"]) == SEEDED + 2
 
+    def test_graph_data_exposes_per_fact_lines(self, store):
+        # Each non-empty data line IS one fact in the v2 design; the console
+        # renders them as individual graph dots and counts them as facts.
+        a = store.create_node(
+            name="A", description="a", parent_id="user",
+            data="The user likes burgers.\n\nThe user is a night owl.\n",
+        )
+
+        data = store.get_graph_data("root", max_depth=5)
+        a_data = next(n for n in data["nodes"] if n["id"] == a.id)
+        assert a_data["fact_count"] == 2
+        assert a_data["facts"] == [
+            "The user likes burgers.",
+            "The user is a night owl.",
+        ]
+        empty = next(n for n in data["nodes"] if n["id"] == "world")
+        assert empty["fact_count"] == 0
+        assert empty["facts"] == []
+
     def test_graph_data_includes_depth(self, store):
         a = store.create_node(name="A", description="a", parent_id="root")
 

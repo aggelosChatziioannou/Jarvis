@@ -3,7 +3,10 @@ import type { ReactNode } from 'react'
 import type { MemoryNode, CategoryDef } from '@/console/types/graph'
 import type { Reminder, EpisodicMemory } from '@/console/types'
 import { memoryApi } from './memoryApi'
-import { mapGraphData, mapReminders, mapEpisodic, STANDARD_CATEGORIES } from '@/console/lib/memoryMap'
+import {
+  mapGraphData, mapReminders, mapEpisodic, STANDARD_CATEGORIES,
+  parseFactId, factLines, replaceFactLine, removeFactLine,
+} from '@/console/lib/memoryMap'
 
 export interface MemoryData {
   /** True once real daemon data loaded; false while on demo/mock fallback. */
@@ -118,21 +121,43 @@ function useMemoryData(): MemoryData {
     [reloadReminders],
   )
 
+  // Ids may address a whole node OR a single fact line ("<nodeId>#<i>").
+  // Fact-level operations rewrite just that line via a PUT of the node data —
+  // deleting one fact must never delete the node that holds its siblings.
   const fetchNodeData = useCallback(async (id: string) => {
-    const res = await memoryApi.node(id)
+    const { nodeId, factIndex } = parseFactId(id)
+    const res = await memoryApi.node(nodeId)
     const data = (res.node as { data?: unknown }).data
-    return typeof data === 'string' ? data : ''
+    const text = typeof data === 'string' ? data : ''
+    if (factIndex === null) return text
+    return factLines(text)[factIndex] ?? ''
   }, [])
   const saveNodeData = useCallback(
     async (id: string, data: string) => {
-      await memoryApi.updateNode(id, { data })
+      const { nodeId, factIndex } = parseFactId(id)
+      if (factIndex === null) {
+        await memoryApi.updateNode(nodeId, { data })
+      } else {
+        const res = await memoryApi.node(nodeId)
+        const current = (res.node as { data?: unknown }).data
+        const text = typeof current === 'string' ? current : ''
+        await memoryApi.updateNode(nodeId, { data: replaceFactLine(text, factIndex, data) })
+      }
       await load()
     },
     [load],
   )
   const deleteNode = useCallback(
     async (id: string) => {
-      await memoryApi.deleteNode(id)
+      const { nodeId, factIndex } = parseFactId(id)
+      if (factIndex === null) {
+        await memoryApi.deleteNode(nodeId)
+      } else {
+        const res = await memoryApi.node(nodeId)
+        const current = (res.node as { data?: unknown }).data
+        const text = typeof current === 'string' ? current : ''
+        await memoryApi.updateNode(nodeId, { data: removeFactLine(text, factIndex) })
+      }
       await load()
     },
     [load],

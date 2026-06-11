@@ -877,8 +877,14 @@ class GraphMemoryStore:
         Returns:
             {"nodes": [...], "edges": [...]}
             Each node: {id, name, description, data_token_count, access_count,
-                        last_accessed, parent_id, has_children, depth}
+                        last_accessed, parent_id, has_children, depth,
+                        facts, fact_count}
             Each edge: {source, target}
+
+        ``facts`` is the node's data split into its non-empty lines (capped
+        at 100 per node) — in the v2 design each line IS one remembered fact,
+        so the console can show real per-fact counts and per-fact graph dots
+        instead of pretending only whole nodes are memories.
         """
         nodes_out: list[dict] = []
         edges_out: list[dict] = []
@@ -894,6 +900,7 @@ class GraphMemoryStore:
                 return
 
             children = self.get_children(nid)
+            facts = [ln.strip() for ln in (node.data or "").splitlines() if ln.strip()]
             nodes_out.append({
                 "id": node.id,
                 "name": node.name,
@@ -904,6 +911,8 @@ class GraphMemoryStore:
                 "parent_id": node.parent_id,
                 "has_children": len(children) > 0,
                 "depth": depth,
+                "facts": facts[:100],
+                "fact_count": len(facts),
             })
 
             for child in children:

@@ -116,3 +116,68 @@ describe('mapEpisodic', () => {
     expect(out[0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 })
+
+describe('per-fact graph mapping (facts live as data lines)', () => {
+  const graph = {
+    nodes: [
+      { id: 'root', name: 'Root', description: '', parent_id: null, depth: 0, facts: [], fact_count: 0 },
+      {
+        id: 'user', name: 'User', description: '', parent_id: 'root', depth: 1,
+        facts: ['The user is named Aggelos.', 'The user lives in Ioannina, Greece.'], fact_count: 2,
+      },
+      {
+        id: 'directives', name: 'Directives', description: '', parent_id: 'root', depth: 1,
+        facts: ['The user instructed the assistant to always reply in English.'], fact_count: 1,
+      },
+      { id: 'world', name: 'World', description: '', parent_id: 'root', depth: 1, facts: [], fact_count: 0 },
+    ],
+    edges: [],
+  }
+
+  it('renders each fact line as its own memory dot with the full line as value', async () => {
+    const { mapGraphData } = await import('./memoryMap')
+    const { nodes } = mapGraphData(graph)
+    const memories = nodes.filter((n) => n.type === 'memory')
+    expect(memories).toHaveLength(3)
+    expect(memories[0].id).toBe('user#0')
+    expect(memories[0].value).toBe('The user is named Aggelos.')
+    expect(memories[0].category).toBe('identity')
+    expect(memories[2].category).toBe('directives')
+  })
+
+  it('category hubs count facts, not container nodes', async () => {
+    const { mapGraphData } = await import('./memoryMap')
+    const { nodes } = mapGraphData(graph)
+    const identity = nodes.find((n) => n.id === 'cat-identity')
+    expect(identity?.subtitle).toBe('2 memories')
+    const directives = nodes.find((n) => n.id === 'cat-directives')
+    expect(directives?.subtitle).toBe('1 memory')
+  })
+})
+
+describe('fact id + line-edit helpers', () => {
+  it('parseFactId round-trips and leaves real node ids alone', async () => {
+    const { makeFactId, parseFactId } = await import('./memoryMap')
+    expect(parseFactId(makeFactId('user', 3))).toEqual({ nodeId: 'user', factIndex: 3 })
+    expect(parseFactId('a-real-uuid')).toEqual({ nodeId: 'a-real-uuid', factIndex: null })
+  })
+
+  it('replaceFactLine edits exactly one fact', async () => {
+    const { replaceFactLine } = await import('./memoryMap')
+    expect(replaceFactLine('a\nb\nc', 1, 'B!')).toBe('a\nB!\nc')
+    expect(replaceFactLine('a\nb', 5, 'x')).toBe('a\nb') // out of range: unchanged
+    expect(replaceFactLine('a\nb\nc', 1, '   ')).toBe('a\nc') // emptied = removed
+  })
+
+  it('removeFactLine deletes exactly one fact, never the node', async () => {
+    const { removeFactLine } = await import('./memoryMap')
+    expect(removeFactLine('a\nb\nc', 0)).toBe('b\nc')
+    expect(removeFactLine('a', 0)).toBe('')
+  })
+
+  it('factLabel strips boilerplate and truncates', async () => {
+    const { factLabel } = await import('./memoryMap')
+    expect(factLabel('The user is named Aggelos.')).toBe('Is named Aggelos')
+    expect(factLabel("The user's favourite foods are Greek cuisine, burgers, pizza, and pasta.").length).toBeLessThanOrEqual(43)
+  })
+})
