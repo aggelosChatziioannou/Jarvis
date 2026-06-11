@@ -114,6 +114,10 @@ _FALLBACK_CATALOGUE: list[tuple[str, str]] = [
     ("typeOnScreen", "type text via the keyboard"),
     ("scrollScreen", "scroll the active window up or down"),
     ("confirmScreenAction", "execute the screen action awaiting confirmation"),
+    # Window management + markets (see window_manager.spec.md / stock_prices.spec.md).
+    ("listOpenWindows", "list the windows/apps open on the computer"),
+    ("manageWindow", "move/focus/split/maximise app windows across the user's screens"),
+    ("getStockPrice", "live price of a stock, crypto, gold or an FX pair"),
 ]
 
 

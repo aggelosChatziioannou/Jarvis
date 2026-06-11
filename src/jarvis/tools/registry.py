@@ -30,6 +30,8 @@ from .builtin.vision import (
     ScrollScreenTool,
     ConfirmScreenActionTool,
 )
+from .builtin.window_manager import ListOpenWindowsTool, ManageWindowTool
+from .builtin.stock_prices import StockPriceTool
 from .builtin.reminders.create_reminder import CreateReminderTool
 from .builtin.reminders.list_reminders import ListRemindersTool
 from .builtin.reminders.cancel_reminder import CancelReminderTool
@@ -67,6 +69,12 @@ BUILTIN_TOOLS = {
     "listReminders": ListRemindersTool(),
     "cancelReminder": CancelReminderTool(),
     "snoozeReminder": SnoozeReminderTool(),
+    # Window management (see window_manager.spec.md): deterministic OS-level
+    # window control — focus/move/snap/split across monitors, list open apps.
+    "listOpenWindows": ListOpenWindowsTool(),
+    "manageWindow": ManageWindowTool(),
+    # Market prices via Tiingo (see stock_prices.spec.md).
+    "getStockPrice": StockPriceTool(),
 }
 
 # Global MCP tools cache
