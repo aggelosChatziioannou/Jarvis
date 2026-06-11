@@ -3,7 +3,7 @@ import { useSceneContext } from '@/console/3d/SceneContext'
 import { useDashboardDataCtx } from '@/console/services/DashboardDataContext'
 import { fetchReminders } from '@/console/services/dashboardApi'
 import type { ReminderItem } from '@/console/services/dashboardApi'
-import { X, Cpu, CloudSun, Mail, CalendarDays, BellRing, BrainCircuit } from 'lucide-react'
+import { X, Cpu, CloudSun, Mail, CalendarDays, BellRing, BrainCircuit, CandlestickChart } from 'lucide-react'
 import type { PanelId } from '@/console/3d/furnitureActions'
 
 // Generic glass panel for furniture-triggered info views. All data is real:
@@ -16,6 +16,7 @@ const TITLES: Partial<Record<PanelId, { title: string; icon: typeof Cpu }>> = {
   calendar: { title: 'Calendar', icon: CalendarDays },
   reminders: { title: 'Reminders', icon: BellRing },
   model: { title: 'AI Core', icon: BrainCircuit },
+  markets: { title: 'Markets', icon: CandlestickChart },
 }
 
 function fmtUptime(sec: number): string {
@@ -35,7 +36,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export default function InfoPanel() {
   const { openPanel, setOpenPanel } = useSceneContext()
-  const { metrics, services, state } = useDashboardDataCtx()
+  const { metrics, services, state, markets } = useDashboardDataCtx()
   const [reminders, setReminders] = useState<ReminderItem[] | null>(null)
 
   useEffect(() => {
@@ -84,11 +85,25 @@ export default function InfoPanel() {
     const g = svc('gmail')
     body = g?.connected ? (
       <>
-        <Row label="Unread" value={g.count != null ? String(g.count) : '—'} />
-        <Row label="Status" value={g.detail || 'connected'} />
+        <Row label="New this week" value={g.week_count != null ? String(g.week_count) : '—'} />
+        <Row label="Unread (total)" value={g.count != null ? String(g.count) : '—'} />
       </>
     ) : (
       <div className="text-xs" style={{ color: '#475569' }}>Gmail not connected</div>
+    )
+  } else if (openPanel === 'markets') {
+    body = !markets?.configured ? (
+      <div className="text-xs" style={{ color: '#475569' }}>Markets not configured (TIINGO_API_KEY missing)</div>
+    ) : markets.quotes.length === 0 ? (
+      <div className="text-xs" style={{ color: '#475569' }}>No quotes available right now</div>
+    ) : (
+      <>
+        {markets.quotes.map((q) => (
+          <Row key={q.symbol}
+            label={q.label}
+            value={`${q.price >= 100 ? q.price.toLocaleString(undefined, { maximumFractionDigits: 0 }) : q.price.toFixed(2)} USD${q.pct != null ? ` (${q.pct >= 0 ? '+' : ''}${q.pct.toFixed(2)}%)` : ''}`} />
+        ))}
+      </>
     )
   } else if (openPanel === 'calendar') {
     const c = svc('calendar')

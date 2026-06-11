@@ -10,6 +10,7 @@ export type PanelId =
   | 'calendar'
   | 'reminders'
   | 'model'
+  | 'markets'
 
 export type ConsolePage = 'memory' | 'audio' | 'logs' | 'settings'
 
@@ -35,7 +36,7 @@ export const FURNITURE_ACTIONS: Record<string, FurnitureAction> = {
 
   // Office — productivity
   'office-laptop': { kind: 'panel', panel: 'gmail' },
-  'office-monitor': { kind: 'panel', panel: 'system' },
+  'office-monitor': { kind: 'panel', panel: 'markets' },
   'office-calendar': { kind: 'panel', panel: 'calendar' },
   'office-pinboard': { kind: 'navigate', page: 'memory' },
   'office-tasks': { kind: 'panel', panel: 'reminders' },

@@ -1,4 +1,4 @@
-import { Cpu, MemoryStick, Gauge, Clock, BrainCircuit, Music, Mail, Calendar, Cloud, Bell } from 'lucide-react'
+import { Cpu, MemoryStick, Gauge, Clock, BrainCircuit, Music, Mail, Calendar, Cloud, Bell, TrendingUp, TrendingDown } from 'lucide-react'
 import { useDashboardDataCtx } from '@/console/services/DashboardDataContext'
 
 function fmtUptime(sec: number): string {
@@ -19,8 +19,13 @@ const SERVICE_ICON: Record<string, typeof Music> = {
   calendar: Calendar,
 }
 
+function fmtPrice(v: number): string {
+  return v >= 100 ? v.toLocaleString(undefined, { maximumFractionDigits: 0 })
+    : v >= 10 ? v.toFixed(2) : v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+}
+
 export default function SystemStatusPanel() {
-  const { metrics, services, connected } = useDashboardDataCtx()
+  const { metrics, services, connected, markets } = useDashboardDataCtx()
 
   const rows: { label: string; value: string; icon: typeof Cpu }[] = []
   if (metrics) {
@@ -75,6 +80,38 @@ export default function SystemStatusPanel() {
           </div>
         ))}
       </div>
+
+      {/* Markets watchlist — live Tiingo quotes */}
+      {markets?.configured && markets.quotes.length > 0 && (
+        <>
+          <div className="h-px w-full mb-4" style={{ background: 'rgba(34, 211, 238, 0.1)' }} />
+          <h4 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#94a3b8', letterSpacing: '0.06em' }}>
+            Markets
+          </h4>
+          <div className="space-y-2 mb-6">
+            {markets.quotes.map((q) => {
+              const up = (q.pct ?? 0) >= 0
+              const TrendIcon = up ? TrendingUp : TrendingDown
+              return (
+                <div key={q.symbol} className="flex items-center justify-between">
+                  <span className="text-xs uppercase tracking-wider font-semibold flex items-center gap-1.5" style={{ color: '#94a3b8' }}>
+                    <TrendIcon size={12} style={{ color: q.pct == null ? '#475569' : up ? '#34d399' : '#fb7185' }} />
+                    {q.label}
+                  </span>
+                  <span className="font-mono-data text-sm font-medium" style={{ color: '#f8fafc' }}>
+                    {fmtPrice(q.price)}
+                    {q.pct != null && (
+                      <span className="ml-1.5 text-[10px]" style={{ color: up ? '#34d399' : '#fb7185' }}>
+                        {q.pct >= 0 ? '+' : ''}{q.pct.toFixed(2)}%
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
 
       <div className="h-px w-full mb-4" style={{ background: 'rgba(34, 211, 238, 0.1)' }} />
 

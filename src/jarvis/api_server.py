@@ -860,7 +860,10 @@ def _resolve_weather_location(query: str) -> Optional[Dict[str, Any]]:
             debug_log(f"geocode failed for {query!r}: {type(e).__name__}", "tools")
             result = None
 
-    _geocode_cache[query] = result
+    # Cache successes only: a transient network failure at boot must not
+    # pin weather to "unavailable" for the daemon's whole lifetime.
+    if result is not None:
+        _geocode_cache[query] = result
     return result
 
 
@@ -1106,7 +1109,19 @@ def _gmail_status() -> Dict[str, Any]:
                 _typ, d = m.search(None, "UNSEEN")
                 ids = d[0].split() if d and d[0] else []
                 n = len(ids)
-                data.update({"connected": True, "active": n > 0, "count": n, "detail": f"{n} unread"})
+                # "New this week" is far more useful on the dashboard than a
+                # lifetime unread total. IMAP SINCE uses dd-Mon-yyyy.
+                week = None
+                try:
+                    from datetime import datetime, timedelta
+                    since = (datetime.now() - timedelta(days=7)).strftime("%d-%b-%Y")
+                    _typ2, d2 = m.search(None, f"(SINCE {since})")
+                    week = len(d2[0].split()) if d2 and d2[0] else 0
+                except Exception:
+                    week = None
+                detail = f"{week} new this week" if week is not None else f"{n} unread"
+                data.update({"connected": True, "active": n > 0, "count": n,
+                             "week_count": week, "detail": detail})
             finally:
                 try:
                     m.logout()
@@ -1173,6 +1188,49 @@ def system_metrics() -> Dict[str, Any]:
     except Exception:
         pass
     out["weather"] = _read_weather()
+    return out
+
+
+_markets_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_MARKETS_TTL_SEC = 60.0
+_DEFAULT_WATCHLIST = ["gold", "BTC", "NVDA"]
+
+
+@app.get("/api/markets")
+def markets() -> Dict[str, Any]:
+    """Live watchlist quotes (Tiingo) for the dashboard Markets card.
+
+    Watchlist comes from the ``markets_watchlist`` config key (list of
+    tickers/asset names); cached ~60s so the poll doesn't hammer Tiingo.
+    """
+    now = time.time()
+    if _markets_cache["data"] is not None and now - float(_markets_cache["at"]) < _MARKETS_TTL_SEC:
+        return _markets_cache["data"]
+    out: Dict[str, Any] = {"configured": False, "quotes": []}
+    try:
+        from .tools.builtin.stock_prices import fetch_quote, read_tiingo_key
+
+        key = read_tiingo_key()
+        if key:
+            out["configured"] = True
+            try:
+                cfg = _load_json(default_config_path()) or {}
+            except Exception:
+                cfg = {}
+            watchlist = cfg.get("markets_watchlist") or _DEFAULT_WATCHLIST
+            for sym in list(watchlist)[:8]:
+                q = fetch_quote(str(sym), key)
+                if q:
+                    out["quotes"].append(q)
+    except Exception as e:
+        debug_log(f"markets endpoint failed: {type(e).__name__}", "tools")
+    # Cache even partial results; a failed sweep retries after the TTL.
+    if out["quotes"] or not out["configured"]:
+        _markets_cache["data"] = out
+        _markets_cache["at"] = now
+    else:
+        _markets_cache["data"] = out
+        _markets_cache["at"] = now - _MARKETS_TTL_SEC + 15  # retry sooner on total failure
     return out
 
 

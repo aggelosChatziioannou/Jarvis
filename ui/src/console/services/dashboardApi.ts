@@ -33,6 +33,8 @@ export interface ServiceStatus {
   connected: boolean
   detail: string
   count?: number
+  /** Gmail: messages received in the last 7 days. */
+  week_count?: number
   /** Live activity (e.g. Spotify playing, Gmail has unread) for glows. */
   active?: boolean
   // Spotify now-playing extras (present only on the spotify entry):
@@ -42,9 +44,24 @@ export interface ServiceStatus {
   is_playing?: boolean
 }
 
+export interface MarketQuote {
+  symbol: string
+  label: string
+  kind: string
+  price: number
+  prev?: number | null
+  pct?: number | null
+}
+
+export interface MarketsPayload {
+  configured: boolean
+  quotes: MarketQuote[]
+}
+
 export const dashboardApi = {
   metrics: () => j<SystemMetrics>('/api/system/metrics'),
   services: () => j<ServiceStatus[]>('/api/services/status'),
+  markets: () => j<MarketsPayload>('/api/markets'),
 }
 
 export interface SpotifyControlResult {
