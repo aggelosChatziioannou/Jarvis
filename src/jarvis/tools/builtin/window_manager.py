@@ -209,10 +209,15 @@ def _force_foreground(hwnd: int) -> None:
 
 
 def _apply_rect(hwnd: int, rect: Dict[str, int]) -> None:
+    import ctypes
     import win32con
     import win32gui
 
-    if win32gui.IsIconic(hwnd) or win32gui.IsZoomed(hwnd):
+    # IsZoomed is NOT exposed by win32gui (pywin32) — call user32 directly.
+    # Hit only when the window is not minimized, so the bug hid behind the
+    # short-circuit until a maximized window was moved.
+    zoomed = bool(ctypes.windll.user32.IsZoomed(hwnd))
+    if win32gui.IsIconic(hwnd) or zoomed:
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
     win32gui.SetWindowPos(
         hwnd, 0, rect["x"], rect["y"], rect["width"], rect["height"],
