@@ -351,11 +351,14 @@ class ManageWindowTool(Tool):
                     break
             else:
                 action = "move"  # placement-ish unknowns degrade to a move
-            if not a.get("monitor"):
+            # A bare left/right action means SNAP on the current screen
+            # (Windows-Snap intuition), not a jump to the other monitor —
+            # unless the model already named a monitor explicitly.
+            if not a.get("position"):
                 if "left" in compact:
-                    a["monitor"] = "left"
+                    a["position"] = "left-half"
                 elif "right" in compact:
-                    a["monitor"] = "right"
+                    a["position"] = "right-half"
         try:
             import time as _time
 

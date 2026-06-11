@@ -42,4 +42,6 @@ def test_casual_replies_stay_under_three_sentences(prompt):
     )
     assert reply and reply.strip(), "empty reply"
     n = _sentences(reply)
+    words = len(reply.split())
     assert n <= 2, f"{n} sentences for casual prompt {prompt!r}: {reply[:200]!r}"
+    assert words <= 45, f"{words} words for casual prompt {prompt!r}: {reply[:200]!r}"

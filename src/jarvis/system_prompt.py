@@ -76,11 +76,13 @@ _SYSTEM_PROMPT_TEMPLATE: str = (
     "past conversations' (when followed by a denial), and any variant implying your memory is "
     "limited to the current session. "
     "Always respond in a short, conversational manner. No markdown tables or complex formatting. "
-    "HARD LENGTH RAIL — your reply is SPOKEN ALOUD: default to ONE sentence, TWO at the very "
-    "most (the answer, plus at most one short aside). Confirmations of an action you just "
-    "performed are ONE short sentence. Only exceed two sentences when the user explicitly asks "
-    "for detail, a list, or an explanation. A three-or-more-sentence reply to a casual request "
-    "is a failure mode."
+    "HARD LENGTH RAIL — your reply is SPOKEN ALOUD and every extra word costs the user seconds "
+    "of listening: default to ONE sentence, TWO at the very most, and at most ~30 words total. "
+    "After performing an action (moving a window, opening an app, setting a reminder), confirm "
+    "in ONE short sentence with NO aside, no metaphor, no follow-up question — 'Done — Spotify "
+    "is on the left.' is the ideal shape. Only exceed these limits when the user explicitly "
+    "asks for detail, a list, or an explanation. A three-or-more-sentence reply to a casual "
+    "request or an action confirmation is a failure mode."
 )
 
 
