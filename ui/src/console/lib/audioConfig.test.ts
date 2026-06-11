@@ -57,13 +57,25 @@ describe('device selection mapping', () => {
   it('reads selected input (by name) / output from config', () => {
     expect(selectedInput({ audio_input_name: 'PD200X' })).toBe('PD200X')
     expect(selectedInput({})).toBe('')
+    // Output follows the endpoint-id scheme the daemon's playback resolver
+    // actually reads; the legacy tts_output_device is only a display fallback.
+    expect(selectedOutput({ audio_output_name: 'Headset (CORSAIR)' })).toBe('Headset (CORSAIR)')
     expect(selectedOutput({ tts_output_device: 'Speakers (Realtek)' })).toBe('Speakers (Realtek)')
     expect(selectedOutput({})).toBe('')
   })
 
   it('builds input/output patches from a chosen device', () => {
     expect(inputPatch(inDev)).toEqual({ audio_input_endpoint_id: 'EP-IN-1', audio_input_name: 'PD200X' })
-    expect(outputPatch(outDev)).toEqual({ tts_output_device: 'Speakers (Realtek)' })
+    // LIVE FAILURE this guards: outputPatch wrote ONLY the legacy
+    // tts_output_device key, which the daemon's live playback resolver does
+    // NOT read (it resolves audio_output_endpoint_id/name) — the user picked
+    // their Corsair headset, the page said saved, and the voice kept playing
+    // through the old device even after a restart.
+    expect(outputPatch(outDev)).toEqual({
+      audio_output_endpoint_id: 'EP-OUT-1',
+      audio_output_name: 'Speakers (Realtek)',
+      tts_output_device: 'Speakers (Realtek)',
+    })
   })
 
   it('clears the endpoint id when the device list reports none', () => {

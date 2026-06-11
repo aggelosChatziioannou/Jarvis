@@ -89,7 +89,10 @@ export function selectedInput(config: Config): string {
 }
 
 export function selectedOutput(config: Config): string {
-  return String(config.tts_output_device ?? '')
+  // The daemon's playback resolver reads audio_output_endpoint_id/name;
+  // tts_output_device is the legacy key, kept only as a display fallback
+  // for configs that predate the endpoint-id redesign.
+  return String(config.audio_output_name ?? config.tts_output_device ?? '')
 }
 
 export function inputPatch(device: AudioDevice): Record<string, string> {
@@ -98,5 +101,15 @@ export function inputPatch(device: AudioDevice): Record<string, string> {
 }
 
 export function outputPatch(device: AudioDevice): Record<string, string> {
-  return { tts_output_device: device.name }
+  // Mirror inputPatch: write the endpoint-id scheme the daemon's LIVE
+  // playback resolver actually reads. Writing ONLY the legacy
+  // tts_output_device key (the old behaviour) saved the choice into a key
+  // playback never consults — the voice kept coming out of the previous
+  // device even after a restart. The legacy key is still written so older
+  // consumers (test tone) stay in sync with the user's choice.
+  return {
+    audio_output_endpoint_id: device.id ?? '',
+    audio_output_name: device.name,
+    tts_output_device: device.name,
+  }
 }

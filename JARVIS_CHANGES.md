@@ -22,6 +22,13 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - Audio I/O output selection wrote a dead config key - voice kept playing through the old speakers
+- **Category**: bug-fix
+- **Files**: `ui/src/console/lib/audioConfig.ts` (+test), live config repair via PATCH /api/config.
+- **What**: the Audio I/O page's `outputPatch` wrote ONLY the legacy `tts_output_device` key, but the daemon's live playback resolver (`_resolve_output_device_live`) reads `audio_output_endpoint_id`/`audio_output_name` exclusively - the user picked the Corsair headset, the page said saved, and the voice (and test tone, same resolver) kept playing through the previously-stored device (Speakers Logitech Z200 endpoint) even after a restart. `outputPatch` now mirrors `inputPatch` (endpoint id + name; legacy key still written for sync), `selectedOutput` reads the new keys with legacy fallback. Repaired the live config (Corsair endpoint id) via PATCH - applied WITHOUT restart thanks to the per-call resolver.
+- **Why**: user report: changed Windows output AND the Audio page output to the Corsair headset, restarted, sound still from speakers.
+- **Verified**: `Piper TTS -> device 11` (Corsair) on a live spoken reply + test tone after the patch; 95 ui vitest green (test now encodes the endpoint-id contract).
+
 ## 2026-06-12 - HOTFIX: wake-ack NameError killed the STT loop (deaf until restart) + loop hardening
 - **Category**: bug-fix (regression of the same day's wake-ack feature)
 - **Files**: `src/jarvis/listening/listener.py` (+`listening.spec.md`), `tests/test_wake_ack.py`.
