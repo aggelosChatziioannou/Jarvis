@@ -122,3 +122,18 @@ export function planFurnitureEffects(action: FurnitureAction, ctx: DispatchCtx):
 export function shouldFireArrival(firedNonce: number | null, arrived: boolean, nonce: number): boolean {
   return arrived && firedNonce !== nonce
 }
+
+// Map backend failure reasons to a short, actionable notice. Furniture
+// actions must never fail silently — the user just watched the Operator walk
+// over and press the thing.
+export function friendlyActionFailure(kind: 'spotify' | 'reminder' | 'tone', reason?: string): string {
+  if (kind === 'spotify') {
+    const r = (reason || '').toLowerCase()
+    if (r.includes('no active device')) return 'Spotify: no active device — open Spotify and press play once, then retry'
+    if (r.includes('authoris') || r.includes('authoriz')) return 'Spotify is not connected — re-authorise it in Settings'
+    if (r.includes('network') || r.includes('http')) return 'Spotify control failed — is Jarvis running?'
+    return `Spotify control failed${reason ? ` (${reason})` : ''}`
+  }
+  if (kind === 'reminder') return 'Reminder could not be saved — is Jarvis running?'
+  return 'Test tone failed — is Jarvis running?'
+}

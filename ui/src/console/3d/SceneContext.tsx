@@ -46,6 +46,9 @@ interface SceneContextType {
   toggleDnd: () => void
   openPanel: PanelId | null
   setOpenPanel: (p: PanelId | null) => void
+  /** Transient action feedback (e.g. "Spotify: no active device"). */
+  notice: string | null
+  pushNotice: (text: string) => void
 }
 
 const noop = () => {}
@@ -62,6 +65,7 @@ const SceneContext = createContext<SceneContextType>({
   activate: noop,
   dndActive: false, toggleDnd: noop,
   openPanel: null, setOpenPanel: noop,
+  notice: null, pushNotice: noop,
 })
 
 export function useSceneContext() {
@@ -84,6 +88,14 @@ export function SceneProvider({ children }: { children: ReactNode }) {
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null)
   const nonceRef = useRef(0)
   const dndRef = useRef(false)
+
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<number | null>(null)
+  const pushNotice = useCallback((text: string) => {
+    setNotice(text)
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 5000)
+  }, [])
 
   const activate = useCallback((t: ActiveTarget) => {
     nonceRef.current += 1
@@ -134,11 +146,12 @@ export function SceneProvider({ children }: { children: ReactNode }) {
       notifications, pushNotification, removeNotification,
       focusMode, toggleFocusMode,
       activate, dndActive, toggleDnd, openPanel, setOpenPanel,
+      notice, pushNotice,
     }),
     [sceneMode, nightMode, toggleNightMode, mood, services, toggleService,
       activeTarget, hovered, operatorState, notifications, pushNotification, removeNotification,
       focusMode, toggleFocusMode,
-      activate, dndActive, toggleDnd, openPanel],
+      activate, dndActive, toggleDnd, openPanel, notice, pushNotice],
   )
 
   return <SceneContext.Provider value={value}>{children}</SceneContext.Provider>

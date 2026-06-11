@@ -84,3 +84,20 @@ describe('shouldFireArrival', () => {
     expect(shouldFireArrival(null, false, 1)).toBe(false)
   })
 })
+
+describe('friendlyActionFailure', () => {
+  it('maps spotify no-active-device to an actionable hint', async () => {
+    const { friendlyActionFailure } = await import('./furnitureActions')
+    expect(friendlyActionFailure('spotify', 'no active device')).toMatch(/open Spotify/)
+  })
+  it('maps auth failures to settings hint', async () => {
+    const { friendlyActionFailure } = await import('./furnitureActions')
+    expect(friendlyActionFailure('spotify', 're-authorise Spotify')).toMatch(/Settings/)
+  })
+  it('maps network/daemon-down failures', async () => {
+    const { friendlyActionFailure } = await import('./furnitureActions')
+    expect(friendlyActionFailure('spotify', 'network')).toMatch(/is Jarvis running/)
+    expect(friendlyActionFailure('reminder')).toMatch(/is Jarvis running/)
+    expect(friendlyActionFailure('tone')).toMatch(/is Jarvis running/)
+  })
+})

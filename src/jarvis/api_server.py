@@ -35,6 +35,21 @@ from .config import default_config_path, load_config, _save_json, _load_json
 from .debug import debug_log
 from .utils.redact import scrub_secrets
 
+# Pre-import the modules the sync endpoints need. Endpoints run on the anyio
+# threadpool; a lazy `import x` inside one takes the global import lock, and
+# on Windows a wedged DLL load elsewhere (e.g. antivirus holding a scipy .pyd
+# during daemon boot) then hangs EVERY such endpoint until the pool starves.
+# Importing here means request threads never touch the import machinery.
+import imaplib  # noqa: E402  (stdlib, used by the Gmail status probe)
+try:
+    import requests as _requests  # noqa: F401
+except Exception:  # pragma: no cover - requests is a hard dep in practice
+    _requests = None
+try:
+    import psutil as _psutil  # noqa: F401
+except Exception:  # pragma: no cover
+    _psutil = None
+
 
 API_HOST = "127.0.0.1"
 API_PORT = 38130
@@ -942,17 +957,27 @@ def _spotify_status() -> Dict[str, Any]:
                 client_id=env["SPOTIFY_CLIENT_ID"],
                 client_secret=env.get("SPOTIFY_CLIENT_SECRET", ""),
                 redirect_uri=env.get("SPOTIFY_REDIRECT_URI", ""),
-                scope="user-read-playback-state user-read-currently-playing",
+                # Same scope set as /api/spotify/control: any token this auth
+                # ever writes to the shared cache must also cover playback
+                # control, otherwise a status refresh can downgrade the cache
+                # and silently break the control endpoint.
+                scope="user-read-playback-state user-modify-playback-state user-read-currently-playing",
                 cache_path=str(cache_path),
                 open_browser=False,
+                requests_timeout=10,
             )
             cached = None
             try:
-                cached = auth.cache_handler.get_cached_token()
+                # validate_token checks expiry + scope and refreshes when it
+                # can; never lets spotipy fall back to an interactive prompt.
+                cached = auth.validate_token(auth.cache_handler.get_cached_token())
             except Exception:
                 cached = None
             if cached:
-                sp = spotipy.Spotify(auth_manager=auth)
+                # Plain access-token client (no auth_manager): a stuck or
+                # under-scoped token fails the request instead of pinning a
+                # threadpool thread behind a hidden stdin prompt.
+                sp = spotipy.Spotify(auth=cached["access_token"], requests_timeout=10)
                 cur = sp.current_playback()
                 data["connected"] = True
                 if cur and cur.get("item"):
@@ -1004,15 +1029,23 @@ def spotify_control(body: SpotifyControlBody) -> Dict[str, Any]:
             scope="user-read-playback-state user-modify-playback-state user-read-currently-playing",
             cache_path=str(cache_path),
             open_browser=False,
+            requests_timeout=10,
         )
+        # validate_token enforces expiry AND scope (refreshing if it can).
+        # The raw cached token may lack user-modify-playback-state; passing
+        # it anyway would make spotipy start an INTERACTIVE OAuth prompt on
+        # stdin — which hangs forever under pythonw and pins the thread.
         try:
-            token = auth.cache_handler.get_cached_token()
+            token = auth.validate_token(auth.cache_handler.get_cached_token())
         except Exception:
             token = None
         if not token:
-            return {"ok": False, "reason": "re-authorise Spotify"}
+            return {"ok": False, "reason": "re-authorise Spotify (playback-control permission missing)"}
 
-        sp = spotipy.Spotify(auth_manager=auth)
+        # Plain access-token client: no auth_manager means no code path can
+        # ever fall back to an interactive flow; expired/insufficient tokens
+        # fail the request instead. Bounded so a hung call can't pin a thread.
+        sp = spotipy.Spotify(auth=token["access_token"], requests_timeout=10)
 
         device_id = None
         try:
@@ -1064,9 +1097,9 @@ def _gmail_status() -> Dict[str, Any]:
         addr = env.get("GMAIL_ADDRESS")
         pw = (env.get("GMAIL_APP_PASSWORD") or "").replace(" ", "")
         if addr and pw:
-            import imaplib
-
-            m = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+            # timeout: imaplib defaults to blocking forever; the dashboard
+            # polls this, so a hung connection would leak a thread per poll.
+            m = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=10)
             try:
                 m.login(addr, pw)
                 m.select("INBOX")

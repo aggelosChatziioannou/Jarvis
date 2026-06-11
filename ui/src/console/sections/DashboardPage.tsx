@@ -7,6 +7,7 @@ import StatePanel from '@/console/dashboard/StatePanel'
 import SystemStatusPanel from '@/console/dashboard/SystemStatusPanel'
 import NowPlayingPanel from '@/console/dashboard/NowPlayingPanel'
 import InfoPanel from '@/console/dashboard/InfoPanel'
+import ActionNotice from '@/console/dashboard/ActionNotice'
 import FocusOverlay from '@/console/dashboard/FocusOverlay'
 
 const DollhouseScene = lazy(() => import('@/console/3d/DollhouseScene'))
@@ -25,6 +26,7 @@ export default function DashboardPage() {
           <SystemStatusPanel />
           <NowPlayingPanel />
           <InfoPanel />
+          <ActionNotice />
           <FocusOverlay />
         </div>
       </DashboardDataProvider>
