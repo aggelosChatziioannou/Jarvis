@@ -22,6 +22,14 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - hey_jarvis_v2 wake model trained and shipped (Wispr-path wake engine)
+- **Category**: infra
+- **Files**: no app code; local-only trainer scripts (`wakeword-training/_v2_*.{sh,py}`, gitignored), user config (`~/.config/jarvis/config.json`: `wispr_wake_model` -> `wakeword/hey_jarvis_v2.onnx`, `wispr_wake_threshold` 0.3 -> 0.45), model files in `~/.config/jarvis/wakeword/` (v1 kept for rollback)
+- **What**: Retrained the custom openWakeWord model with the studio session data: 165 real positives across 15 distance/noise buckets (24.8% of 39.9k positive rows), 85 known-text real negatives, the user's room/music beds as an augmentation background source, 150k steps + openwakeword's built-in refinement, ONNX export. Held-out eval (30 pos / 19 neg / 13 min beds, live trigger semantics): pooled recall at thr 0.45 **33% (v1) -> 87% (v2)**; per-bucket medians 0.97-0.99 everywhere v1 collapsed (1m music-loud 0.01->0.98, 1m speech-bg 0.00->0.99, 2m quiet 0.02->0.97, 3m music-med 0.16->0.99); bed false-triggers 0/hour for both at every threshold 0.30-0.60; the only firing trap ("Hey Travis", 0.97/0.99) fires on BOTH models - no regression. Weak v1_* holdout buckets diagnosed as junk fragments of the old energy splitter (~1.0s pads at -44..-54 dB; both models 0.00 on the silent ones, v2 ahead on every clip with real speech).
+- **Why**: v1 was trained with only 65 real clips and was practically deaf under music/speech noise and at 2m+ on fresh recordings. Note: the ONNX wake engine runs on the **wispr** STT backend; the whisper backend wakes from transcript text (listener.py:684).
+- **Verified**: Training-step evidence demanded after TWO silent pipeline traps (`--from augment` skipped resolve-config so the first 20-min augmentation ran on v1's resolved config; then step_train skipped on a stale `output/hey_jarvis.onnx` and export shipped v1 bytes renamed as v2 - caught via batch-count mismatch 2040 vs 2493 and identical file sizes). Final run: log shows "Training hey_jarvis_v2 for 150000 steps" with live step progress; fresh 14,311-byte ONNX (v1: 14,116); tflite conversion crash (missing onnx_tf in the fresh venv) was AFTER onnx write - verify-model + export completed via `--from verify-model`. Windows smoke: model loads and predicts in the app venv.
+- **Related plan item**: Wake-word training v2 - phases 3-5 (train, eval, ship). Live testing by the user on the Wispr backend pending.
+
 ## 2026-06-12 - Studio hardening after the first real session: over-trim fail-open, dead-take guard, --repair
 - **Category**: bug-fix
 - **Files**: `wakeword-training/studio/qc.py`, `wakeword-training/studio/manifest.py`, `wakeword-training/studio/record_studio.py`, `wakeword-training/studio/studio.spec.md`, `tests/test_wakeword_studio.py`
