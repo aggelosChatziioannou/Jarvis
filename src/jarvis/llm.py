@@ -21,14 +21,16 @@ def shared_num_ctx() -> int:
     from the loaded one — measured ~8.5s per transition on qwen3.5:9b-4k, in
     BOTH directions. Mixed sizes (chat 8192 / fused 4096 / reminder parser
     1024) made every voice query pay up to two reloads and pushed sub-second
-    calls past their timeouts. Config dial: ``llm_num_ctx`` (default 4096,
-    matching the deliberately-built -4k model); changing it moves every call
-    site together so the runner is never thrashed.
+    calls past their timeouts. Config dial: ``llm_num_ctx`` (default 8192 —
+    4096 overflowed in long sessions: system prompt + warm profile + dialogue
+    carryover + tool payloads exceeded the window and Ollama's prompt
+    truncation degenerated replies to a single word). Changing it moves every
+    call site together so the runner is never thrashed.
     """
     try:
-        return int(getattr(load_settings(), "llm_num_ctx", 4096) or 4096)
+        return int(getattr(load_settings(), "llm_num_ctx", 8192) or 8192)
     except Exception:
-        return 4096
+        return 8192
 
 
 def call_llm_direct(base_url: str, chat_model: str, system_prompt: str, user_content: str, timeout_sec: float = 10.0, thinking: bool = False, num_ctx: Optional[int] = None, temperature: Optional[float] = None) -> Optional[str]:

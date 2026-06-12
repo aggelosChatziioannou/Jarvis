@@ -141,6 +141,8 @@ class Settings:
     # judge, planner, reminder parser). Ollama fully reloads a model's runner
     # (~8.5s on qwen3.5:9b-4k) whenever a request's num_ctx differs from the
     # loaded one — in BOTH directions — so mixed per-call sizes thrash the GPU.
+    # 8192 default: 4096 overflowed in long sessions (prompt truncation →
+    # one-word degenerate replies).
     llm_num_ctx: int
 
     # Profiles & Behavior
@@ -771,8 +773,11 @@ def get_default_config() -> Dict[str, Any]:
         "llm_chat_max_tokens": 512,
         "llm_chat_temperature": -1.0,
         # Shared context size for the one warm brain — see Settings.llm_num_ctx.
-        # 4096 matches the deliberately-built -4k model topology.
-        "llm_num_ctx": 4096,
+        # 8192: long sessions overflowed 4096 (system prompt + warm profile +
+        # dialogue carryover + tool payloads) and Ollama's prompt truncation
+        # degenerated replies to a single word ("Latest", "\$6"). One uniform
+        # size still means zero runner reloads.
+        "llm_num_ctx": 8192,
 
         # Profiles & Behavior
         "active_profiles": ["developer", "business", "life"],
@@ -1599,7 +1604,7 @@ def load_settings() -> Settings:
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
     llm_chat_max_tokens = int(merged.get("llm_chat_max_tokens", 512))
     llm_chat_temperature = float(merged.get("llm_chat_temperature", -1.0))
-    llm_num_ctx = int(merged.get("llm_num_ctx", 4096) or 4096)
+    llm_num_ctx = int(merged.get("llm_num_ctx", 8192) or 8192)
 
     return Settings(
         # Database & Storage

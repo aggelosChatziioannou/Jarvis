@@ -246,6 +246,128 @@ def _cascade_fetch(candidates: List[Tuple[str, str]],
     return None
 
 
+_BROWSER_HEADERS = {
+    'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                   '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+}
+
+
+def parse_ddg_html_results(html: str, cap: int = 5) -> List[Tuple[str, str]]:
+    """Parse html.duckduckgo.com/html results into (title, url) pairs.
+
+    The html endpoint marks organic results with the stable ``result__a``
+    anchor class (structural marker, not language copy). uddg redirect links
+    are decoded to the destination URL. Returns [] for challenge pages and
+    anything unparseable — the caller treats empty as "this provider failed".
+    """
+    if not html:
+        return []
+    try:
+        import urllib.parse
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        pairs: List[Tuple[str, str]] = []
+        for a in soup.select("a.result__a"):
+            href = a.get("href", "") or ""
+            title = a.get_text(strip=True)
+            if not title or len(title) < 5:
+                continue
+            url = href
+            if "uddg=" in href:
+                try:
+                    qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                    if qs.get("uddg"):
+                        url = urllib.parse.unquote(qs["uddg"][0])
+                except Exception:
+                    url = href
+            if url.startswith("http"):
+                pairs.append((title, url))
+            if len(pairs) >= cap:
+                break
+        return pairs
+    except Exception as e:
+        debug_log(f"parse_ddg_html_results failed: {e!r}", "web")
+        return []
+
+
+def _ddg_html_post_search(query: str, timeout: float = 10.0) -> List[Tuple[str, str]]:
+    """Second DDG attempt via POST to the html endpoint.
+
+    Lives in a different anomaly pool than the lite/html GETs: in live
+    probes the GETs were served HTTP 202 challenges while the POST kept
+    returning clean results. Keyless and same-provider, so it preserves the
+    privacy posture; returns [] on any failure so the caller falls through.
+    """
+    try:
+        resp = requests.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query, "b": ""},
+            headers=_BROWSER_HEADERS,
+            timeout=timeout,
+        )
+        body = resp.content or b""
+        if resp.status_code != 200 or b"anomaly-modal" in body or b"anomaly.js" in body:
+            debug_log(
+                f"DDG html POST blocked too (status {resp.status_code})", "web",
+            )
+            return []
+        return parse_ddg_html_results(resp.text)
+    except Exception as e:
+        debug_log(f"DDG html POST failed: {e!r}", "web")
+        return []
+
+
+def parse_mojeek_results(html: str, cap: int = 5) -> List[Tuple[str, str]]:
+    """Parse Mojeek's results page into (title, url) pairs.
+
+    Organic results carry the stable ``title`` anchor class; relative hrefs
+    (site chrome like /about) are dropped. [] on anything unparseable.
+    """
+    if not html:
+        return []
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        pairs: List[Tuple[str, str]] = []
+        for a in soup.select("a.title"):
+            href = a.get("href", "") or ""
+            title = a.get_text(strip=True)
+            if title and len(title) >= 5 and href.startswith("http"):
+                pairs.append((title, href))
+            if len(pairs) >= cap:
+                break
+        return pairs
+    except Exception as e:
+        debug_log(f"parse_mojeek_results failed: {e!r}", "web")
+        return []
+
+
+def _mojeek_search(query: str, timeout: float = 8.0) -> List[Tuple[str, str]]:
+    """Keyless third net when the whole DDG family is challenged.
+
+    Mojeek runs its own independent index and tolerated polite scraping in
+    live probes (10 clean results while both DDG endpoints served
+    challenges). Returns [] on any failure so the caller falls through to
+    Wikipedia.
+    """
+    try:
+        import urllib.parse
+        resp = requests.get(
+            f"https://www.mojeek.com/search?q={urllib.parse.quote_plus(query)}",
+            headers=_BROWSER_HEADERS,
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            debug_log(f"Mojeek returned status {resp.status_code}", "web")
+            return []
+        return parse_mojeek_results(resp.text)
+    except Exception as e:
+        debug_log(f"Mojeek search failed: {e!r}", "web")
+        return []
+
+
 def _brave_search(query: str, api_key: str, count: int = 5
                   ) -> List[Tuple[str, str]]:
     """Query Brave Search's JSON API and return (title, url) pairs.
@@ -609,7 +731,10 @@ class WebSearchTool(Tool):
                 encoded_query = urllib.parse.quote_plus(search_query)
                 ddg_lite_url = f"https://lite.duckduckgo.com/lite/?q={encoded_query}"
                 headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-                ddg_response = requests.get(ddg_lite_url, headers=headers, timeout=10)
+                # 6s, not 10: real responses (incl. challenges) come inside
+                # ~2s; only a tarpit reaches the timeout, and every tarpitted
+                # second here starves the fallbacks of chain budget.
+                ddg_response = requests.get(ddg_lite_url, headers=headers, timeout=6)
                 body_bytes = ddg_response.content or b""
                 # Challenge detection: HTTP 202/400/429 is the strongest signal,
                 # but DDG has also been observed serving 200 with the anomaly
@@ -665,6 +790,28 @@ class WebSearchTool(Tool):
             except Exception as ddg_error:
                 debug_log(f"DuckDuckGo search failed: {ddg_error}", "web")
 
+            # Second DDG attempt: POST to the html endpoint. The lite/html
+            # GETs share an anomaly pool and get challenged together; the
+            # POST kept returning clean results in live probes. Runs before
+            # any user-facing failure line so a rescued search looks like a
+            # normal one downstream.
+            if (ddg_rate_limited or not result_urls) and not instant_results and _budget_left() > 0:
+                recovered = _ddg_html_post_search(
+                    search_query, timeout=min(6.0, max(_budget_left(), 2.0)),
+                )
+                if recovered:
+                    debug_log(
+                        f"DDG html POST rescued the search with "
+                        f"{len(recovered)} results", "web",
+                    )
+                    ddg_rate_limited = False
+                    result_urls = recovered
+                    search_results = []
+                    for i, (title, url) in enumerate(recovered, start=1):
+                        search_results.append(f"{i}. **{title}**")
+                        search_results.append(f"   Link: {url}")
+                        search_results.append("")
+
             # Log DDG outcome immediately — field-triage must see why we're
             # falling back regardless of whether a subsequent provider rescues
             # the query. The spec requires the 🚧 bot-challenge line to fire
@@ -674,7 +821,7 @@ class WebSearchTool(Tool):
             # "🌐 Searching…" and "📚 Searching Wikipedia…".
             if ddg_rate_limited and not instant_results:
                 context.user_print(
-                    "🚧 DuckDuckGo served a bot-challenge page — "
+                    "🚧 DuckDuckGo served a bot-challenge page (both endpoints) — "
                     "search blocked, no results retrieved."
                 )
             elif not result_urls and not instant_results:
@@ -744,6 +891,43 @@ class WebSearchTool(Tool):
                         else:
                             debug_log(
                                 "Brave returned results but no fetch succeeded",
+                                "web",
+                            )
+
+                # Mojeek: keyless third net. Independent index — keeps news
+                # queries alive when the whole DDG family is challenged and
+                # no Brave key is configured.
+                if not fetched_content and _budget_left() > 0:
+                    context.user_print("🔎 Falling back to Mojeek…")
+                    # FLOOR the timeout at 4s even when the chain budget is
+                    # nearly drained: tarpitted DDG endpoints can eat ~19s of
+                    # the 20s cap, and a 1s leftover made this last keyless
+                    # net time out at the finish line (live: 0.9s typical
+                    # Mojeek response just over a 1.0s ceiling). Slightly
+                    # overshooting the cap beats returning empty-handed.
+                    mojeek_pairs = _mojeek_search(
+                        search_query, timeout=min(8.0, max(_budget_left(), 4.0)),
+                    )
+                    if mojeek_pairs:
+                        result_urls = mojeek_pairs
+                        search_results = []
+                        for i, (title, url) in enumerate(mojeek_pairs, start=1):
+                            search_results.append(f"{i}. **{title}**")
+                            search_results.append(f"   Link: {url}")
+                            search_results.append("")
+                        fetch_attempted_any = True
+                        fetched_content = _cascade_fetch(
+                            mojeek_pairs[:3],
+                            wall_clock_sec=min(
+                                _CASCADE_WALL_CLOCK_SEC, _budget_left()
+                            ),
+                            query=search_query,
+                        )
+                        if fetched_content:
+                            used_source = "mojeek"
+                        else:
+                            debug_log(
+                                "Mojeek returned results but no fetch succeeded",
                                 "web",
                             )
 

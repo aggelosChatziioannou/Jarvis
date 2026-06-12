@@ -13,6 +13,15 @@ memory.
 2. **Link extraction**: scrape `https://lite.duckduckgo.com/lite/` for the
    top ~5 search results (title + URL). The DDG redirector URLs
    (`//duckduckgo.com/l/?uddg=…`) are unwrapped to the real destination.
+2b. **DDG html-POST recovery**: when the lite GET is challenged or returns
+   zero results, POST `https://html.duckduckgo.com/html/` and parse the
+   `result__a` anchors (`parse_ddg_html_results`, uddg unwrapped). The
+   GET endpoints share an anomaly pool and get blocked together; the POST
+   sits in a different pool and kept answering in live probes — keyless,
+   same provider, so the privacy posture is unchanged. The 🚧
+   bot-challenge line fires only when BOTH endpoints are blocked. (Bing
+   HTML was evaluated as a keyless fallback and rejected: it serves a JS
+   wall with zero parseable organic results.)
 3. **Parallel cascade fetch**: if there's no instant answer and we have
    result URLs, fetch the top 3 results **in parallel** under a single
    `_CASCADE_WALL_CLOCK_SEC` (8s) wall-clock cap. Selection rules:

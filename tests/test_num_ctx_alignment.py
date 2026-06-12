@@ -37,9 +37,9 @@ def _capture_post(captured):
 
 
 class TestSharedNumCtx:
-    def test_default_is_4096(self):
+    def test_default_is_8192(self):
         with patch.object(llm_mod, "load_settings", side_effect=Exception("no cfg")):
-            assert shared_num_ctx() == 4096
+            assert shared_num_ctx() == 8192
 
     def test_reads_llm_num_ctx_from_settings(self):
         with patch.object(llm_mod, "load_settings",

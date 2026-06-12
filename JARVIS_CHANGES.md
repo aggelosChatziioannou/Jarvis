@@ -22,6 +22,15 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - Web search resilience + the one-word-reply root cause (context overflow)
+- **Category**: bug-fix + infra
+- **Files**: `src/jarvis/tools/builtin/web_search.py` (+spec), `src/jarvis/{config,llm}.py`, new `tests/test_web_search_providers.py`, `tests/test_num_ctx_alignment.py`, `docs/llm_contexts.md`.
+- **What**:
+  - **Web search blocked**: lite.duckduckgo.com served bot-challenges and the chain collapsed to Wikipedia (useless for news). Live probes: DDG GETs blocked together, but `html.duckduckgo.com/html` POST sits in a different anomaly pool and answers — added as recovery attempt 2b (`parse_ddg_html_results`, uddg unwrapped). Added **Mojeek** as keyless third net (independent index; `parse_mojeek_results`) before Wikipedia. Bing evaluated and rejected (JS wall, zero parseable results). Timeout floors: tarpitted DDG endpoints drained the 20s chain budget and Mojeek got a 1s ceiling (0.9s typical response = timeout at the finish line) — floor 4s, DDG attempts tightened to 6s. Burst battery: 0/6 → 4/6 with full page content (remaining 2 = my own IP burnt by ~20 test searches; normal spaced usage hits DDG first).
+  - **"Latest" / "\$6" one-word replies ROOT CAUSE**: yesterday's num_ctx alignment to 4096 shrank the chat window (was 8192 precisely to avoid overflow); long sessions (system prompt + warm profile + dialogue carryover + tool payloads) exceeded it and Ollama's PROMPT TRUNCATION degenerated generation to a single word + EOS. Both live failures were late-session; every fresh-memory standalone repro passed. `llm_num_ctx` default now **8192** — still ONE uniform size (zero runner reloads), double the headroom. The -4k model alias only caps the modelfile default; request options override it.
+- **Why**: user re-test: "δεν λειτουργεί το internet search" + the earlier unexplained truncations.
+- **Verified**: 153 tests incl. 7 new parser tests; live 6-query battery through the real tool (Mojeek rescues under DDG challenge); e2e Greek search through the daemon fires direct-exec → fallback chain → spoken reply.
+
 ## 2026-06-12 - User test round 1: seven fixes (phantom plan steps, 1-step plans never forced, greedy routing, Tier-1 time misfires, stock arg aliases, gmail primary scope everywhere)
 - **Category**: bug-fix
 - **Files**: `src/jarvis/reply/engine.py`, `src/jarvis/listening/{fused_intent,listener}.py`, `src/jarvis/tools/builtin/stock_prices.py` (+spec), new `tests/test_plan_shape.py`, extended stock tests; LOCAL-ONLY: `mcps/gmail_mcp.py`.
