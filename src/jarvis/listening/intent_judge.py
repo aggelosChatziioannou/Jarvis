@@ -35,6 +35,13 @@ def warm_up_ollama_model(base_url: str, model: str, timeout: float) -> bool:
     """
     if not REQUESTS_AVAILABLE or not base_url or not model:
         return False
+    # Low-VRAM mode: a warm-up racing the console's flush silently reloaded
+    # the just-unloaded model (live: boot warm-ups vs an early flush). Any
+    # warm-up while paused is by definition unwanted.
+    from .. import runtime_flags
+    if runtime_flags.is_brain_paused():
+        debug_log(f"ollama warmup skipped (low-VRAM mode): {model}", "voice")
+        return False
     try:
         response = requests.post(
             f"{base_url}/api/generate",

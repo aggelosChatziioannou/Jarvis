@@ -208,6 +208,7 @@ class Settings:
     # how long the follow-up listening window stays open. Independent of
     # hot_window_enabled, which governs post-REPLY follow-ups.
     wake_ack_text: str
+    lowvram_notice_text: str    # spoken when woken while VRAM is flushed (console toggle)
     wake_ack_window_sec: float
 
     # STT backend selection — "whisper" (local faster-whisper) or "wispr" (cloud Wispr Flow via push-to-talk bridge)
@@ -839,6 +840,7 @@ def get_default_config() -> Dict[str, Any]:
         "wake_aliases": ["joris", "charis", "chavis", "jar is", "jaivis", "jervis", "jarvus", "jarviz", "javis", "jairus", "jarryst", "chyrus"],
         "wake_fuzzy_ratio": 0.78,
         "wake_ack_text": "Yes, Boss?",
+        "lowvram_notice_text": "Low-VRAM mode is active - my models are unloaded. Re-enable me from the console.",
         "wake_ack_window_sec": 8.0,
 
         # Whisper Speech Recognition
@@ -1245,6 +1247,7 @@ def load_settings() -> Settings:
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
     wake_ack_text = str(merged.get("wake_ack_text", "Yes, Boss?") or "Yes, Boss?")
+    lowvram_notice_text = str(merged.get("lowvram_notice_text", "Low-VRAM mode is active - my models are unloaded. Re-enable me from the console.") or "Low-VRAM mode is active.")
     wake_ack_window_sec = float(merged.get("wake_ack_window_sec", 8.0) or 8.0)
     # STT backend selection (Phase B of Wispr-bridge rollout)
     stt_backend = str(merged.get("stt_backend", "whisper")).lower()
@@ -1679,6 +1682,7 @@ def load_settings() -> Settings:
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
         wake_ack_text=wake_ack_text,
+        lowvram_notice_text=lowvram_notice_text,
         wake_ack_window_sec=wake_ack_window_sec,
 
         # STT backend selection + Wispr Flow bridge settings

@@ -398,6 +398,123 @@ def patch_config(patch: ConfigPatch) -> Dict[str, Any]:
     return current
 
 
+# ── Console VRAM controls (Live Logs page) ───────────────────────────────────
+# Two toggles: the Vision model on/off (persisted — it is a capability
+# preference) and a full VRAM flush for gaming (runtime-only — a restart
+# always brings the brain back; see runtime_flags).
+
+
+class VisionToggle(BaseModel):
+    enabled: bool
+
+
+class FlushToggle(BaseModel):
+    paused: bool
+
+
+def _ollama_base() -> str:
+    settings = _load_settings_safe()
+    return str(getattr(settings, "ollama_base_url", "") or "http://127.0.0.1:11434")
+
+
+@app.get("/api/models")
+def get_models() -> Dict[str, Any]:
+    """What is resident in VRAM right now + the two toggle states."""
+    from . import model_admin, runtime_flags
+
+    loaded = model_admin.list_loaded_models(_ollama_base())
+    settings = _load_settings_safe()
+    return {
+        "loaded": loaded,
+        "total_vram": sum(m.get("size_vram", 0) for m in loaded),
+        "vision_enabled": bool(getattr(settings, "vision_enabled", False)),
+        "brain_paused": runtime_flags.is_brain_paused(),
+    }
+
+
+@app.post("/api/models/vision")
+def set_vision_toggle(t: VisionToggle) -> Dict[str, Any]:
+    from . import model_admin, runtime_flags
+
+    cfg_path = Path(os.environ.get("JARVIS_CONFIG_PATH") or default_config_path())
+    current = _load_json(cfg_path)
+    if not isinstance(current, dict):
+        current = {}
+    current["vision_enabled"] = bool(t.enabled)
+    if not config_safety.safe_write_config(cfg_path, current):
+        raise HTTPException(500, "Failed to write config")
+
+    base = _ollama_base()
+    vision_model = str(current.get("vision_model") or "qwen2.5vl:3b")
+    if not t.enabled:
+        released = model_admin.unload_model(base, vision_model)
+        publish_log("info", f"👁️ Vision OFF — {vision_model} "
+                            f"{'unloaded' if released else 'was not resident'}")
+    else:
+        publish_log("info", f"👁️ Vision ON — warming {vision_model} in the background…")
+        if not runtime_flags.is_brain_paused():
+            def _warm() -> None:
+                try:
+                    from .listening.intent_judge import warm_up_ollama_model
+                    ok = warm_up_ollama_model(base, vision_model, timeout=120.0)
+                    publish_log("info" if ok else "warning",
+                                f"👁️ Vision model {'ready' if ok else 'warm-up failed'}")
+                except Exception as e:
+                    publish_log("warning", f"Vision warm-up error: {e}")
+
+            threading.Thread(target=_warm, name="VisionWarm", daemon=True).start()
+    return {"vision_enabled": bool(t.enabled)}
+
+
+@app.post("/api/models/flush")
+def set_flush_toggle(t: FlushToggle) -> Dict[str, Any]:
+    from . import model_admin, runtime_flags
+
+    base = _ollama_base()
+    runtime_flags.set_brain_paused(bool(t.paused))
+    if t.paused:
+        released = model_admin.unload_all(base)
+        publish_log("info", f"🧹 VRAM flushed — brain offline. Unloaded: "
+                            f"{', '.join(released) if released else 'nothing was resident'}. "
+                            f"Voice answers with a notice until re-enabled.")
+
+        # Belt: an in-flight warm-up/LLM call can finish AFTER the sweep and
+        # silently reload a model (live: boot warm-ups raced an early flush).
+        # Re-sweep once shortly after; warm-ups themselves also check the
+        # pause flag now, so this catches only calls already past that gate.
+        def _resweep() -> None:
+            time.sleep(15.0)
+            if runtime_flags.is_brain_paused():
+                late = model_admin.unload_all(base)
+                if late:
+                    publish_log("info", f"🧹 Re-sweep: unloaded late arrivals "
+                                        f"({', '.join(late)})")
+
+        threading.Thread(target=_resweep, name="VramResweep", daemon=True).start()
+        return {"brain_paused": True, "released": released}
+
+    publish_log("info", "🧠 Low-VRAM mode OFF — reloading the brain in the background…")
+
+    def _rewarm() -> None:
+        try:
+            from .listening.intent_judge import warm_up_ollama_model
+            settings = _load_settings_safe()
+            chat = str(getattr(settings, "chat_model", "") or "")
+            if chat:
+                ok = warm_up_ollama_model(base, chat, timeout=180.0)
+                publish_log("info" if ok else "warning",
+                            f"🧠 Chat model {'ready' if ok else 'warm-up failed'}")
+            if bool(getattr(settings, "vision_enabled", False)):
+                vm = str(getattr(settings, "vision_model", "") or "")
+                if vm:
+                    warm_up_ollama_model(base, vm, timeout=180.0)
+        except Exception as e:
+            publish_log("error", f"Brain re-warm failed: {e}")
+
+    threading.Thread(target=_rewarm, name="BrainRewarm", daemon=True).start()
+    return {"brain_paused": False}
+
+
 # ---------- Config backup diagnostics ----------
 
 @app.get("/api/config/backups")

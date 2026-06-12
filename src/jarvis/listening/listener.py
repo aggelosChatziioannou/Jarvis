@@ -1463,6 +1463,26 @@ class VoiceListener(threading.Thread):
                 wake EXTERNALLY before PTT started, so the text never contains
                 the wake word — we synthesise a wake_timestamp instead).
         """
+        # Low-VRAM mode (console "Free VRAM" toggle): every model is unloaded,
+        # so NO LLM call may happen — not even the fused intent classifier.
+        # Speak a canned notice (Piper is CPU) so the assistant explains
+        # itself instead of appearing broken; everything else is skipped.
+        from .. import runtime_flags
+        if runtime_flags.is_brain_paused():
+            if text and text.strip():
+                self._stop_thinking_tune()
+                notice = str(getattr(
+                    self.cfg, "lowvram_notice_text",
+                    "Low-VRAM mode is active — my models are unloaded. "
+                    "Re-enable me from the console.") or "Low-VRAM mode is active.")
+                info_log("🧹 Low-VRAM mode: spoke the notice instead of processing")
+                if self.tts:
+                    try:
+                        self.tts.speak(notice)
+                    except Exception as e:
+                        debug_log(f"low-VRAM notice TTS failed: {e}", "voice")
+            return
+
         if not text or not text.strip():
             # Check for timeouts
             if self.state_manager.check_collection_timeout():

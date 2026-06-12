@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
-from ._shared import get_vision_engine, raw, vision_enabled
+from ._shared import disabled_reply, get_vision_engine, raw, vision_enabled
 
 
 class SeeScreenTool(Tool):
@@ -41,7 +41,7 @@ class SeeScreenTool(Tool):
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         if not vision_enabled(context.cfg):
-            return ToolExecutionResult(success=True, reply_text=raw({"result": "vision_disabled"}))
+            return ToolExecutionResult(success=True, reply_text=disabled_reply())
         monitor = (args or {}).get("monitor", "primary")
         context.user_print("👁️ Looking at your screen…")
         try:

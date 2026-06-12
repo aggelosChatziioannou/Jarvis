@@ -2,6 +2,8 @@
 
 Every distinct LLM call in Jarvis, what feeds it, what consumes it, and how it is gated. This is the reference for optimising the app's main bottleneck (LLM latency). Keep it in sync with the code — see the note at the bottom.
 
+**Global gate — Low-VRAM mode (2026-06-13):** while `runtime_flags.is_brain_paused()` (console "Free VRAM" toggle, `POST /api/models/flush`), **no context below may fire**. Enforcement points: `_process_transcript` short-circuits every per-utterance context (#1–#13) with a canned spoken notice (`lowvram_notice_text`, no LLM); the daemon's diary check skips (#9/#10/#11/#17); `warm_up_ollama_model` no-ops (and the flush endpoint re-sweeps once after 15s to catch in-flight warm-ups). The flag is runtime-only — every daemon start resets it to False. Context #15 (Vision) additionally has its own console toggle: the `vision_enabled` gate reads **live settings** (not the boot snapshot) and toggling OFF evicts `vision_model` immediately; tools then return a `vision_disabled` payload whose detail tells the reply model to instruct the user to re-enable it.
+
 ---
 
 ## 1. Main Reply Loop (agentic messages loop)

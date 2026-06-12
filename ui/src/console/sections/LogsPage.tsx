@@ -5,6 +5,7 @@ import { filterLogs } from '@/console/lib/logsLogic'
 import LogHeader from '@/console/zones/logs/LogHeader'
 import LogStatStrip from '@/console/zones/logs/LogStatStrip'
 import LiveLogConsole from '@/console/zones/logs/LiveLogConsole'
+import VramPanel from '@/console/zones/logs/VramPanel'
 
 export default function LogsPage() {
   const [paused, setPaused] = useState(false)
@@ -43,6 +44,7 @@ export default function LogsPage() {
         onToggleLevel={toggleLevel}
         onToggleSource={toggleSource}
       />
+      <VramPanel />
       <LogStatStrip logs={logs} now={Date.now()} />
       <LiveLogConsole logs={filtered} autoScroll={autoScroll} />
     </div>

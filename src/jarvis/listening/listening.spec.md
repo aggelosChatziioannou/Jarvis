@@ -173,6 +173,16 @@ configured backend — the previous persist-on-revert silently flipped the
 default to whisper forever after one bad boot). Explicit switches via the
 console/Settings still persist normally through PATCH `/api/config`.
 
+**Low-VRAM mode (console "Free VRAM" flush):** while `runtime_flags.
+is_brain_paused()` is True, `_process_transcript` short-circuits at the very
+top — NO LLM call may happen (not even the fused intent classifier), no state
+machinery runs, and a non-empty utterance gets exactly one canned spoken
+notice (`lowvram_notice_text`, Piper is CPU) so the assistant explains itself
+instead of appearing broken. Empty/timeout ticks are silently ignored. The
+flag is runtime-only (resets on daemon start — a restart always brings the
+brain back); the daemon's diary check also skips while paused. CPU features
+keep working: wake word, reminder firing, dictation via cloud STT, console.
+
 ### 2. Hot Window Mode
 
 After TTS finishes, allow wake-word-free follow-up.

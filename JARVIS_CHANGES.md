@@ -22,6 +22,14 @@ Format per entry:
 
 ---
 
+## 2026-06-13 - Console VRAM controls: Vision toggle + full "Free VRAM" flush (Live Logs)
+- **Category**: feature
+- **Files**: `src/jarvis/runtime_flags.py` (new), `src/jarvis/model_admin.py` (new), `src/jarvis/api_server.py` (GET `/api/models`, POST `/api/models/vision`, POST `/api/models/flush`), `src/jarvis/listening/listener.py` (low-VRAM gate at `_process_transcript`), `src/jarvis/listening/intent_judge.py` (warm-up respects pause), `src/jarvis/daemon.py` (diary check skips while paused), `src/jarvis/config.py` (`lowvram_notice_text`), `src/jarvis/tools/builtin/vision/_shared.py` + 7 vision tools (live-settings gate + recovery-instruction payload), `ui/src/console/zones/logs/VramPanel.tsx` (new) + `LogsPage.tsx`, specs (`listening.spec.md`, `vision.spec.md`), `docs/llm_contexts.md`, tests (`test_lowvram_and_models.py`, `test_models_api.py`)
+- **What**: Two Live-Logs toggles with a live resident-models strip (names + GB via Ollama `/api/ps`). (1) **Vision** — persisted preference; OFF evicts the vision model immediately and every vision tool returns a `vision_disabled` payload whose detail makes Jarvis TELL the user to re-enable the toggle (recoverable refusal). The gate reads live settings, so no restart needed. (2) **Free VRAM** — runtime-only flush for gaming: unloads every resident model; while paused NO LLM call can fire anywhere (voice answers with a canned spoken notice via CPU Piper, diary check skips, warm-ups no-op, the flush re-sweeps once after 15s to kill in-flight warm-up reloads). CPU features keep working: wake word, reminder firing, dictation, console. A daemon restart always restores normal operation (flag never persisted).
+- **Why**: User request (2026-06-13): free GPU memory for gaming/heavy loads without quitting Jarvis, and a smaller-footprint mode without the vision model — with honest spoken behaviour instead of appearing broken.
+- **Verified**: TDD — 23 new tests green (flags, unload payload routing incl. embed endpoint, ps parsing, listener gate speaks-notice/never-cascades, warm-up-respects-pause, vision live-gate + recovery detail, endpoints persist/flush semantics incl. flush-never-persisted). Live e2e: flush → `ollama ps` EMPTY and STAYS empty after a voice query + past the resweep window (the boot warm-up race was caught live and fixed); query while flushed spoke the notice (Piper, device 11); unflush re-warmed the chat model in the background.
+- **Related plan item**: Console completion — VRAM controls.
+
 ## 2026-06-12 - BOM-tolerant config loading (silent backup-restore loop root-caused)
 - **Category**: bug-fix
 - **Files**: `src/jarvis/config.py` (`_load_json`), `src/jarvis/config_safety.py` (`_load_json_safe`), `tests/test_config_bom_tolerance.py`

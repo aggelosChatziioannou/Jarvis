@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from ....config import load_settings
 from ....debug import debug_log
 
 _ENGINE = None  # singleton VisionEngine
@@ -47,7 +48,33 @@ def get_vision_engine(cfg):
 
 
 def vision_enabled(cfg) -> bool:
-    return bool(getattr(cfg, "vision_enabled", False))
+    """Live gate for the console's Vision toggle.
+
+    The engine hands tools the BOOT config snapshot, but the toggle must take
+    effect on the next call without a daemon restart — so consult the live
+    settings first and fall back to the snapshot if the load fails.
+    """
+    try:
+        return bool(getattr(load_settings(), "vision_enabled", False))
+    except Exception:
+        return bool(getattr(cfg, "vision_enabled", False))
+
+
+def disabled_reply() -> str:
+    """Raw-data reply for a vision tool called while the toggle is OFF.
+
+    Carries the recovery instruction so the reply model tells the user HOW to
+    get the feature back instead of a bare refusal (user requirement: "if I
+    ask something that needs the screen while it's off, tell me to enable it").
+    """
+    return raw({
+        "result": "vision_disabled",
+        "detail": (
+            "The user has turned the vision model OFF (Vision toggle in the "
+            "console's Live Logs page). Screen features cannot run. Tell the "
+            "user to enable the Vision toggle in the console for this to work."
+        ),
+    })
 
 
 def raw(result: dict) -> str:

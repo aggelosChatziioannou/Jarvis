@@ -714,9 +714,16 @@ def main() -> None:
             time.sleep(1.0)
             now = time.time()
 
-            # Periodically check if diary should be updated
+            # Periodically check if diary should be updated. Skipped entirely
+            # in low-VRAM mode — the summariser/extractor are LLM calls and
+            # would reload the just-flushed brain. Chunks stay pending and are
+            # processed on the first check after the user re-enables.
             if now - last_diary_check >= diary_check_interval:
-                _check_and_update_diary(db, cfg, verbose=False)
+                from . import runtime_flags
+                if runtime_flags.is_brain_paused():
+                    debug_log("diary check skipped: low-VRAM mode", "memory")
+                else:
+                    _check_and_update_diary(db, cfg, verbose=False)
                 last_diary_check = now
 
             # Fire any due reminders (non-blocking read + enqueue; fail-open).

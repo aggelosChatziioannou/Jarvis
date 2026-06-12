@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from ...base import Tool, ToolContext
 from ...types import ToolExecutionResult
-from ._shared import get_vision_engine, raw, vision_enabled
+from ._shared import disabled_reply, get_vision_engine, raw, vision_enabled
 
 
 class TypeOnScreenTool(Tool):
@@ -36,7 +36,7 @@ class TypeOnScreenTool(Tool):
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
         if not vision_enabled(context.cfg):
-            return ToolExecutionResult(success=True, reply_text=raw({"result": "vision_disabled"}))
+            return ToolExecutionResult(success=True, reply_text=disabled_reply())
         text = (args or {}).get("text")
         if text is None:
             return ToolExecutionResult(success=False, reply_text=None, error_message="typeOnScreen requires 'text'")

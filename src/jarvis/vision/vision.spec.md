@@ -127,6 +127,15 @@ let the 9B chat model become evictable so qwen2.5vl:3b fits.
 gate on `vision_enabled` and run synchronously in the reply engine (like every other tool;
 the thinking tune covers the latency).
 
+The `vision_enabled` gate reads **live settings** (not the engine's boot
+config snapshot) so the console's Vision toggle (Live Logs page,
+`POST /api/models/vision`) takes effect on the next call without a daemon
+restart; toggling OFF also evicts `vision_model` from VRAM immediately.
+While disabled, every tool returns `{"result": "vision_disabled", "detail":
+…}` where the detail explicitly instructs the reply model to TELL the user to
+enable the Vision toggle in the console — a recoverable refusal, not a dead
+end (user requirement 2026-06-13).
+
 ## Privacy
 
 Screenshots never touch disk; held in memory and released after inference. Carried-over
