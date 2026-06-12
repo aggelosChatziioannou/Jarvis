@@ -22,6 +22,14 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - Wake-word Recording Studio (guided data collection for training v2)
+- **Category**: feature
+- **Files**: `wakeword-training/studio/` (new: `record_studio.py`, `session_plan.py`, `qc.py`, `manifest.py`, `reading_script.json`, `studio.spec.md`, `__init__.py`), `tests/test_wakeword_studio.py`, `.gitignore`, `wakeword-training/README.md`, `CLAUDE.md`
+- **What**: Committed, Greek-first guided recording CLI that walks the user through a full wake-word data programme (238 prompts ≈ 75 min): clean positives across 5 distances × 7 styles, positives under music/speech noise, a 52-line EL/EN reading script with 12 phonetic-trap hard negatives, and room-ambience beds. Capture-time QC (clipping / condition-aware level floors / did-you-speak) re-prompts bad takes on the spot; every clip lands trainer-ready (16 kHz mono 16-bit, ≥1 s) with a manifest row recording the exact text spoken, distance, noise and level stats. Resumable across days (`q` saves, next run continues; `--status` shows per-phase progress). `export_positives_for_trainer()` buckets positives into the injector's `<distance>_<noise>/` layout. `--simulate --auto` runs the whole flow headless. `.gitignore` restructured so the studio ships while heavy data/WSL scratch stays local.
+- **Why**: v1 hey_jarvis.onnx was trained with only 65 real clips and 2 negative files; user wants a much stronger model (more recordings, music in the background, more distances, more training steps) and a reusable system so "anyone can train their own voice". User decisions locked: full ~75-min programme; only "Hey Jarvis" wakes (bare "Jarvis" stays a trap/negative).
+- **Verified**: TDD — 17 behaviour tests (QC gates, plan determinism + config-driven counts + full script coverage, manifest round-trip with Greek text, resume semantics, export bucketing) green; headless e2e `--simulate --auto` completed all 238 prompts including an interrupted-then-resumed run (56 → 238); export check produced 130 positives in 11 correct condition buckets.
+- **Related plan item**: Wake-word training v2 — phase 1 (collection tooling). Training/eval phases follow after the user records.
+
 ## 2026-06-12 - Web search resilience + the one-word-reply root cause (context overflow)
 - **Category**: bug-fix + infra
 - **Files**: `src/jarvis/tools/builtin/web_search.py` (+spec), `src/jarvis/{config,llm}.py`, new `tests/test_web_search_providers.py`, `tests/test_num_ctx_alignment.py`, `docs/llm_contexts.md`.

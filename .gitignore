@@ -48,8 +48,10 @@ debug_audio/
 .env
 **/.env
 
-# Wake-word training scratch (one-off experiments from the custom "Hey Jarvis"
-# training session — WSL-path-hardcoded, not part of the app or test suite).
-# Gathered under wakeword-training/; logs/configs/scripts stay local-only.
-wakeword-training/
+# Wake-word training: heavy data + WSL-path-hardcoded scratch scripts stay
+# local-only, but the guided Recording Studio (tool + reading script + spec)
+# is shipped so anyone can collect training data for their own wake word.
+wakeword-training/*
+!wakeword-training/README.md
+!wakeword-training/studio/
 _oww_*.log
