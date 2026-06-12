@@ -84,3 +84,47 @@ def test_teardown_never_raises_when_bridge_stop_fails():
     # Must not propagate — teardown failing would wedge the dispatcher.
     listener._teardown_stt_runtime("wispr")
     assert listener._wispr_bridge is None
+
+
+# ── fast-fail revert keeps the user's configured default ────────────────────
+
+
+def test_fast_fail_revert_is_runtime_only_and_never_rewrites_config(monkeypatch, tmp_path):
+    """User directive (2026-06-12): the configured backend is a PREFERENCE —
+    every restart must honour it. A backend that fails to start (e.g. Wispr
+    Flow app not running at boot) reverts for the SESSION only; persisting the
+    revert silently flipped the user's default to whisper forever.
+
+    Observed through the config file itself (via JARVIS_CONFIG_PATH) so the
+    test needs no jarvis.daemon import — importing the daemon installs the
+    Live-Logs stdout mirror inside the test process and breaks pytest capture.
+    """
+    import json
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"stt_backend": "wispr"}), encoding="utf-8")
+    monkeypatch.setenv("JARVIS_CONFIG_PATH", str(cfg_path))
+
+    listener = _bare_listener("wispr")
+    listener._should_stop = False
+    listener._STT_FAST_FAIL_SEC = 5.0
+
+    calls = {"n": 0}
+
+    def fake_dispatch_once():
+        # First call: instant return = startup failure (fast fail).
+        # Second call (after the runtime revert): stop the loop.
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            listener._should_stop = True
+
+    listener._dispatch_once = fake_dispatch_once
+    listener._teardown_stt_runtime = MagicMock()
+
+    listener.run()
+
+    assert listener._stt_backend == "whisper", "runtime fallback must still happen"
+    persisted = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert persisted["stt_backend"] == "wispr", (
+        "a failed start must not rewrite the user's configured default"
+    )

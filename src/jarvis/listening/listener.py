@@ -3586,16 +3586,17 @@ class VoiceListener(threading.Thread):
                 if fallback and fallback != backend:
                     self._consecutive_fast_failures += 1
                     self._teardown_stt_runtime(backend)
+                    # Runtime-only revert: the configured backend is the
+                    # user's PREFERENCE and must survive a failed start
+                    # (user directive 2026-06-12: every restart defaults to
+                    # the configured backend — e.g. Wispr Flow not running
+                    # at boot must not flip the default to whisper forever).
                     print(
                         f"  ❌ STT backend '{backend}' failed to start; "
-                        f"reverting to '{fallback}'",
+                        f"using '{fallback}' for this session "
+                        f"(config still prefers '{backend}')",
                         flush=True,
                     )
-                    try:
-                        from .. import daemon as _daemon
-                        _daemon._persist_stt_backend(fallback)
-                    except Exception as e:
-                        debug_log(f"persist stt revert failed: {e!r}", "voice")
                     self._stt_backend = fallback
                     continue
 

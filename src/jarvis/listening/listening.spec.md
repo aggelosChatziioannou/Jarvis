@@ -164,6 +164,15 @@ Live failure this encodes: one NameError during a single utterance exited the
 whole STT dispatcher thread; the assistant went permanently deaf, and later
 backend-switch requests and the manual trigger talked to a dead thread.
 
+**Fast-fail revert is runtime-only:** a backend that fails to START (returns
+inside the fast-fail window — e.g. Wispr Flow app not running at boot) makes
+the dispatcher fall back to the other backend **for the session only**. The
+persisted `stt_backend` is the user's PREFERENCE and is never rewritten by a
+failed start (user directive 2026-06-12: every restart must default to the
+configured backend — the previous persist-on-revert silently flipped the
+default to whisper forever after one bad boot). Explicit switches via the
+console/Settings still persist normally through PATCH `/api/config`.
+
 ### 2. Hot Window Mode
 
 After TTS finishes, allow wake-word-free follow-up.

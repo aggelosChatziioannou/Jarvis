@@ -22,6 +22,14 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - STT fast-fail revert is now runtime-only (config keeps the user's default backend)
+- **Category**: bug-fix
+- **Files**: `src/jarvis/listening/listener.py`, `src/jarvis/daemon.py` (removed now-dead `_persist_stt_backend`), `src/jarvis/listening/listening.spec.md`, `tests/test_listener_stt_switch.py`
+- **What**: When a backend fails to START (fast-fail window), the dispatcher still falls back to the other backend for the session, but no longer rewrites `stt_backend` in the config file. The persisted value is the user's preference; explicit switches via PATCH `/api/config` persist as before.
+- **Why**: User directive: every app restart must default to Wispr Flow (local Whisper must not occupy VRAM). The old persist-on-revert flipped the default to whisper FOREVER after a single bad boot (e.g. Wispr Flow app not running at that moment), silently overriding the user's choice.
+- **Verified**: TDD red→green: new behaviour test drives the real `run()` dispatcher loop with a fast-failing backend via `JARVIS_CONFIG_PATH` pointing at a temp config; asserts runtime fallback happens AND the file still says `wispr`. 8/8 switch tests + 22/22 studio tests green. Bonus root-cause: pytest capture crashes on this machine come from tests importing `jarvis.daemon` (installs the Live-Logs stdout mirror in-process) — the new test observes the config file instead and runs clean.
+- **Related plan item**: Wake-word v2 rollout — Wispr-as-default directive.
+
 ## 2026-06-12 - hey_jarvis_v2 wake model trained and shipped (Wispr-path wake engine)
 - **Category**: infra
 - **Files**: no app code; local-only trainer scripts (`wakeword-training/_v2_*.{sh,py}`, gitignored), user config (`~/.config/jarvis/config.json`: `wispr_wake_model` -> `wakeword/hey_jarvis_v2.onnx`, `wispr_wake_threshold` 0.3 -> 0.45), model files in `~/.config/jarvis/wakeword/` (v1 kept for rollback)
