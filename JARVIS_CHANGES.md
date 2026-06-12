@@ -22,6 +22,14 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - Studio hardening after the first real session: over-trim fail-open, dead-take guard, --repair
+- **Category**: bug-fix
+- **Files**: `wakeword-training/studio/qc.py`, `wakeword-training/studio/manifest.py`, `wakeword-training/studio/record_studio.py`, `wakeword-training/studio/studio.spec.md`, `tests/test_wakeword_studio.py`
+- **What**: (1) `trim_pad` threshold now rises from the 10th-percentile energy floor instead of the median, and fails open (keeps the original take when trimming would leave <1.5 s of a longer take); (2) zero-signal takes (peak <0.005) get a distinct `no signal` problem and are never auto-kept after max redos; (3) new `--repair` command removes dead/over-trimmed takes by rule (audit trail in `manifest.rejected.jsonl`) so resume re-asks exactly those prompts.
+- **Why**: First real session (238/238) surfaced two data bugs: the first 3 takes were pure silence yet auto-kept, and 17/104 reads were sliced to ~1.0 s because dense speech (or background music) made the median the signal level, putting the 6x-median threshold ABOVE the voice — exactly the recordings the music conditions exist for.
+- **Verified**: TDD red→green: 5 new tests (dense-speech survival, fail-open, short-utterance keep-whole, no-signal flag, rule-based repair) — 22/22 green; `--repair` on the live session removed exactly the 20 bad takes (3 dead + 17 over-trimmed), status 218/238.
+- **Related plan item**: Wake-word training v2 — phase 2 (data validation).
+
 ## 2026-06-12 - Wake-word Recording Studio (guided data collection for training v2)
 - **Category**: feature
 - **Files**: `wakeword-training/studio/` (new: `record_studio.py`, `session_plan.py`, `qc.py`, `manifest.py`, `reading_script.json`, `studio.spec.md`, `__init__.py`), `tests/test_wakeword_studio.py`, `.gitignore`, `wakeword-training/README.md`, `CLAUDE.md`

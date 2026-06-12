@@ -40,6 +40,50 @@ def completed_prompt_ids(rows: list[dict]) -> set[str]:
     return {r["prompt_id"] for r in rows if r.get("file")}
 
 
+_DEAD_PEAK = 0.005          # mirrors qc._DEAD_PEAK: no signal at all
+_SUSPECT_READ_S = 1.6       # a read/trap sentence cannot fit in this
+
+
+def repair_session(session_dir: Path) -> list[dict]:
+    """Pull broken takes out of the manifest so resume re-asks those prompts.
+
+    Rule-based, no hand-picked ids: (a) dead takes — peak below the no-signal
+    gate — for any label except beds; (b) reads/traps shorter than a sentence
+    can physically be (the over-trim bug). Removed rows move to
+    ``manifest.rejected.jsonl`` (audit trail) and their clips are deleted.
+    Returns the removed rows.
+    """
+    session_dir = Path(session_dir)
+    manifest_path = session_dir / MANIFEST_NAME
+    rows = load_rows(manifest_path)
+
+    def _broken(r: dict) -> bool:
+        if r.get("label") == "bed":
+            return False
+        if float(r.get("peak", 1.0)) < _DEAD_PEAK:
+            return True
+        if r.get("label") in ("negative", "trap") \
+                and float(r.get("duration_s", 99.0)) < _SUSPECT_READ_S:
+            return True
+        return False
+
+    removed = [r for r in rows if _broken(r)]
+    if not removed:
+        return []
+
+    kept = [r for r in rows if not _broken(r)]
+    for r in removed:
+        append_row(session_dir / "manifest.rejected.jsonl", r)
+        clip = session_dir / r.get("file", "")
+        if r.get("file") and clip.exists():
+            clip.unlink()
+    manifest_path.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept),
+        encoding="utf-8",
+    )
+    return removed
+
+
 def _is_trainer_wav(path: Path) -> bool:
     try:
         with wave.open(str(path)) as w:

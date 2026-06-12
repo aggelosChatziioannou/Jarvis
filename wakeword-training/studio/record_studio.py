@@ -295,10 +295,12 @@ def run_session(args) -> int:
 
             report = qc.analyse(audio, SR, rms_floor_dbfs=_qc_floor(item))
             accept = report.ok or item.label == "bed"  # beds are allowed to be near-silent
-            if not accept and redos < MAX_AUTO_REDOS:
+            dead = any("no signal" in p for p in report.problems)
+            if not accept and (dead or redos < MAX_AUTO_REDOS):
                 redos += 1
-                print(f"      ⚠️ Πρόβλημα: {'; '.join(report.problems)} — πάμε ξανά ({redos}/{MAX_AUTO_REDOS}).")
-                continue
+                print(f"      ⚠️ Πρόβλημα: {'; '.join(report.problems)} — πάμε ξανά"
+                      + ("" if dead else f" ({redos}/{MAX_AUTO_REDOS})") + ".")
+                continue  # a dead take (no signal at all) is NEVER auto-kept
             if not accept:
                 print("      ⚠️ Την κρατάω παρ' όλα αυτά (σημειώνεται στο manifest).")
 
@@ -360,6 +362,8 @@ def main() -> int:
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--print-script", action="store_true")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--repair", action="store_true",
+                    help="remove dead/over-trimmed takes so resume re-asks them")
     ap.add_argument("--simulate", action="store_true",
                     help="synthesise audio instead of recording (flow test)")
     ap.add_argument("--auto", action="store_true",
@@ -377,6 +381,18 @@ def main() -> int:
         return 0
     if args.status:
         return show_status(args)
+    if args.repair:
+        from studio.manifest import repair_session
+        removed = repair_session(Path(args.base) / args.session)
+        if not removed:
+            print("  ✅ Δεν βρέθηκαν προβληματικές λήψεις — όλα καλά.")
+            return 0
+        print(f"  🔧 Αφαιρέθηκαν {len(removed)} προβληματικές λήψεις (θα ξαναζητηθούν):")
+        for r in removed:
+            why = "νεκρή (καθόλου σήμα)" if float(r.get("peak", 1)) < 0.005 else "υπερβολικά κομμένη"
+            print(f"      ↺ {r['prompt_id']:<28} — {why}")
+        print("  ➡️  Τρέξε ξανά το studio για να τις ηχογραφήσεις.")
+        return 0
     return run_session(args)
 
 

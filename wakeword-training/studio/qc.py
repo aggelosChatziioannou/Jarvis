@@ -18,8 +18,11 @@ _WIN_S = 0.03           # analysis window (matches _split_wakeword.py)
 _CLIP_LEVEL = 0.985     # |sample| at/above this counts as clipped
 _CLIP_FRACTION = 0.001  # sustained clipping, not a single stray sample
 _SPEECH_RATIO = 3.0     # voiced env must rise this far above the floor
+_DEAD_PEAK = 0.005      # below this peak there is no signal at all
 _PAD_S = 0.15           # context kept around trimmed speech
 _MIN_S = 1.0            # openWakeWord trainer expects >= 1.0 s clips
+_TRIM_FLOOR_RATIO = 4.0  # voiced threshold above the LOW-percentile floor
+_TRIM_FAIL_OPEN_S = 1.5  # trimming a longer take below this keeps the original
 
 
 @dataclass
@@ -56,6 +59,13 @@ def analyse(audio: np.ndarray, sr: int, *, rms_floor_dbfs: float = -45.0) -> QCR
         return QCReport(ok=False, problems=["empty recording"])
 
     report.peak = float(np.max(np.abs(audio)))
+    if report.peak < _DEAD_PEAK:
+        # Distinct from "too quiet": there is NOTHING here (muted mic, wrong
+        # device, spoke after the window). The CLI must never auto-keep these.
+        report.problems.append("no signal (check the microphone / speak during the window)")
+        report.ok = False
+        return report
+
     clipped = float(np.mean(np.abs(audio) >= _CLIP_LEVEL))
     if clipped >= _CLIP_FRACTION:
         report.problems.append(f"clipping: {clipped * 100:.1f}% of samples at full scale")
@@ -82,19 +92,25 @@ def trim_pad(audio: np.ndarray, sr: int, *, pad_s: float = _PAD_S,
              min_s: float = _MIN_S) -> np.ndarray:
     """Trim long silent edges, keep a little context, pad (centred) to >= min_s.
 
-    Mirrors the segmentation rules of _split_wakeword.py (per-clip energy
-    threshold ``max(6 x median, 0.002)``) so studio clips and the v1 clips
-    share one duration/format contract.
+    The voiced threshold rises from the clip's LOW-percentile floor, NOT the
+    median: when speech (or background music) fills the take, the median IS
+    the speech level and a median-based threshold sits above the voice —
+    live session v2 lost ~70% of 17 reads exactly this way. As a second belt,
+    trimming FAILS OPEN: if it would leave under 1.5 s from a meaningfully
+    longer take, the original is kept (untrimmed edges cost the trainer
+    nothing; destroyed speech costs a re-recording trip).
     """
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     win = max(1, int(_WIN_S * sr))
     env = _envelope(audio, sr)
-    thr = max(6.0 * float(np.median(env)), 0.002)
+    floor = float(np.percentile(env, 10))
+    thr = max(_TRIM_FLOOR_RATIO * floor, 0.002)
     voiced = np.flatnonzero(env > thr)
     if len(voiced):
         start = max(0, int(voiced[0]) * win - int(pad_s * sr))
         end = min(len(audio), (int(voiced[-1]) + 1) * win + int(pad_s * sr))
-        audio = audio[start:end]
+        if (end - start) >= int(_TRIM_FAIL_OPEN_S * sr) or len(audio) < int(2.0 * sr):
+            audio = audio[start:end]
 
     min_len = int(min_s * sr)
     if len(audio) < min_len:

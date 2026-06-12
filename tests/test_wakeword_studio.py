@@ -75,8 +75,9 @@ class TestQC:
         assert any("clip" in p for p in report.problems)
 
     def test_too_quiet_detected(self):
-        a = _speechlike(level=0.001)  # ~ -60 dBFS burst
-        report = qc.analyse(a, SR, rms_floor_dbfs=-45.0)
+        # Real signal (above the dead-peak gate) but under the condition floor.
+        a = _speechlike(level=0.01)  # ~ -43 dBFS active
+        report = qc.analyse(a, SR, rms_floor_dbfs=-30.0)
         assert not report.ok
         assert any("quiet" in p for p in report.problems)
 
@@ -92,14 +93,61 @@ class TestQC:
         assert len(out) >= SR
 
     def test_trim_pad_trims_long_silence_edges(self):
+        # Substantial speech (>= the fail-open span) framed by dead air:
+        # the edges go, the speech stays.
+        n = int(5.0 * SR)
+        a = np.zeros(n, dtype=np.float32)
+        s, e = int(1.8 * SR), int(3.5 * SR)
+        t = np.arange(e - s) / SR
+        a[s:e] = (0.3 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
+        out = qc.trim_pad(a, SR)
+        assert len(out) < int(2.6 * SR)  # edges gone, ~1.7s voice + pads
+        assert len(out) >= int(1.5 * SR)
+
+    def test_trim_pad_keeps_whole_take_for_short_utterances(self):
+        """A fast 0.8s utterance must not be sliced down near the 1s floor —
+        below the fail-open span the whole take is kept (edges are harmless,
+        destroyed speech is not)."""
         n = int(4.0 * SR)
         a = np.zeros(n, dtype=np.float32)
         s, e = int(1.8 * SR), int(2.6 * SR)
         t = np.arange(e - s) / SR
         a[s:e] = (0.3 * np.sin(2 * np.pi * 180 * t)).astype(np.float32)
         out = qc.trim_pad(a, SR)
-        assert len(out) < int(2.5 * SR)  # edges gone, ~0.8s voice + pads
-        assert len(out) >= SR
+        assert len(out) >= 0.9 * n
+
+    def test_trim_pad_keeps_dense_speech_intact(self):
+        """Live bug (session v2): reads with no silent edges (or with music
+        underneath) lost ~70% of their speech — the 6x-median threshold sat
+        ABOVE the voice when speech/music dominates the clip. Dense speech
+        must survive trimming essentially whole."""
+        n = int(3.0 * SR)
+        t = np.arange(n) / SR
+        a = (0.2 * np.sin(2 * np.pi * 170 * t)
+             * (0.55 + 0.45 * np.sin(2 * np.pi * 2.2 * t))).astype(np.float32)
+        out = qc.trim_pad(a, SR)
+        assert len(out) >= 0.9 * n
+
+    def test_trim_pad_fails_open_instead_of_destroying_speech(self):
+        """One loud syllable must not become the whole clip: if trimming would
+        leave under 1.5 s from a much longer take, keep the original."""
+        n = int(3.0 * SR)
+        t = np.arange(n) / SR
+        a = (0.05 * np.sin(2 * np.pi * 160 * t)).astype(np.float32)  # quiet speech
+        s, e = int(1.4 * SR), int(1.7 * SR)
+        a[s:e] *= 8.0  # one emphatic syllable
+        out = qc.trim_pad(a, SR)
+        assert len(out) >= 0.9 * n
+
+    def test_dead_take_is_flagged_as_no_signal(self):
+        """A take with essentially zero signal (mic muted / not speaking yet)
+        must carry a distinct 'no signal' problem so the CLI never auto-keeps
+        it after max redos (live bug: first 3 takes of session v2 were pure
+        silence and got kept)."""
+        a = np.zeros(2 * SR, dtype=np.float32)
+        report = qc.analyse(a, SR, rms_floor_dbfs=-80.0)
+        assert not report.ok
+        assert any("no signal" in p for p in report.problems)
 
     def test_save_wav_writes_trainer_format(self, tmp_path):
         p = tmp_path / "x.wav"
@@ -236,6 +284,42 @@ class TestManifest:
         assert len(exported) == 2  # negatives never exported as positives
         with wave.open(str(exported[0])) as w:
             assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (SR, 1, 2)
+
+
+class TestRepair:
+    def test_repair_removes_dead_and_overtrimmed_takes(self, tmp_path):
+        """Live session v2: 3 silent takes + 17 reads sliced to ~1s slipped
+        into the manifest. repair_session() must pull exactly those (by rule,
+        not by name) so resume re-asks them, and must keep healthy rows."""
+        from studio.manifest import repair_session
+
+        session = tmp_path / "s"
+        clips = session / "clips"
+        clips.mkdir(parents=True)
+        m = session / "manifest.jsonl"
+        rows = [
+            {**_row("p_dead", "positive", file="clips/dead.wav"), "peak": 0.0,
+             "duration_s": 2.8},
+            {**_row("read_cut", "negative", file="clips/cut.wav",
+                    text="a long sentence that cannot fit one second"),
+             "duration_s": 1.0},
+            {**_row("p_good", "positive", file="clips/good.wav"), "peak": 0.4,
+             "duration_s": 2.8},
+        ]
+        for r in rows:
+            qc.save_wav(_speechlike(), SR, session / r["file"])
+            append_row(m, r)
+
+        removed = repair_session(session)
+        removed_ids = {r["prompt_id"] for r in removed}
+        assert removed_ids == {"p_dead", "read_cut"}
+        kept = load_rows(m)
+        assert [r["prompt_id"] for r in kept] == ["p_good"]
+        assert not (session / "clips/dead.wav").exists()
+        assert (session / "clips/good.wav").exists()
+        # Rejected rows are preserved for audit, never silently lost.
+        rejected = load_rows(session / "manifest.rejected.jsonl")
+        assert {r["prompt_id"] for r in rejected} == {"p_dead", "read_cut"}
 
 
 if __name__ == "__main__":

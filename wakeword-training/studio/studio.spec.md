@@ -32,6 +32,17 @@ over the wake phrase — anyone can use it to train their own voice/phrase.
 takes are edge-trimmed with 150 ms context pads (`qc.trim_pad`); positives keep
 their fixed window (2.8 s); beds are long-form ambience.
 
+Trimming rules (hard-won, live session v2): the voiced threshold rises from
+the clip's **10th-percentile** energy floor, never the median — when speech or
+background music fills the take, the median IS the signal and a median-based
+threshold destroys it. Trimming **fails open**: if it would leave < 1.5 s from
+a meaningfully longer take, the original is kept. A take with no signal at all
+(peak < 0.005: muted mic, spoke outside the window) is flagged `no signal` and
+is NEVER auto-kept regardless of redo count. `--repair` removes dead or
+over-trimmed takes from the manifest by rule (rows preserved in
+`manifest.rejected.jsonl`, clips deleted) so resume re-asks exactly those
+prompts.
+
 ## Programme structure (default `PlanConfig` ≈ 75 min)
 
 | Block | Items | Conditions |
