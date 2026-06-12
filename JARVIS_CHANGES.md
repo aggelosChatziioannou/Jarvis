@@ -22,6 +22,14 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - BOM-tolerant config loading (silent backup-restore loop root-caused)
+- **Category**: bug-fix
+- **Files**: `src/jarvis/config.py` (`_load_json`), `src/jarvis/config_safety.py` (`_load_json_safe`), `tests/test_config_bom_tolerance.py`
+- **What**: Both config readers now open with `encoding="utf-8-sig"` so a UTF-8 BOM is tolerated (reads clean files identically).
+- **Why**: Live mystery: the user's backend switch and wake-model upgrade kept "reverting by themselves". Root cause chain: an external edit with PowerShell 5.1 `Out-File -Encoding utf8` wrote a BOM → `json.load` over plain utf-8 raised → `_load_json` returned `{}` (zero user keys) → config_safety's wipe detector silently restored a 4-hour-old backup on every boot, BEFORE the Live-Logs stdout mirror exists (pythonw = the loud restore line went nowhere). Every config write since the snapshot (backend switch, v2 wake model, threshold) was repeatedly undone.
+- **Verified**: TDD red→green: 3 tests (BOM'd config loads with all keys via both loaders; clean utf-8 unchanged). Live: PATCHed settings via the API, restarted via Start-Jarvis.vbs, config survived the boot (mtime untouched, no restore) and the bridge logged `openWakeWord ready (model=hey_jarvis_v2.onnx, threshold=0.45)` with `local Whisper is not loaded`.
+- **Related plan item**: Wake-word v2 rollout — config persistence.
+
 ## 2026-06-12 - STT fast-fail revert is now runtime-only (config keeps the user's default backend)
 - **Category**: bug-fix
 - **Files**: `src/jarvis/listening/listener.py`, `src/jarvis/daemon.py` (removed now-dead `_persist_stt_backend`), `src/jarvis/listening/listening.spec.md`, `tests/test_listener_stt_switch.py`

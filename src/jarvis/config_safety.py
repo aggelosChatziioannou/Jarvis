@@ -58,7 +58,9 @@ def _load_json_safe(path: Path) -> Optional[Dict[str, Any]]:
     try:
         if not path.exists():
             return None
-        with path.open("r", encoding="utf-8") as f:
+        # utf-8-sig: a BOM'd config must not look like a wipe (see
+        # config._load_json — same failure, same fix).
+        with path.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else None
     except Exception:

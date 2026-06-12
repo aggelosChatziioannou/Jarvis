@@ -444,9 +444,13 @@ def default_config_path() -> Path:
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
+    # utf-8-sig: tolerate a UTF-8 BOM (external editors / PowerShell's
+    # `Out-File -Encoding utf8` write one). A BOM'd config must load
+    # normally — when it read as {} the wipe detector in config_safety
+    # silently restored an old backup on every boot.
     try:
         if path.exists():
-            with path.open("r", encoding="utf-8") as f:
+            with path.open("r", encoding="utf-8-sig") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     return data
