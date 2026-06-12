@@ -37,6 +37,8 @@ from studio.session_plan import (  # noqa: E402
     remaining_items,
 )
 
+pytestmark = pytest.mark.unit  # pure/fast: must run in CI and git hooks
+
 SR = 16000
 
 
