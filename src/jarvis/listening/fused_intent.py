@@ -495,7 +495,12 @@ class FusedIntentEngine:
 
         last_raw = ""
         # Attempt 1: temperature=0.1 (slight randomness). Attempt 2: greedy.
-        for attempt, temp in enumerate((0.1, 0.0), start=1):
+        # GREEDY first: routing is classification, not creativity. temp 0.1
+        # sampled the occasional miss live — "θα βρέξει αύριο;" judged
+        # tools=[] and Jarvis confabulated "I can't see the forecast" while
+        # the same phrase routed getWeather in every greedy battery run.
+        # The 0.1 retry exists only to escape a deterministic parse failure.
+        for attempt, temp in enumerate((0.0, 0.1), start=1):
             try:
                 parsed = self._ollama_call(
                     self._system_prompt, user_prompt, temperature=temp
@@ -523,7 +528,7 @@ class FusedIntentEngine:
             except (ValueError, json.JSONDecodeError) as e:
                 debug_log(
                     f"🧠 Fused intent attempt {attempt} parse error: {e}; "
-                    f"{'retrying with temp=0.0' if attempt == 1 else 'returning safe default'}",
+                    f"{'retrying with temp=0.1' if attempt == 1 else 'returning safe default'}",
                     "voice",
                 )
                 continue

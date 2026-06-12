@@ -22,6 +22,19 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - User test round 1: seven fixes (phantom plan steps, 1-step plans never forced, greedy routing, Tier-1 time misfires, stock arg aliases, gmail primary scope everywhere)
+- **Category**: bug-fix
+- **Files**: `src/jarvis/reply/engine.py`, `src/jarvis/listening/{fused_intent,listener}.py`, `src/jarvis/tools/builtin/stock_prices.py` (+spec), new `tests/test_plan_shape.py`, extended stock tests; LOCAL-ONLY: `mcps/gmail_mcp.py`.
+- **What** (each from the user's live test screenshots):
+  - "my execution loop ran out of turns early on. However, I successfully opened Spotify..." — the fused-plan translator appended EVERY fused prose step; `tool_steps_of` counted the intermediate prose as unexecuted tool steps and the synthesis narrated confusion. Translator now emits tool steps + exactly ONE synthesis step.
+  - "ψάξε στο internet..." never searched — the legacy planner emitted a SINGLE-step plan and the direct-exec force gate requires len(plan)>1. New `ensure_synthesis_step()` appends "Reply to the user." whenever the final step is tool-headed, so 1-step plans force-execute.
+  - "θα βρέξει αύριο;" judged tools=[] and Jarvis confabulated "I can't see the forecast" — fused attempts were (0.1, 0.0); routing now runs GREEDY first (0.0, 0.1-retry). Verified 3/3 getWeather.
+  - "how is NVDA doing today?" / "ποια apps είναι ανοιχτά" misclassified time_date (conf=high) by the Tier-1 heuristic ("today"/"now" tokens), skipping the fused router → legacy path with wrong args. time_current/time_date removed from the Tier-1 local-accept list (Tier 0 regex already answers real time questions at 0ms).
+  - `getStockPrice query='NVDA'` failed "symbol is required" — `effective_symbol()` accepts query/ticker/name/asset synonyms.
+  - "read my latest email" still read the Updates newsletter and "any unread emails?" said 21,301 — read_email + get_unread_count now use the same `X-GM-RAW category:primary` scope as list_recent_emails (live: unread 4,800 primary; read_email returns the efood receipt).
+  - "BTC reply missing from logs" — NOT a bug: the 💬 entry was below the fold (paused auto-scroll); reproduced present.
+- **Verified**: 167 affected tests green; greedy weather routing 3/3; gmail/read+count verified live standalone.
+
 ## 2026-06-12 - Tool truthfulness round: "\$6" price, newsletter-as-latest-mail, "no apps running"
 - **Category**: bug-fix
 - **Files**: `src/jarvis/reply/engine.py`, new `tests/test_reply_language_guard.py`; LOCAL-ONLY (mcps/ is gitignored): `mcps/gmail_mcp.py`, `mcps/apps_mcp.py`.

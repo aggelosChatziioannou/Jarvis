@@ -1200,9 +1200,15 @@ class VoiceListener(threading.Thread):
                 # no fused routing — and the wrong tools got picked. Plain
                 # commands ("άνοιξε spotify") are already 0ms via the Tier 0
                 # fast-path regexes, so deferring costs nothing common.
+                # time_current/time_date are NOT in this list: the heuristic
+                # misfired conf=high on unrelated queries ("how is NVDA doing
+                # today?", "ποια apps είναι ανοιχτά") because of the bare
+                # time-ish token ("today"/"now"), which skipped the fused
+                # router and sent them down the legacy path with wrong args.
+                # Real time questions are already served at 0ms by the Tier 0
+                # regex fast-path, so deferring time intents costs nothing.
                 _tier1_local = result.intent in (
                     "general_chat", "clarification", "stop",
-                    "time_current", "time_date",
                 )
                 _can_defer = self._fused_intent is not None and not _tier1_local
 

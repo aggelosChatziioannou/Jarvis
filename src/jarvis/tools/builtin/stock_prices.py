@@ -127,6 +127,19 @@ def fetch_quote(symbol: str, key: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def effective_symbol(args: Optional[Dict[str, Any]]) -> str:
+    """The asset the call asks about: `symbol`, else the synonyms small
+    models reach for. Live failure: the legacy planner emitted
+    ``getStockPrice query='NVDA'``; the resolver dropped the unknown key and
+    the tool failed with "symbol is required" instead of answering."""
+    a = args or {}
+    for key in ("symbol", "query", "ticker", "name", "asset"):
+        v = str(a.get(key, "") or "").strip()
+        if v:
+            return v
+    return ""
+
+
 class StockPriceTool(Tool):
     @property
     def name(self) -> str:
@@ -155,7 +168,7 @@ class StockPriceTool(Tool):
         }
 
     def run(self, args: Optional[Dict[str, Any]], context: ToolContext) -> ToolExecutionResult:
-        symbol = str((args or {}).get("symbol", "")).strip()
+        symbol = effective_symbol(args)
         if not symbol:
             return ToolExecutionResult(success=False, reply_text=None,
                                        error_message="symbol is required")

@@ -940,17 +940,35 @@ def _translate_fused_to_planner_shape(
         else:
             out.append(name)
 
-    # Append the fused prose plan after the tool steps. The LAST entry
-    # becomes the synthesis step (consumed by ``tool_steps_of``, which
-    # treats len(steps) > 1 cases as "all but last are tool steps").
-    # If the fused plan is empty, append a generic synthesis step so
-    # ``tool_steps_of`` correctly returns the tool steps and recognises
-    # a separate synthesis target.
-    if fused_plan:
-        out.extend(str(s) for s in fused_plan if s)
-    else:
-        out.append("Reply to the user.")
+    # Append exactly ONE synthesis step — the LAST fused prose step (or a
+    # generic one). ``tool_steps_of`` treats all-but-last as tool steps, so
+    # appending EVERY fused prose step turned the intermediate prose
+    # ("Confirm the window position.") into phantom, unexecutable *tool*
+    # steps; after the real tools ran, the synthesis model stared at a plan
+    # it could never finish and narrated confusion ("my execution loop ran
+    # out of turns early on") instead of confirming the completed action.
+    tail = [str(s) for s in (fused_plan or []) if s]
+    out.append(tail[-1] if tail else "Reply to the user.")
     return out
+
+
+def ensure_synthesis_step(plan: list, tools_schema: list) -> list:
+    """Guarantee a tool-headed plan ends with a synthesis step.
+
+    The legacy planner sometimes emits a SINGLE-step plan
+    (``webSearch query='…'``). ``tool_steps_of`` returns [] for 1-step plans
+    and the direct-exec force gate requires len(plan) > 1, so the search was
+    never forced — the chat model answered "from memory" without searching.
+    Appending "Reply to the user." turns the tool step into a recognised,
+    forceable tool step with a proper synthesis target. Plans already ending
+    in prose are returned unchanged.
+    """
+    if not plan:
+        return plan
+    from .planner import step_names_allowed_tool as _heads_tool
+    if _heads_tool(str(plan[-1]), tools_schema or []):
+        return list(plan) + ["Reply to the user."]
+    return list(plan)
 
 
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
@@ -2060,6 +2078,10 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # memory enrichment above. The planner's ordered tool/synthesis
     # steps are preserved unchanged.
     action_plan = strip_memory_directives(action_plan)
+    # A tool-headed final step means no synthesis target — and single-step
+    # plans dodge the direct-exec force gate entirely (len > 1). Normalise
+    # here so every tool-bearing plan is forceable and ends in synthesis.
+    action_plan = ensure_synthesis_step(action_plan, tools_json_schema or [])
 
     _assistant_name = str(getattr(cfg, "wake_word", "jarvis") or "jarvis").strip().capitalize()
     _persona_prompt = build_system_prompt(_assistant_name)

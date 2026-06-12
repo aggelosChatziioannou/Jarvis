@@ -149,3 +149,25 @@ class TestLastManagedFallback:
         assert res.success is False
         assert "window" in res.error_message
         assert "action" not in res.error_message
+
+
+class TestStockArgAliases:
+    """Live failure: the legacy planner emitted `getStockPrice query='NVDA'`
+    (wrong key); the resolver dropped the unknown key and the tool failed
+    with "symbol is required" instead of answering. The tool now accepts the
+    obvious synonyms small models reach for."""
+
+    def test_query_ticker_name_map_to_symbol(self):
+        from jarvis.tools.builtin.stock_prices import effective_symbol
+        assert effective_symbol({"query": "NVDA"}) == "NVDA"
+        assert effective_symbol({"ticker": "btc"}) == "btc"
+        assert effective_symbol({"name": "gold"}) == "gold"
+
+    def test_symbol_wins_over_aliases(self):
+        from jarvis.tools.builtin.stock_prices import effective_symbol
+        assert effective_symbol({"symbol": "AAPL", "query": "NVDA"}) == "AAPL"
+
+    def test_empty_args_give_empty(self):
+        from jarvis.tools.builtin.stock_prices import effective_symbol
+        assert effective_symbol({}) == ""
+        assert effective_symbol(None) == ""
