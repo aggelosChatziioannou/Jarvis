@@ -22,6 +22,16 @@ Format per entry:
 
 ---
 
+## 2026-06-12 - Tool truthfulness round: "\$6" price, newsletter-as-latest-mail, "no apps running"
+- **Category**: bug-fix
+- **Files**: `src/jarvis/reply/engine.py`, new `tests/test_reply_language_guard.py`; LOCAL-ONLY (mcps/ is gitignored): `mcps/gmail_mcp.py`, `mcps/apps_mcp.py`.
+- **What**:
+  - **"The current price of Bitcoin is \$6"**: the reply-language rewrite pass (same day) accepted ANY output with no Greek letters — a truncated rewrite replaced a correct $63,551.38 reply. The pass now (a) cleans rewrite artefacts (`\$` LaTeX escapes, **bold**), (b) accepts the rewrite ONLY if it preserves substance — every 4+ digit-run of the original survives (thousands separators stripped) and length is sane; otherwise the ORIGINAL reply is kept (occasional mixed language beats a confidently wrong number). Rewrite prompt now pins "keep every number EXACTLY as written, plain text only".
+  - **"Latest mail" surfaced an Updates-tab newsletter**: gmail list_recent_emails searched INBOX ALL (Gmail's INBOX spans every category tab). Now searches `X-GM-RAW "category:primary"` first (fallback ALL for non-Gmail), labels the scope, and stamps each line with the user's LOCAL date-time (raw Date headers rendered in the sender's timezone).
+  - **"No active applications running" on a desktop full of windows**: apps list_open_apps matched process names against the small hardcoded PROCESS_NAMES launcher map. Now enumerates REAL visible top-level windows (ctypes EnumWindows + psutil), grouped per app with first window title.
+- **Why**: user report with screenshots; user will do the testing round themselves next.
+- **Verified**: guard 9/9 TDD red->green + 152 affected tests; both MCP functions standalone — apps lists the real 13 open apps; gmail returns exactly the user's Primary-tab order (efood 01:43 -> Microsoft 01:36 -> iCloud 01:23) with local times.
+
 ## 2026-06-12 - Greek apology + failed pronoun window command: deterministic English enforcement + last-managed-window fallback
 - **Category**: bug-fix
 - **Files**: `src/jarvis/reply/engine.py`, `src/jarvis/tools/builtin/window_manager.py` (+spec), `evals/test_reply_language_consistency.py`, `evals/test_voice_brevity.py`, `tests/test_window_and_stock_tools.py`, `docs/llm_contexts.md`.

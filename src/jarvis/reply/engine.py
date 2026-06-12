@@ -52,6 +52,37 @@ from ..utils.time_context import format_time_context
 # CJK). Used by the deterministic reply-language enforcement in Step 10.
 _NON_LATIN_LETTERS = re.compile(r"[Ͱ-Ͽἀ-῿Ѐ-ӿ一-鿿]")
 
+
+def _clean_translation(text: str) -> str:
+    """Normalise rewrite-pass artefacts: LaTeX dollar escapes and bold markdown
+    (instruct-style rewrites love both; the voice would read them literally)."""
+    out = (text or "").replace("\\$", "$")
+    out = re.sub(r"\*\*([^*]+)\*\*", r"\1", out)
+    return out.strip()
+
+
+def _translation_acceptable(original: str, translated: Optional[str]) -> bool:
+    """Accept a language-enforcement rewrite ONLY if it preserves substance.
+
+    Live failure this guards: a price reply went through the English rewrite
+    and came back truncated — "The current price of Bitcoin is \\$6" was
+    accepted (it had no Greek letters) and spoken instead of $63,551.38.
+    Checks: non-empty, still no non-Latin letters, sane length (a rewrite is
+    a translation, not a summary), and every significant digit-run of the
+    original (4+ digits, thousands separators stripped) survives verbatim.
+    On rejection the caller keeps the ORIGINAL reply — occasional mixed
+    language beats a confidently wrong number.
+    """
+    if not original or not translated or not translated.strip():
+        return False
+    t = translated.strip()
+    if _NON_LATIN_LETTERS.search(t):
+        return False
+    if len(t) < max(12, int(0.35 * len(original))):
+        return False
+    digits_of = lambda s: set(re.findall(r"\d{4,}", s.replace(",", "")))
+    return digits_of(original) <= digits_of(t)
+
 if TYPE_CHECKING:
     from ..memory.db import Database
 
@@ -3284,17 +3315,23 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     getattr(cfg, 'ollama_base_url', ''),
                     getattr(cfg, 'ollama_chat_model', ''),
                     "Rewrite the assistant reply below entirely in English. "
-                    "Keep the meaning, tone and brevity. Output ONLY the "
-                    "rewritten reply.",
+                    "Keep the meaning, tone and brevity. Keep every number "
+                    "EXACTLY as written. Plain text only — no markdown, no "
+                    "escaping. Output ONLY the rewritten reply.",
                     safe_reply,
                     timeout_sec=12.0,
                     thinking=False,
                     temperature=0.0,
                 )
-                if translated and translated.strip() and not _NON_LATIN_LETTERS.search(translated):
+                translated = _clean_translation(translated or "")
+                # Substance guard: a rewrite that loses numbers or collapses
+                # to a stub is WORSE than mixed language — keep the original.
+                if _translation_acceptable(safe_reply, translated):
                     print("  🌐 Reply language corrected to English", flush=True)
-                    safe_reply = translated.strip()
+                    safe_reply = translated
                     reply = safe_reply
+                else:
+                    debug_log("reply-language rewrite rejected by substance guard", "voice")
         except Exception as e:
             debug_log(f"reply-language enforcement failed (non-fatal): {e!r}", "voice")
     if safe_reply:
